@@ -1,4 +1,9 @@
-# Local development stack. Production uses Kubernetes (added in the deployment module).
+# Full containerized stack: Postgres + Redis + API (with migrations) + Celery
+# worker + nginx-served SPA that reverse-proxies /api to the backend.
+#
+#   docker compose up -d --build
+#   docker compose exec backend python -m app.db.seed   # demo org + accounts
+#   → app on http://localhost:8080, API docs on http://localhost:8000/docs
 services:
   db:
     image: postgres:16-alpine
@@ -6,7 +11,7 @@ services:
       POSTGRES_USER: wfm
       POSTGRES_PASSWORD: wfm
       POSTGRES_DB: wfm
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]           # host port 5433 avoids clashing with local PG
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wfm"]
@@ -16,7 +21,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports: ["6380:6379"]           # host port 6380 avoids clashing with local Redis
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -25,12 +30,19 @@ services:
 
   backend:
     build: ./backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    env_file: ./backend/.env
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     environment:
+      ENVIRONMENT: local
+      DEBUG: "false"
+      DB_BACKEND: postgres
       POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: wfm
+      POSTGRES_PASSWORD: wfm
+      POSTGRES_DB: wfm
       REDIS_URL: redis://redis:6379/0
-    volumes: ["./backend:/app"]
+      SECRET_KEY: ${SECRET_KEY:-dev-only-change-me-in-production-32-bytes}
+      BACKEND_CORS_ORIGINS: http://localhost:8080,http://localhost:5173,http://localhost:5180
     ports: ["8000:8000"]
     depends_on:
       db: { condition: service_healthy }
@@ -39,24 +51,22 @@ services:
   worker:
     build: ./backend
     command: celery -A app.worker.celery_app.celery worker --loglevel=info
-    env_file: ./backend/.env
     environment:
+      DB_BACKEND: postgres
       POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: wfm
+      POSTGRES_PASSWORD: wfm
+      POSTGRES_DB: wfm
       REDIS_URL: redis://redis:6379/0
-    volumes: ["./backend:/app"]
+      SECRET_KEY: ${SECRET_KEY:-dev-only-change-me-in-production-32-bytes}
     depends_on:
       redis: { condition: service_healthy }
       db: { condition: service_healthy }
 
   frontend:
-    build: ./frontend
-    command: npm run dev -- --host 0.0.0.0
-    environment:
-      VITE_API_BASE_URL: http://localhost:8000/api/v1
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    ports: ["5173:5173"]
+    build: ./frontend                # bakes VITE_API_BASE_URL=/api/v1 (same-origin)
+    ports: ["8080:80"]
     depends_on: [backend]
 
 volumes:

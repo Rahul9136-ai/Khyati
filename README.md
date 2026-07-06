@@ -47,14 +47,18 @@ wfm-platform/
 ## Quick start (local)
 
 ```bash
-# 1. Bring up Postgres + Redis + backend + worker + frontend
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env
-docker compose up --build
+# Bring up Postgres + Redis + API (auto-migrated) + worker + nginx-served SPA
+docker compose up -d --build
+docker compose exec backend python -m app.db.seed   # demo org + accounts
 
-# Backend  → http://localhost:8000  (docs at /docs, health at /api/v1/health)
-# Frontend → http://localhost:5173
+# App      → http://localhost:8080   (admin@flowforce.dev / Admin@12345)
+# Backend  → http://localhost:8000   (docs at /docs, health at /api/v1/health)
+# Postgres → localhost:5433 · Redis → localhost:6380 (offset to avoid clashes)
 ```
+
+The SPA is built with `VITE_API_BASE_URL=/api/v1` and nginx reverse-proxies
+`/api/` to the backend container, so the whole stack is same-origin — no CORS
+configuration needed in Docker.
 
 ### Backend only (no Docker)
 

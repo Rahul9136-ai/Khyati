@@ -1,6 +1,7 @@
 import { KeyRound, Loader2, LogIn } from "lucide-react"
 import { useState } from "react"
 
+import { SephoraLogo } from "@/components/sephora-logo"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -34,16 +35,11 @@ export function Login() {
   return (
     <div className="grid min-h-screen place-items-center bg-background p-4">
       <div className="w-full max-w-sm">
-        <div className="mb-6 flex items-center justify-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-primary to-violet-500 text-lg font-bold text-white">
-            FF
-          </div>
-          <div className="font-semibold leading-tight">
-            FlowForce
-            <span className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Workforce Management
-            </span>
-          </div>
+        <div className="mb-6 flex flex-col items-center gap-2">
+          <SephoraLogo size="lg" />
+          <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-muted-foreground">
+            Workforce Management
+          </p>
         </div>
 
         <Card className="glass">
@@ -110,7 +106,7 @@ export function Login() {
         </Card>
 
         <p className="mt-4 text-center text-[11px] text-muted-foreground">
-          Backend API · JWT + RBAC · run <code>python -m app.db.seed</code> if accounts are missing
+          Powered by FlowForce WFM · JWT + RBAC · run <code>python -m app.db.seed</code> if accounts are missing
         </p>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom"
 
 import { NotificationsBell } from "@/components/layout/notifications-bell"
 import { QueuePicker } from "@/components/layout/queue-picker"
+import { SephoraLogo } from "@/components/sephora-logo"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Select } from "@/components/ui/select"
 import { NAV } from "@/config/nav"
@@ -25,13 +26,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen bg-background">
       {/* Sidebar */}
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r bg-card/40 backdrop-blur-xl md:flex">
-        <div className="flex h-14 items-center gap-2 border-b px-5">
-          <div className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-primary to-violet-500 font-bold text-white">
-            FF
-          </div>
-          <div className="font-semibold leading-tight">
-            FlowForce
-            <span className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <div className="flex h-14 items-center border-b px-5">
+          <div className="flex flex-col gap-0.5">
+            <SephoraLogo size="sm" orientation="horizontal" />
+            <span className="pl-4 text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
               Workforce Mgmt
             </span>
           </div>
@@ -68,9 +66,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
         <div className="border-t p-4 text-[11px] text-muted-foreground">
-          v0.1 · Erlang-C engine
+          Powered by FlowForce WFM
           <br />
-          5 forecast models
+          v0.1 · Erlang-C engine · 5 models
         </div>
       </aside>
 
