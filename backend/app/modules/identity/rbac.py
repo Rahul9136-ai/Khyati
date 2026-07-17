@@ -40,6 +40,9 @@ PERMISSIONS: dict[str, str] = {
     "admin:roles": "Manage roles and permissions",
     "admin:org": "Manage org structure (countries, BUs, LOBs, queues)",
     "admin:settings": "Manage platform settings and templates",
+    # autonomous agents
+    "agent:read": "View autonomous agent activity and decisions",
+    "agent:manage": "Run agents, govern autonomy policy, approve/reject actions",
     # misc
     "audit:read": "View audit logs",
     "ai:use": "Use AI assistant features",
@@ -58,12 +61,14 @@ ROLE_MATRIX: dict[str, list[str]] = {
         "request:read", "request:approve_wfm",
         "attendance:read", "employee:read",
         "report:read", "report:export",
+        "agent:read", "agent:manage",
         "ai:use", "notification:read",
     ],
     "Forecasting Analyst": [
         "forecast:read", "forecast:write",
         "plan:read", "intraday:read", "employee:read",
         "report:read", "report:export",
+        "agent:read",
         "ai:use", "notification:read",
     ],
     "Scheduler": [
@@ -71,20 +76,23 @@ ROLE_MATRIX: dict[str, list[str]] = {
         "plan:read", "forecast:read",
         "request:read", "request:approve_wfm",
         "attendance:read", "employee:read",
-        "report:read", "ai:use", "notification:read",
+        "report:read", "agent:read", "agent:manage",
+        "ai:use", "notification:read",
     ],
     "Real-Time Analyst": [
         "intraday:read", "intraday:write",
         "schedule:read", "forecast:read",
         "attendance:read", "attendance:write",
         "request:read", "employee:read",
-        "report:read", "ai:use", "notification:read",
+        "report:read", "agent:read", "agent:manage",
+        "ai:use", "notification:read",
     ],
     "Operations Manager": [
         "request:read", "request:create", "request:approve_manager",
         "schedule:read", "intraday:read",
         "attendance:read", "employee:read",
         "report:read", "report:export",
+        "agent:read",
         "ai:use", "notification:read",
     ],
     "Team Leader": [
@@ -107,6 +115,6 @@ ROLE_MATRIX: dict[str, list[str]] = {
         "report:read", "report:export",
         "forecast:read", "plan:read", "schedule:read",
         "intraday:read", "attendance:read", "employee:read",
-        "ai:use", "notification:read",
+        "agent:read", "ai:use", "notification:read",
     ],
 }

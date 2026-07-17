@@ -4,6 +4,7 @@ import { Database, FileDown, Upload, X } from "lucide-react"
 import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
 import { ExportButton } from "@/components/export-button"
+import { ForecastAccuracy } from "@/components/forecast-accuracy"
 import { PageHeader } from "@/components/page-header"
 import { LockedHint, PermissionGate } from "@/components/permission-gate"
 import { RampPlanner } from "@/components/ramp-planner"
@@ -277,6 +278,10 @@ export function Forecasting() {
           </div>
         </CardContent>
       </Card>
+
+      <div className="mt-4">
+        <ForecastAccuracy />
+      </div>
 
       <div className="mt-4">
         <RampPlanner />

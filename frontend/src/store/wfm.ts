@@ -12,9 +12,23 @@ import {
   type PermissionMatrix,
   type Role,
 } from "@/lib/domain/roles"
-import type { BreakOverrides } from "@/lib/domain/breaks"
+import { seedExceptions, type AdherenceException, type ExceptionStatus } from "@/lib/domain/adherence"
+import { computeAlerts, type WfmAlert } from "@/lib/domain/alerts"
+import type { ScheduleAddition } from "@/lib/domain/autoschedule"
+import { evaluatePtoRequest } from "@/lib/domain/ptoRules"
+import {
+  DEFAULT_RULE_STATE,
+  DEFAULT_THRESHOLDS,
+  PIPELINE,
+  RULES,
+  THRESHOLD_META,
+  type RuleState,
+  type Thresholds,
+} from "@/lib/domain/automation"
+import { optimiseBreaks, type BreakOverrides } from "@/lib/domain/breaks"
+import { buildPlan, summarisePlan } from "@/lib/domain/planning"
 import type { Scenario } from "@/lib/domain/scenario"
-import { AGENTS, forecastFor, makeRTA, QUEUES, SHRINKAGE, TEAMS } from "@/lib/domain/seed"
+import { AGENTS, forecastFor, inAdherence, makeRTA, QUEUES, SHRINKAGE, TEAMS } from "@/lib/domain/seed"
 import { DEFAULT_SHIFT_PATTERNS, shiftStringFor, type ShiftPattern } from "@/lib/domain/shiftPatterns"
 import type { Agent, Queue, RtaEntry } from "@/lib/domain/types"
 
@@ -55,7 +69,7 @@ export interface SwapRequest {
   ts: number
 }
 
-export type PtoStatus = "Pending" | "Approved" | "Denied"
+export type PtoStatus = "Pending" | "Auto-Approved" | "Approved" | "Denied"
 export interface PtoRequest {
   id: string
   agentId: string
@@ -162,6 +176,8 @@ interface WfmState {
   agents: Agent[]
   rta: RtaEntry[]
   addAgent: (a: NewAgent) => void
+  /** Auto-scheduler: mint new agents from the recommended pattern additions. */
+  applyAutoSchedule: (queueId: string, additions: ScheduleAddition[]) => void
   setAgents: (agents: Agent[], detail: string) => void
   setAgentSkills: (agentId: string, skills: string[]) => void
   recallAgent: (id: string) => void
@@ -217,6 +233,27 @@ interface WfmState {
   breakOverrides: BreakOverrides
   applyBreakOverrides: (overrides: BreakOverrides, detail: string) => void
   resetBreakOverrides: () => void
+
+  // Automation layer: configurable thresholds + rules-engine toggles.
+  thresholds: Thresholds
+  setThreshold: (key: keyof Thresholds, value: number) => void
+  ruleState: RuleState
+  setRuleEnabled: (id: string, enabled: boolean) => void
+
+  // Pipeline execution: "Run now" fires a job's real logic immediately;
+  // pipelineAutoRun toggles a live (demo-paced) interval that keeps firing it.
+  pipelineAutoRun: Record<string, boolean>
+  setPipelineAutoRun: (jobId: string, on: boolean) => void
+  runPipelineJob: (jobId: string, scheduled?: boolean) => void
+
+  // Proactive alerts: recomputed on an interval regardless of the current page.
+  alerts: WfmAlert[]
+  recomputeAlerts: () => void
+
+  // Adherence exception management (approved activities auto-applied).
+  exceptions: AdherenceException[]
+  addException: (e: Omit<AdherenceException, "id" | "status">) => void
+  setExceptionStatus: (id: string, status: ExceptionStatus) => void
 }
 
 const DEFAULT_USER = "Avery Owens"
@@ -294,6 +331,43 @@ export const useWfm = create<WfmState>()(
           rta: makeRTA(agents),
           auditLog: [entry(s.currentUser, "Schedule", "Imported schedule", detail), ...s.auditLog],
         })),
+
+      applyAutoSchedule: (queueId, additions) =>
+        set((s) => {
+          const teamNames = Object.keys(TEAMS)
+          let seq = s.agents.length
+          const newAgents: Agent[] = []
+          const newRta: RtaEntry[] = []
+          additions.forEach(({ patternId, count }) => {
+            const pattern = s.shiftPatterns.find((p) => p.id === patternId)
+            for (let i = 0; i < count; i++) {
+              seq++
+              const team = teamNames[seq % teamNames.length] ?? teamNames[0]
+              const id = "a" + String(seq).padStart(3, "0") + uid().slice(0, 3)
+              const agent: Agent = {
+                id,
+                name: `New Hire ${seq}`,
+                skills: [queueId],
+                shift: pattern ? shiftStringFor(pattern) : "07:00–15:30",
+                shiftPatternId: patternId,
+                team,
+                tl: TEAMS[team]?.tl ?? "Unassigned",
+              }
+              newAgents.push(agent)
+              newRta.push({ id, actual: "AVAIL", scheduled: "AVAIL", secs: 0 })
+            }
+          })
+          const queueName = skillLabel(queueId, s.queues)
+          const detail = additions.map((a) => `${a.count}× ${a.patternName}`).join(", ")
+          return {
+            agents: [...s.agents, ...newAgents],
+            rta: [...s.rta, ...newRta],
+            auditLog: [
+              entry(s.currentUser, "Employee", "Auto-scheduled new hires", `${queueName} · ${newAgents.length} agent(s) · ${detail}`),
+              ...s.auditLog,
+            ],
+          }
+        }),
 
       setAgentSkills: (agentId, skills) =>
         set((s) => {
@@ -436,10 +510,24 @@ export const useWfm = create<WfmState>()(
       addPtoRequest: (r) =>
         set((s) => {
           const agent = s.agents.find((a) => a.id === r.agentId)
-          const req: PtoRequest = { ...r, id: "lv" + uid(), status: "Pending" }
+          const ruleOn = s.ruleState["pto-auto-approve"] !== false
+          const evalResult = ruleOn
+            ? evaluatePtoRequest(r, s.agents, s.queues, s.forecasts, s.shrinkage, s.ptoRequests, s.thresholds.ptoOverlapCapPct)
+            : null
+          const status: PtoStatus = evalResult?.approve ? "Auto-Approved" : "Pending"
+          const req: PtoRequest = { ...r, id: "lv" + uid(), status }
+          const base = `${agent?.name ?? r.agentId} · ${r.type} · ${r.from} → ${r.to} (${r.days}d)`
           return {
             ptoRequests: [req, ...s.ptoRequests],
-            auditLog: [entry(s.currentUser, "PTO", "Submitted leave request", `${agent?.name ?? r.agentId} · ${r.type} · ${r.from} → ${r.to} (${r.days}d)`), ...s.auditLog],
+            auditLog: [
+              entry(
+                s.currentUser,
+                "PTO",
+                status === "Auto-Approved" ? "Leave auto-approved" : "Submitted leave request",
+                status === "Auto-Approved" ? `${base} · ${evalResult!.reason}` : base,
+              ),
+              ...s.auditLog,
+            ],
           }
         }),
       setPtoStatus: (id, status) =>
@@ -560,10 +648,167 @@ export const useWfm = create<WfmState>()(
           breakOverrides: {},
           auditLog: [entry(s.currentUser, "Schedule", "Reset break plan", "Reverted to shift-pattern break placements"), ...s.auditLog],
         })),
+
+      thresholds: DEFAULT_THRESHOLDS,
+      setThreshold: (key, value) =>
+        set((s) => {
+          const meta = THRESHOLD_META.find((m) => m.key === key)
+          const fmt = (v: number) => (meta?.kind === "pct" ? `${(v * 100).toFixed(0)}%` : meta?.kind === "mins" ? `${v} min` : `${v}pp`)
+          return {
+            thresholds: { ...s.thresholds, [key]: value },
+            auditLog: [
+              entry(s.currentUser, "Config", "Changed threshold", `${meta?.label ?? key}: ${fmt(s.thresholds[key])} → ${fmt(value)}`),
+              ...s.auditLog,
+            ],
+          }
+        }),
+
+      ruleState: DEFAULT_RULE_STATE,
+      setRuleEnabled: (id, enabled) =>
+        set((s) => {
+          const rule = RULES.find((r) => r.id === id)
+          return {
+            ruleState: { ...s.ruleState, [id]: enabled },
+            auditLog: [
+              entry(s.currentUser, "Config", `${enabled ? "Enabled" : "Disabled"} automation rule`, rule?.name ?? id),
+              ...s.auditLog,
+            ],
+          }
+        }),
+
+      pipelineAutoRun: {},
+      setPipelineAutoRun: (jobId, on) =>
+        set((s) => {
+          const job = PIPELINE.find((j) => j.id === jobId)
+          return {
+            pipelineAutoRun: { ...s.pipelineAutoRun, [jobId]: on },
+            auditLog: [
+              entry(s.currentUser, "Config", on ? "Enabled scheduled run" : "Disabled scheduled run", job?.name ?? jobId),
+              ...s.auditLog,
+            ],
+          }
+        }),
+      runPipelineJob: (jobId, scheduled = false) =>
+        set((s) => {
+          const trigger = scheduled ? "scheduled" : "manual"
+          const jobName = PIPELINE.find((j) => j.id === jobId)?.name ?? jobId
+
+          if (jobId === "ingest") {
+            return {
+              auditLog: [entry(s.currentUser, "Config", "Ran data ingest", `${s.queues.length} queue(s) refreshed · ${trigger} run`), ...s.auditLog],
+            }
+          }
+
+          if (jobId === "forecast") {
+            const forecasts = { ...s.forecasts }
+            const forecastMethod = { ...s.forecastMethod }
+            const refreshed: string[] = []
+            for (const q of s.queues) {
+              const overlay = s.importedActuals[q.id]
+              if (!overlay || overlay.length === 0) continue
+              const bt = backtest(q.id, overlay)
+              forecasts[q.id] = generate(q.id, bt.best.id, overlay)
+              forecastMethod[q.id] = bt.best.id
+              refreshed.push(`${q.name} (${bt.best.name})`)
+            }
+            const detail = refreshed.length
+              ? `Retrained ${refreshed.length} queue(s): ${refreshed.join(", ")} · ${trigger} run`
+              : `No queues had imported actuals to retrain against · ${trigger} run`
+            return {
+              ...(refreshed.length ? { forecasts, forecastMethod } : {}),
+              auditLog: [entry(s.currentUser, "Forecast", "Ran forecast refresh", detail), ...s.auditLog],
+            }
+          }
+
+          if (jobId === "capacity") {
+            const totals = s.queues.reduce(
+              (acc, q) => {
+                const sum = summarisePlan(buildPlan(s.forecasts[q.id] ?? [], q.aht, q, s.shrinkage, s.agents))
+                return { req: acc.req + sum.reqHours, sched: acc.sched + sum.schedHours }
+              },
+              { req: 0, sched: 0 },
+            )
+            return {
+              auditLog: [
+                entry(s.currentUser, "Config", "Ran capacity rebuild", `${totals.req.toFixed(0)} required vs ${totals.sched.toFixed(0)} scheduled agent-hrs across ${s.queues.length} queue(s) · ${trigger} run`),
+                ...s.auditLog,
+              ],
+            }
+          }
+
+          if (jobId === "schedule") {
+            const res = optimiseBreaks(s.queues, s.forecasts, s.shrinkage, s.agents, s.shiftPatterns, s.breakOverrides)
+            const detail = res.moved
+              ? `${res.moved} break move(s) · under-target ${res.beforeUnder} → ${res.afterUnder} · ${trigger} run`
+              : `No beneficial break moves found · ${trigger} run`
+            return {
+              ...(res.moved ? { breakOverrides: res.overrides } : {}),
+              auditLog: [entry(s.currentUser, "Schedule", "Ran schedule optimiser", detail), ...s.auditLog],
+            }
+          }
+
+          if (jobId === "rta") {
+            const escalated = s.rta.filter(
+              (r) => !inAdherence(r.actual, r.scheduled) && r.secs >= s.thresholds.escalateMins * 60,
+            ).length
+            return {
+              auditLog: [
+                entry(s.currentUser, "Real-Time", "Ran RTA monitor", `${s.rta.length} agent(s) polled · ${escalated} escalation(s) at grace ${s.thresholds.graceMins}min/escalate ${s.thresholds.escalateMins}min · ${trigger} run`),
+                ...s.auditLog,
+              ],
+            }
+          }
+
+          return { auditLog: [entry(s.currentUser, "Config", "Ran automation job", `${jobName} · ${trigger} run`), ...s.auditLog] }
+        }),
+
+      alerts: [],
+      recomputeAlerts: () =>
+        set((s) => ({
+          alerts: computeAlerts({
+            queues: s.queues,
+            forecasts: s.forecasts,
+            shrinkage: s.shrinkage,
+            agents: s.agents,
+            rta: s.rta,
+            nowIdx: s.nowIdx,
+            thresholds: s.thresholds,
+            ptoPending: s.ptoRequests.filter((r) => r.status === "Pending").length,
+            swapsPending: s.swaps.filter((r) => r.status === "Pending").length,
+          }),
+        })),
+
+      exceptions: seedExceptions(AGENTS),
+      addException: (e) =>
+        set((s) => {
+          const agent = s.agents.find((a) => a.id === e.agentId)
+          const fmt = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`
+          const ex: AdherenceException = { ...e, id: "ex" + uid(), status: "Pending" }
+          return {
+            exceptions: [ex, ...s.exceptions],
+            auditLog: [
+              entry(s.currentUser, "Real-Time", "Raised adherence exception", `${agent?.name ?? e.agentId} · ${e.reason} · ${fmt(e.startMin)}–${fmt(e.endMin)}`),
+              ...s.auditLog,
+            ],
+          }
+        }),
+      setExceptionStatus: (id, status) =>
+        set((s) => {
+          const ex = s.exceptions.find((x) => x.id === id)
+          const agent = ex ? s.agents.find((a) => a.id === ex.agentId) : undefined
+          return {
+            exceptions: s.exceptions.map((x) => (x.id === id ? { ...x, status } : x)),
+            auditLog: ex
+              ? [entry(s.currentUser, "Real-Time", `${status} adherence exception`, `${agent?.name ?? ex.agentId} · ${ex.reason}`), ...s.auditLog]
+              : s.auditLog,
+          }
+        }),
     }),
     {
       name: "flowforce-wfm",
-      version: 1,
+      // v2: corporate palette in seeded queue/AUX colours + automation
+      // thresholds/rules/exceptions — old persisted state is discarded.
+      version: 2,
       // persist everything a user changes so nothing is lost on refresh
       partialize: (s) => ({
         currentUser: s.currentUser,
@@ -585,6 +830,10 @@ export const useWfm = create<WfmState>()(
         scenarios: s.scenarios,
         swaps: s.swaps,
         breakOverrides: s.breakOverrides,
+        thresholds: s.thresholds,
+        ruleState: s.ruleState,
+        exceptions: s.exceptions,
+        pipelineAutoRun: s.pipelineAutoRun,
       }),
     },
   ),

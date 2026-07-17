@@ -10,8 +10,8 @@ const badgeVariants = cva(
       variant: {
         default: "border-transparent bg-primary/15 text-primary",
         secondary: "border-transparent bg-secondary text-secondary-foreground",
-        success: "border-transparent bg-emerald-500/15 text-emerald-500",
-        warning: "border-transparent bg-amber-500/15 text-amber-500",
+        success: "border-transparent bg-teal-600/15 text-teal-600 dark:text-teal-400",
+        warning: "border-transparent bg-amber-600/15 text-amber-600 dark:text-amber-500",
         destructive: "border-transparent bg-destructive/15 text-destructive",
         outline: "text-foreground",
       },

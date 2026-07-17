@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from app.api.v1 import health
 from app.modules.ai.router import router as ai_router
 from app.modules.attendance.router import router as attendance_router
+from app.modules.autonomy.router import router as autonomy_router
 from app.modules.forecasting.router import router as forecasting_router
 from app.modules.identity.router import (
     audit_router,
@@ -40,3 +41,4 @@ api_router.include_router(attendance_router)
 api_router.include_router(reports_router)
 api_router.include_router(notifications_router)
 api_router.include_router(ai_router)
+api_router.include_router(autonomy_router)

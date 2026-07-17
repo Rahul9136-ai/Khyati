@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { CalendarCheck, CalendarClock, CalendarX, PlaneTakeoff } from "lucide-react"
+import { CalendarCheck, CalendarClock, CalendarX, PlaneTakeoff, Zap } from "lucide-react"
 
 import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
@@ -12,14 +12,20 @@ import { Dialog } from "@/components/ui/dialog"
 import { Select } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { addDays, daysBetween, TODAY, ymd } from "@/lib/domain/dates"
+import { cn } from "@/lib/utils"
 import type { PtoStatus } from "@/store/wfm"
 import { useWfm } from "@/store/wfm"
 
 const TYPES = ["Annual Leave", "Sick", "Personal", "Unpaid", "Bereavement"]
-const variant: Record<PtoStatus, "warning" | "success" | "destructive"> = { Pending: "warning", Approved: "success", Denied: "destructive" }
+const variant: Record<PtoStatus, "warning" | "success" | "destructive" | "default"> = {
+  Pending: "warning",
+  "Auto-Approved": "success",
+  Approved: "default",
+  Denied: "destructive",
+}
 
 export function Pto() {
-  const { agents, ptoRequests, addPtoRequest, setPtoStatus } = useWfm()
+  const { agents, ptoRequests, addPtoRequest, setPtoStatus, ruleState } = useWfm()
   const byId = useMemo(() => Object.fromEntries(agents.map((a) => [a.id, a])), [agents])
 
   const [open, setOpen] = useState(false)
@@ -34,8 +40,10 @@ export function Pto() {
     [ptoRequests, byId],
   )
   const pending = rows.filter((r) => r.status === "Pending").length
-  const approved = rows.filter((r) => r.status === "Approved").length
-  const onLeaveToday = rows.filter((r) => r.status === "Approved" && r.from <= ymd(TODAY) && r.to >= ymd(TODAY)).length
+  const approved = rows.filter((r) => r.status === "Approved" || r.status === "Auto-Approved").length
+  const autoApproved = rows.filter((r) => r.status === "Auto-Approved").length
+  const onLeaveToday = rows.filter((r) => (r.status === "Approved" || r.status === "Auto-Approved") && r.from <= ymd(TODAY) && r.to >= ymd(TODAY)).length
+  const autoRuleOn = ruleState["pto-auto-approve"] !== false
 
   function reset() {
     setAgentId(agents[0]?.id ?? "")
@@ -78,9 +86,18 @@ export function Pto() {
 
       <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiCard label="Pending" value={pending} hint="awaiting approval" tone="warn" icon={CalendarClock} />
-        <KpiCard label="Approved" value={approved} hint="this month" tone="good" icon={CalendarCheck} />
+        <KpiCard label="Approved" value={approved} hint={`${autoApproved} auto-approved`} tone="good" icon={CalendarCheck} />
         <KpiCard label="On leave today" value={onLeaveToday} hint="impacts coverage" icon={CalendarX} />
         <KpiCard label="Avg balance" value="14.5d" hint="annual entitlement" icon={PlaneTakeoff} />
+      </div>
+
+      <div className={cn("mb-4 flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm", autoRuleOn ? "border-teal-600/30" : "border-muted-foreground/20")}>
+        <Zap className={cn("h-4 w-4", autoRuleOn ? "text-teal-600" : "text-muted-foreground")} />
+        {autoRuleOn ? (
+          <>Leave auto-approval is <b>on</b> — requests with enough coverage surplus and an overlap under the cap skip the manager queue.</>
+        ) : (
+          <>Leave auto-approval is <b>off</b> — every request waits for a human. Enable it in the Automation Center.</>
+        )}
       </div>
 
       <Card className="glass">

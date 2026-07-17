@@ -7,7 +7,8 @@ import { PageHeader } from "@/components/page-header"
 import { PermissionGate } from "@/components/permission-gate"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Activity, PhoneCall, UserX, Zap } from "lucide-react"
+import { Activity, ClipboardCheck, PhoneCall, Siren, UserX, Zap } from "lucide-react"
+import { buildAgentDay, DAY_START, escalationFor, scoreAgentDay, type EscalationLevel } from "@/lib/domain/adherence"
 import { agentAdherencePct, AUX, AUX_BY_CODE, inAdherence } from "@/lib/domain/seed"
 import { buildPlan, fmtPct } from "@/lib/domain/planning"
 import { cn } from "@/lib/utils"
@@ -16,7 +17,7 @@ import { useWfm } from "@/store/wfm"
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`
 
 export function Rta() {
-  const { agents, rta, recallAgent, recallMany, forecasts, shrinkage, nowIdx, queues } = useWfm()
+  const { agents, rta, recallAgent, recallMany, forecasts, shrinkage, nowIdx, queues, thresholds, shiftPatterns, breakOverrides, ruleState } = useWfm()
   const byId = useMemo(() => Object.fromEntries(agents.map((a) => [a.id, a])), [agents])
 
   const [tick, setTick] = useState(0)
@@ -43,11 +44,42 @@ export function Rta() {
       rta
         .map((r) => {
           const live = r.recalled ? tick : r.secs + tick
-          return { ...r, agent: byId[r.id], aux: AUX_BY_CODE[r.actual], live, adh: agentAdherencePct({ ...r, secs: live }) }
+          const off = !inAdherence(r.actual, r.scheduled)
+          return {
+            ...r,
+            agent: byId[r.id],
+            aux: AUX_BY_CODE[r.actual],
+            live,
+            adh: agentAdherencePct({ ...r, secs: live }),
+            level: escalationFor(off, live, thresholds.graceMins, thresholds.escalateMins) as EscalationLevel,
+          }
         })
         .filter((r) => r.agent),
-    [rta, byId, tick],
+    [rta, byId, tick, thresholds.graceMins, thresholds.escalateMins],
   )
+
+  // Escalation ladder: grace → flagged → escalated-to-TL, per configured windows.
+  const ladder = useMemo(() => {
+    const off = live.filter((r) => r.level !== "in").sort((a, b) => b.live - a.live)
+    return {
+      grace: off.filter((r) => r.level === "grace"),
+      flagged: off.filter((r) => r.level === "flagged"),
+      escalated: off.filter((r) => r.level === "escalated"),
+    }
+  }, [live])
+
+  // Live conformance: productive minutes delivered ÷ scheduled, up to "now".
+  const conformance = useMemo(() => {
+    const nowMin = DAY_START + (nowIdx + 1) * 30
+    let worked = 0
+    let schedWork = 0
+    for (const a of agents) {
+      const s = scoreAgentDay(buildAgentDay(a, shiftPatterns, breakOverrides), [], nowMin)
+      worked += s.workedMins
+      schedWork += s.schedWorkMins
+    }
+    return schedWork ? worked / schedWork : 1
+  }, [agents, shiftPatterns, breakOverrides, nowIdx])
 
   const recs = useMemo(() => {
     if (!slAtRisk) return []
@@ -102,12 +134,57 @@ export function Rta() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <KpiCard label="Adherence" value={fmtPct(stats.adherence)} hint={`${stats.inAdh}/${stats.total} on plan`} tone={stats.adherence >= 0.9 ? "good" : stats.adherence >= 0.8 ? "warn" : "bad"} icon={Activity} />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        <KpiCard label="Adherence" value={fmtPct(stats.adherence)} hint={`${stats.inAdh}/${stats.total} on plan`} tone={stats.adherence >= thresholds.adherenceTarget ? "good" : stats.adherence >= 0.8 ? "warn" : "bad"} icon={Activity} />
+        <KpiCard label="Conformance" value={fmtPct(conformance)} hint="worked ÷ scheduled, to now" tone={conformance >= 0.95 ? "good" : "warn"} icon={ClipboardCheck} />
         <KpiCard label="On the phones" value={stats.onPhone} hint="available + ACW" tone="good" icon={PhoneCall} />
-        <KpiCard label="Off-plan now" value={stats.outAdh} hint="actual ≠ schedule" tone={stats.outAdh === 0 ? "good" : "bad"} icon={UserX} />
+        <KpiCard label="Off-plan now" value={stats.outAdh} hint={`${ladder.escalated.length} escalated to TL`} tone={ladder.escalated.length ? "bad" : stats.outAdh ? "warn" : "good"} icon={UserX} />
         <KpiCard label="Live SL risk" value={slAtRisk ? "AT RISK" : "STABLE"} hint={slAtRisk ? `${pressured.length} queue(s)` : "within target"} tone={slAtRisk ? "bad" : "good"} icon={Zap} />
       </div>
+
+      <Card className={cn("glass mt-4", ladder.escalated.length && "border-destructive/50")}>
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0">
+          <CardTitle className="flex items-center gap-2">
+            <Siren className="h-4 w-4 text-destructive" /> Adherence escalations
+          </CardTitle>
+          <span className="text-xs text-muted-foreground">
+            grace {thresholds.graceMins} min → flag → escalate to TL at {thresholds.escalateMins} min
+            {ruleState["adherence-escalation"] === false && " · rule disabled"}
+          </span>
+        </CardHeader>
+        <CardContent>
+          {ruleState["adherence-escalation"] === false ? (
+            <p className="text-sm text-muted-foreground">Escalation rule is switched off in the Automation Center.</p>
+          ) : ladder.flagged.length + ladder.escalated.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No agents past the grace period{ladder.grace.length ? ` — ${ladder.grace.length} within grace, watching` : ""}.
+            </p>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {[...ladder.escalated, ...ladder.flagged].map((r) => (
+                <div key={r.id} className={cn("rounded-lg border p-3", r.level === "escalated" ? "border-destructive/50" : "border-amber-600/40")}>
+                  <div className="flex items-center justify-between">
+                    <span className="truncate text-sm font-semibold">{r.agent.name}</span>
+                    <span className={cn("text-[10px] font-bold uppercase", r.level === "escalated" ? "text-destructive" : "text-amber-600")}>
+                      {r.level}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {r.aux?.label} instead of {AUX_BY_CODE[r.scheduled]?.label} · {fmtTime(r.live)} off-plan
+                  </div>
+                  <div className="mt-1 text-xs">
+                    {r.level === "escalated" ? (
+                      <span className="font-medium text-destructive">TL {r.agent.tl} notified</span>
+                    ) : (
+                      <span className="text-muted-foreground">escalates to {r.agent.tl} at {thresholds.escalateMins}:00</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <AiSummary insight={insight} title="AI Real-Time Summary" />

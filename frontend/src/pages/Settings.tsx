@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { THRESHOLD_META } from "@/lib/domain/automation"
 import { type AccessLevel, effectiveLevel, MODULES, ROLE_DESCRIPTIONS, ROLES, type Role } from "@/lib/domain/roles"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
@@ -26,7 +27,7 @@ const CELL_STYLE: Record<AccessLevel, string> = {
 const CELL_LABEL: Record<AccessLevel, string> = { none: "—", view: "View", edit: "Edit" }
 
 export function Settings() {
-  const { permissions, setPermission, can, users, inviteUser, setUserRole, removeUser } = useWfm()
+  const { permissions, setPermission, can, users, inviteUser, setUserRole, removeUser, thresholds, setThreshold } = useWfm()
   const editable = can("settings", "edit")
 
   // invite-user form state
@@ -72,8 +73,54 @@ export function Settings() {
         <TabsList>
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="roles">Roles & Permissions</TabsTrigger>
+          <TabsTrigger value="thresholds">Thresholds</TabsTrigger>
           <TabsTrigger value="org">Organisation</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="thresholds">
+          <Card className="glass max-w-3xl">
+            <CardHeader>
+              <CardTitle>Automation thresholds</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                These drive the rules engine: reforecast triggers, variance alerts, adherence flagging and auto-approvals.
+                Every change is written to the audit trail.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {THRESHOLD_META.map((meta) => {
+                const raw = thresholds[meta.key]
+                const shown = meta.kind === "pct" ? Math.round(raw * 100) : raw
+                return (
+                  <div key={meta.key} className="flex flex-wrap items-center gap-3 border-b pb-3 last:border-0 last:pb-0">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium">{meta.label}</div>
+                      <p className="text-xs text-muted-foreground">{meta.help}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        disabled={!editable}
+                        className="h-8 w-24 tabular-nums"
+                        min={meta.kind === "pct" ? meta.min * 100 : meta.min}
+                        max={meta.kind === "pct" ? meta.max * 100 : meta.max}
+                        step={meta.kind === "pct" ? meta.step * 100 : meta.step}
+                        value={shown}
+                        onChange={(e) => {
+                          const v = +e.target.value
+                          if (Number.isFinite(v)) setThreshold(meta.key, meta.kind === "pct" ? v / 100 : v)
+                        }}
+                      />
+                      <span className="w-14 text-xs text-muted-foreground">
+                        {meta.kind === "pct" ? "%" : meta.kind === "mins" ? "minutes" : "SL pp"}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+              {!editable && <Badge variant="secondary">read-only for your designation</Badge>}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="users">
           <Card className="glass">

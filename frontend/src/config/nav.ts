@@ -1,9 +1,12 @@
 import {
   Activity,
   BarChart3,
+  BookOpenText,
+  Bot,
   CalendarClock,
   CalendarRange,
   Calculator,
+  ClipboardCheck,
   Clock,
   FlaskConical,
   History,
@@ -16,6 +19,7 @@ import {
   Star,
   TrendingUp,
   UsersRound,
+  Workflow,
 } from "lucide-react"
 
 import type { ModuleId } from "@/lib/domain/roles"
@@ -54,6 +58,9 @@ export const NAV: NavGroup[] = [
     items: [
       { to: "/intraday", label: "Intraday", icon: Clock, module: "intraday" },
       { to: "/rta", label: "Real-Time Monitor", icon: Activity, module: "realtime" },
+      { to: "/adherence", label: "Adherence", icon: ClipboardCheck, module: "adherence" },
+      { to: "/automation", label: "Automation Center", icon: Workflow, module: "automation" },
+      { to: "/autonomy", label: "Autonomous Agents", icon: Bot, module: "automation" },
     ],
   },
   {
@@ -69,6 +76,7 @@ export const NAV: NavGroup[] = [
     items: [
       { to: "/reports", label: "Reports & KPIs", icon: BarChart3, module: "reports" },
       { to: "/copilot", label: "AI Copilot", icon: Sparkles, module: "copilot" },
+      { to: "/help", label: "Methodology", icon: BookOpenText, module: "help" },
     ],
   },
   {

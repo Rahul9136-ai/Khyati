@@ -5,6 +5,7 @@ import { SeriesChart } from "@/components/charts/series-chart"
 import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
+import { StaffingHeatmap } from "@/components/staffing-heatmap"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -166,6 +167,10 @@ export function Capacity() {
           </CardContent>
         </Card>
         <AiSummary insight={insight} title="AI Planning Summary" />
+      </div>
+
+      <div className="mt-4">
+        <StaffingHeatmap />
       </div>
     </>
   )

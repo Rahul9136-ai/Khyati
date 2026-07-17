@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react"
-import { CalendarClock, FileDown, RotateCcw, Upload, Wand2 } from "lucide-react"
+import { CalendarClock, CheckCircle2, FileDown, RotateCcw, Sparkles, Upload, Wand2 } from "lucide-react"
 import { Link } from "react-router-dom"
 
 import { AiSummary } from "@/components/ai-summary"
@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { agentBreakMarkers, breakAwareCoverage, optimiseBreaks, projectedSLRow } from "@/lib/domain/breaks"
+import { planAutoSchedule, type AutoScheduleResult } from "@/lib/domain/autoschedule"
 import { buildPlan, fmtPct, summarisePlan } from "@/lib/domain/planning"
 import { AUX_BY_CODE, INTERVALS } from "@/lib/domain/seed"
 import { downloadTemplate, parseScheduleFile } from "@/lib/schedule"
@@ -30,7 +31,7 @@ function coveredIdx(shift: string): boolean[] {
 }
 
 export function Scheduling() {
-  const { queueId, forecasts, shrinkage, agents, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides } = useWfm()
+  const { queueId, forecasts, shrinkage, agents, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule } = useWfm()
   const queue = queues.find((q) => q.id === queueId)!
   const plan = useMemo(() => buildPlan(forecasts[queue.id], queue.aht, queue, shrinkage, agents), [forecasts, queue, shrinkage, agents])
   const sum = useMemo(() => summarisePlan(plan), [plan])
@@ -60,6 +61,18 @@ export function Scheduling() {
   const fileRef = useRef<HTMLInputElement>(null)
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [optimMsg, setOptimMsg] = useState<string | null>(null)
+  const [autoResult, setAutoResult] = useState<AutoScheduleResult | null>(null)
+
+  function onAutoSchedule() {
+    const result = planAutoSchedule(queue, forecasts[queue.id] ?? [], shrinkage, agents, shiftPatterns)
+    setAutoResult(result)
+  }
+
+  function applyAuto() {
+    if (!autoResult || autoResult.totalAdded === 0) return
+    applyAutoSchedule(queue.id, autoResult.additions)
+    setAutoResult(null)
+  }
 
   function onOptimise() {
     const res = optimiseBreaks(queues, forecasts, shrinkage, agents, shiftPatterns, breakOverrides)
@@ -115,6 +128,9 @@ export function Scheduling() {
               <Button variant="outline" onClick={() => fileRef.current?.click()}>
                 <Upload className="h-4 w-4" /> Import schedule
               </Button>
+              <Button variant="outline" onClick={onAutoSchedule}>
+                <Sparkles className="h-4 w-4" /> Auto-schedule
+              </Button>
               <Button onClick={onOptimise}>
                 <Wand2 className="h-4 w-4" /> Optimise breaks
               </Button>
@@ -137,6 +153,40 @@ export function Scheduling() {
           </>
         }
       />
+
+      {autoResult && (
+        <Card className="glass mb-4 border-primary/40">
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-primary" /> Auto-scheduler — {queue.name}</CardTitle>
+            <Button variant="ghost" size="sm" onClick={() => setAutoResult(null)}>Dismiss</Button>
+          </CardHeader>
+          <CardContent>
+            {autoResult.totalAdded === 0 ? (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Current roster already covers every forecasted interval for {queue.name} — no hires recommended.
+              </p>
+            ) : (
+              <>
+                <p className="mb-3 text-sm text-muted-foreground">
+                  Recommends <b className="text-foreground">{autoResult.totalAdded} new agent{autoResult.totalAdded > 1 ? "s" : ""}</b> using existing shift patterns to close every forecasted gap:
+                </p>
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {autoResult.additions.map((a) => (
+                    <Badge key={a.patternId} variant="secondary">{a.count}× {a.patternName} ({a.shift})</Badge>
+                  ))}
+                </div>
+                <div className="mb-3 flex items-center gap-4 text-sm">
+                  <span>SL {fmtPct(autoResult.beforeSL)} → <b className="text-emerald-500">{fmtPct(autoResult.afterSL)}</b></span>
+                  <span>Under-target intervals {autoResult.beforeUnder} → <b className={autoResult.afterUnder === 0 ? "text-emerald-500" : "text-amber-500"}>{autoResult.afterUnder}</b></span>
+                </div>
+                <PermissionGate module="scheduling">
+                  <Button onClick={applyAuto}><Sparkles className="h-4 w-4" /> Apply — add {autoResult.totalAdded} agent{autoResult.totalAdded > 1 ? "s" : ""}</Button>
+                </PermissionGate>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {optimMsg && (
         <div className="mb-4 rounded-lg border border-primary/40 px-4 py-2.5 text-sm text-primary">
