@@ -19,7 +19,7 @@ import { useWfm } from "@/store/wfm"
 const SHIFT_HRS = 8
 
 export function Capacity() {
-  const { queueId, shrinkage, setShrinkage, forecastMethod, agents, queues } = useWfm()
+  const { queueId, shrinkage, setShrinkage, forecastMethod, agents, queues, externalFactors } = useWfm()
   const queue = queues.find((q) => q.id === queueId)!
 
   const [gran, setGran] = useState<GranId>("weekly")
@@ -32,8 +32,8 @@ export function Capacity() {
   }, [forecastMethod, queue.id, gran])
 
   const cap = useMemo(
-    () => rangePlan(queue.id, parseYMD(start), parseYMD(end), gran, method, queue.aht, queue, shrinkage, agents),
-    [queue.id, start, end, gran, method, queue, shrinkage, agents],
+    () => rangePlan(queue.id, parseYMD(start), parseYMD(end), gran, method, queue.aht, queue, shrinkage, agents, undefined, externalFactors),
+    [queue.id, start, end, gran, method, queue, shrinkage, agents, externalFactors],
   )
   const sum = useMemo(() => summariseBuckets(cap.rows), [cap])
 

@@ -1,5 +1,6 @@
 // Granularity + date-range rollups over the day-level engine.
-import { dayIndex, dayOfYear, dowOf, enumerateDays, fmtDay, MAX_RANGE_DAYS, monthKey, monthLabel, weekKey, weekLabel } from "./dates"
+import { dayIndex, dayOfYear, dowOf, enumerateDays, fmtDay, MAX_RANGE_DAYS, monthKey, monthLabel, weekKey, weekLabel, ymd } from "./dates"
+import { factorMultiplier, type ExternalFactor } from "./externalFactors"
 import { METHODS, mape, methodById } from "./forecast"
 import { type ActualRow, historyFor } from "./history"
 import { buildPlan, summarisePlan } from "./planning"
@@ -90,6 +91,7 @@ export function rangePlan(
   shrinkage: number,
   agents: Agent[],
   overlay?: ActualRow[],
+  factors?: ExternalFactor[],
 ): RangePlan {
   const dates = enumerateDays(start, end)
   const { days, dows, doys, lastDate } = historyFor(queueId, overlay)
@@ -97,7 +99,9 @@ export function rangePlan(
 
   const perDay = dates.map((date) => {
     const profile = m.fn(days, dows, dowOf(date), dayIndex(date, days.length, lastDate), doys, dayOfYear(date))
-    const s = summarisePlan(buildPlan(profile, aht, queue, shrinkage, agents))
+    const mult = factors?.length ? factorMultiplier(factors, queueId, ymd(date)) : 1
+    const adjusted = mult === 1 ? profile : profile.map((v) => v * mult)
+    const s = summarisePlan(buildPlan(adjusted, aht, queue, shrinkage, agents))
     return { date, volume: s.totalVol, reqH: s.reqHours, schedH: s.schedHours, wSL: s.wSL }
   })
 

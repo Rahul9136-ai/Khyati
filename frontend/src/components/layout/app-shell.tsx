@@ -3,7 +3,7 @@ import { NavLink } from "react-router-dom"
 
 import { NotificationsBell } from "@/components/layout/notifications-bell"
 import { QueuePicker } from "@/components/layout/queue-picker"
-import { SephoraLogo } from "@/components/sephora-logo"
+import { PurviLogo } from "@/components/purvi-logo"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Select } from "@/components/ui/select"
 import { NAV } from "@/config/nav"
@@ -18,6 +18,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const permissions = useWfm((s) => s.permissions)
   const currentRole = useWfm((s) => s.currentRole)
   const setCurrentRole = useWfm((s) => s.setCurrentRole)
+  const agents = useWfm((s) => s.agents)
+  const currentAgentId = useWfm((s) => s.currentAgentId)
+  const setCurrentAgentId = useWfm((s) => s.setCurrentAgentId)
   const user = useAuth((s) => s.user)
   const logout = useAuth((s) => s.logout)
   const visible = (moduleId: ModuleId) => effectiveLevel(permissions, currentRole, moduleId) !== "none"
@@ -28,9 +31,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r bg-card/40 backdrop-blur-xl md:flex">
         <div className="flex h-14 items-center border-b px-5">
           <div className="flex flex-col gap-0.5">
-            <SephoraLogo size="sm" orientation="horizontal" />
-            <span className="pl-4 text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-              Workforce Mgmt
+            <PurviLogo size="sm" orientation="horizontal" />
+            <span className="pl-8 text-[8px] font-medium uppercase leading-tight tracking-[0.1em] text-muted-foreground">
+              A Product of Purvi Technology
             </span>
           </div>
         </div>
@@ -90,6 +93,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 value={currentRole}
                 onChange={(e) => setCurrentRole(e.target.value as typeof currentRole)}
                 options={ROLES.map((r) => ({ value: r, label: r }))}
+                className="h-8 text-[11px]"
+              />
+            </div>
+          )}
+          {user?.is_superuser && currentRole === "Agent" && (
+            <div className="hidden lg:block" title="Which agent record the self-service view is scoped to">
+              <Select
+                value={currentAgentId}
+                onChange={(e) => setCurrentAgentId(e.target.value)}
+                options={agents.map((a) => ({ value: a.id, label: `${a.name} · ${a.team}` }))}
                 className="h-8 text-[11px]"
               />
             </div>

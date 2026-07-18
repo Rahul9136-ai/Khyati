@@ -14,6 +14,7 @@ import {
 } from "@/lib/domain/roles"
 import { seedExceptions, type AdherenceException, type ExceptionStatus } from "@/lib/domain/adherence"
 import { computeAlerts, type WfmAlert } from "@/lib/domain/alerts"
+import type { ExternalFactor, NewFactor } from "@/lib/domain/externalFactors"
 import type { ScheduleAddition } from "@/lib/domain/autoschedule"
 import { evaluatePtoRequest } from "@/lib/domain/ptoRules"
 import {
@@ -25,7 +26,7 @@ import {
   type RuleState,
   type Thresholds,
 } from "@/lib/domain/automation"
-import { optimiseBreaks, type BreakOverrides } from "@/lib/domain/breaks"
+import { effectiveSegments, optimiseBreaks, type BreakOverrides } from "@/lib/domain/breaks"
 import { buildPlan, summarisePlan } from "@/lib/domain/planning"
 import type { Scenario } from "@/lib/domain/scenario"
 import { AGENTS, forecastFor, inAdherence, makeRTA, QUEUES, SHRINKAGE, TEAMS } from "@/lib/domain/seed"
@@ -167,6 +168,10 @@ interface WfmState {
   setPermission: (role: Role, moduleId: ModuleId, level: AccessLevel) => void
   can: (moduleId: ModuleId, min: AccessLevel) => boolean
 
+  // Which roster agent the Agent-role self-service view is scoped to (preview aid).
+  currentAgentId: string
+  setCurrentAgentId: (id: string) => void
+
   queues: Queue[]
   addQueue: (q: NewQueue) => string
   queueId: string
@@ -205,6 +210,13 @@ interface WfmState {
   importedActuals: Record<string, ActualRow[]>
   importActuals: (qid: string, rows: ActualRow[], sourceLabel: string) => { methodName: string; mape: number; addedDays: number }
   clearActuals: (qid: string) => void
+
+  // Known future/past events (campaigns, holidays, weather, outages) overlaid
+  // on the date-range forecast to correct for step changes a pure model misses.
+  externalFactors: ExternalFactor[]
+  addExternalFactor: (f: NewFactor) => void
+  importExternalFactors: (rows: NewFactor[], sourceLabel: string) => void
+  removeExternalFactor: (id: string) => void
 
   auditLog: AuditEntry[]
   logAudit: (category: AuditCategory, action: string, detail: string) => void
@@ -254,6 +266,10 @@ interface WfmState {
   exceptions: AdherenceException[]
   addException: (e: Omit<AdherenceException, "id" | "status">) => void
   setExceptionStatus: (id: string, status: ExceptionStatus) => void
+  /** Executes an Approved request: for a breakChange it writes the new
+   *  segment into breakOverrides; for an exception it just marks Applied
+   *  (only then does it count toward the adherence score). */
+  applyException: (id: string) => void
 }
 
 const DEFAULT_USER = "Avery Owens"
@@ -265,6 +281,8 @@ export const useWfm = create<WfmState>()(
 
       currentRole: "Super Admin",
       setCurrentRole: (role) => set({ currentRole: role }),
+      currentAgentId: AGENTS[0]?.id ?? "",
+      setCurrentAgentId: (id) => set({ currentAgentId: id }),
       permissions: DEFAULT_PERMISSIONS,
       setPermission: (role, moduleId, level) =>
         set((s) => ({
@@ -498,6 +516,36 @@ export const useWfm = create<WfmState>()(
             forecasts: { ...s.forecasts, [qid]: forecastArr },
             forecastMethod: { ...s.forecastMethod, [qid]: bt.best.id },
             auditLog: [entry(s.currentUser, "Forecast", "Cleared imported actuals", `${queueName} · reverted to base history`), ...s.auditLog],
+          }
+        }),
+
+      externalFactors: [],
+      addExternalFactor: (f) =>
+        set((s) => {
+          const factor: ExternalFactor = { ...f, id: "fac" + uid(), createdAt: Date.now() }
+          const scope = f.queueId === "all" ? "all queues" : skillLabel(f.queueId, s.queues)
+          return {
+            externalFactors: [factor, ...s.externalFactors],
+            auditLog: [
+              entry(s.currentUser, "Forecast", "Added external factor", `${f.name} · ${scope} · ${f.from}${f.to !== f.from ? ` → ${f.to}` : ""} · ${f.impactPct > 0 ? "+" : ""}${f.impactPct}%`),
+              ...s.auditLog,
+            ],
+          }
+        }),
+      importExternalFactors: (rows, sourceLabel) =>
+        set((s) => {
+          const factors: ExternalFactor[] = rows.map((f) => ({ ...f, id: "fac" + uid(), createdAt: Date.now() }))
+          return {
+            externalFactors: [...factors, ...s.externalFactors],
+            auditLog: [entry(s.currentUser, "Forecast", "Imported external factors", `${factors.length} factor(s) from ${sourceLabel}`), ...s.auditLog],
+          }
+        }),
+      removeExternalFactor: (id) =>
+        set((s) => {
+          const f = s.externalFactors.find((x) => x.id === id)
+          return {
+            externalFactors: s.externalFactors.filter((x) => x.id !== id),
+            auditLog: f ? [entry(s.currentUser, "Forecast", "Removed external factor", f.name), ...s.auditLog] : s.auditLog,
           }
         }),
 
@@ -803,16 +851,74 @@ export const useWfm = create<WfmState>()(
               : s.auditLog,
           }
         }),
+      applyException: (id) =>
+        set((s) => {
+          const ex = s.exceptions.find((x) => x.id === id)
+          if (!ex || ex.status !== "Approved") return s
+          const agent = s.agents.find((a) => a.id === ex.agentId)
+          if (!agent) return s
+
+          let breakOverrides = s.breakOverrides
+          if (ex.kind === "breakChange") {
+            const [shiftStartS] = agent.shift.split("–")
+            const [h, m] = shiftStartS.split(":").map(Number)
+            const shiftStart = h * 60 + m
+            const current = effectiveSegments(agent, s.shiftPatterns, s.breakOverrides)
+            const newSeg = {
+              id: ex.segId && ex.segId !== "new" ? ex.segId : "seg" + uid(),
+              type: ex.segType ?? "break",
+              label: ex.segType === "lunch" ? "Lunch" : "Break",
+              offsetMinutes: ex.startMin - shiftStart,
+              durationMinutes: ex.endMin - ex.startMin,
+            }
+            const nextSegs =
+              ex.segId && ex.segId !== "new"
+                ? current.map((seg) => (seg.id === ex.segId ? newSeg : seg))
+                : [...current, newSeg]
+            breakOverrides = { ...s.breakOverrides, [agent.id]: nextSegs }
+          }
+
+          return {
+            breakOverrides,
+            exceptions: s.exceptions.map((x) => (x.id === id ? { ...x, status: "Applied" as ExceptionStatus } : x)),
+            auditLog: [
+              entry(
+                s.currentUser,
+                "Real-Time",
+                ex.kind === "breakChange" ? "Applied break/shrinkage change" : "Applied adherence exception",
+                `${agent.name} · ${ex.reason}`,
+              ),
+              ...s.auditLog,
+            ],
+          }
+        }),
     }),
     {
       name: "flowforce-wfm",
-      // v2: corporate palette in seeded queue/AUX colours + automation
-      // thresholds/rules/exceptions — old persisted state is discarded.
-      version: 2,
+      // v6: Planner's Adherence access dropped to view (apply-only, via the
+      // request workflow below) and Team Leader's dropped from edit to view
+      // (they raise requests, not edit adherence directly) — another
+      // values-only DEFAULT_PERMISSIONS change that needs an explicit reset,
+      // same as v2-v4 before it. Also: AdherenceException gained a required
+      // `kind` field — persisted exceptions from pre-v6 sessions lack it
+      // entirely, which silently breaks the Applied-exception adherence
+      // credit (scoreAgentDay filters on `e.kind === "exception"`), so those
+      // get reseeded fresh rather than patched in place. (Bumped straight to
+      // v6 because a v5 build without the exceptions reseed already shipped
+      // and wrote version 5 into some browsers' localStorage.)
+      version: 6,
+      migrate: (persisted, fromVersion) => {
+        const state = persisted as Partial<{ permissions: PermissionMatrix; exceptions: AdherenceException[] }> | undefined
+        if (state && fromVersion < 6) {
+          return { ...state, permissions: DEFAULT_PERMISSIONS, exceptions: seedExceptions(AGENTS) }
+        }
+        return state
+      },
       // persist everything a user changes so nothing is lost on refresh
       partialize: (s) => ({
         currentUser: s.currentUser,
         currentRole: s.currentRole,
+        currentAgentId: s.currentAgentId,
         permissions: s.permissions,
         queues: s.queues,
         queueId: s.queueId,
@@ -824,6 +930,7 @@ export const useWfm = create<WfmState>()(
         forecasts: s.forecasts,
         forecastMethod: s.forecastMethod,
         importedActuals: s.importedActuals,
+        externalFactors: s.externalFactors,
         auditLog: s.auditLog,
         ptoRequests: s.ptoRequests,
         users: s.users,

@@ -5,15 +5,21 @@
 // deterministic seeded deviations standing in for an ACD feed. On top of the
 // timelines it computes the two industry metrics:
 //
-//   Adherence %   = minutes in the scheduled state (or an approved exception)
+//   Adherence %   = minutes in the scheduled state (or an applied exception)
 //                   ÷ scheduled minutes — time-of-day sensitive.
 //   Conformance % = productive minutes worked ÷ productive minutes scheduled —
 //                   ignores *when* the work happened.
 //
-// Approved exceptions (coaching, meetings…) are auto-applied: off-schedule
-// minutes covered by an approved exception count as adherent.
+// Requests go through three stages, each restricted to a different tier of
+// designation (see CAN_RAISE/APPROVE/APPLY_ADHERENCE_REQUEST in roles.ts):
+//   Pending  → raised by the agent or their Team Leader
+//   Approved → decided by Operations Manager / Business Admin (not yet live)
+//   Applied  → executed by RTA / Scheduler / Planner — only *this* stage
+//              actually credits adherence or changes the break placement.
+// Denied ends the chain. This mirrors a real WFM change-control process:
+// approval is a decision, applying is the person who actually makes the change.
 import { AUX_BY_CODE } from "./seed"
-import type { ShiftPattern } from "./shiftPatterns"
+import type { BreakType, ShiftPattern } from "./shiftPatterns"
 import type { BreakOverrides } from "./breaks"
 import { effectiveSegments } from "./breaks"
 import type { Agent } from "./types"
@@ -36,13 +42,20 @@ export interface AgentDay {
   actual: TimelineSeg[]
 }
 
-export type ExceptionStatus = "Pending" | "Approved" | "Denied"
+export type ExceptionStatus = "Pending" | "Approved" | "Applied" | "Denied"
+export type RequestKind = "exception" | "breakChange"
+
 export interface AdherenceException {
   id: string
   agentId: string
-  code: string // the approved activity (AUX3 meeting / AUX5 coaching / AUX4 training)
+  kind: RequestKind
+  /** kind: "exception" — the justified activity (AUX3 meeting / AUX5 coaching / AUX4 training). */
+  code: string
   startMin: number
   endMin: number
+  /** kind: "breakChange" — the break/lunch segment being moved (existing id, or "new" to add one). */
+  segId?: string
+  segType?: BreakType
   reason: string
   requestedBy: string
   status: ExceptionStatus
@@ -144,9 +157,11 @@ export function buildAgentDay(agent: Agent, patterns: ShiftPattern[], overrides:
   return { agentId: agent.id, shiftStart, shiftEnd, scheduled, actual }
 }
 
-/** Seed exceptions matching the unscheduled coaching/meeting deviations above. */
+/** Seed requests matching the unscheduled coaching/meeting deviations above —
+ *  spread across all three pipeline stages so the demo shows the full chain. */
 export function seedExceptions(agents: Agent[]): AdherenceException[] {
   const out: AdherenceException[] = []
+  const stageFor = (h: number): ExceptionStatus => (h % 20 === 2 ? "Pending" : h % 20 === 6 ? "Approved" : "Applied")
   for (const a of agents) {
     const h = hashOf(a.id)
     const [startS] = a.shift.split(DASH)
@@ -156,24 +171,26 @@ export function seedExceptions(agents: Agent[]): AdherenceException[] {
       out.push({
         id: "ex-" + a.id,
         agentId: a.id,
+        kind: "exception",
         code: "AUX5",
         startMin: s,
         endMin: s + 25,
         reason: "QA coaching session",
         requestedBy: a.tl,
-        status: h % 20 === 2 ? "Pending" : "Approved",
+        status: stageFor(h),
       })
     } else if (h % 10 === 4) {
       const s = shiftStart + 160 + (h % 20)
       out.push({
         id: "ex-" + a.id,
         agentId: a.id,
+        kind: "exception",
         code: "AUX3",
         startMin: s,
         endMin: s + 20,
         reason: "Ad-hoc team huddle",
         requestedBy: a.tl,
-        status: h % 20 === 4 ? "Pending" : "Approved",
+        status: stageFor(h),
       })
     }
   }
@@ -205,9 +222,10 @@ export interface DayScore {
   conformance: number
 }
 
-/** Score one agent-day, auto-applying approved exceptions. `upToMin` scores a partial day. */
+/** Score one agent-day, crediting only *applied* exceptions — approval alone
+ *  is a decision, not yet a change to the record. `upToMin` scores a partial day. */
 export function scoreAgentDay(day: AgentDay, exceptions: AdherenceException[], upToMin = DAY_END): DayScore {
-  const mine = exceptions.filter((e) => e.agentId === day.agentId && e.status === "Approved")
+  const mine = exceptions.filter((e) => e.agentId === day.agentId && e.kind === "exception" && e.status === "Applied")
   let schedMins = 0
   let adherentMins = 0
   let exceptionMins = 0
@@ -241,6 +259,23 @@ export function scoreAgentDay(day: AgentDay, exceptions: AdherenceException[], u
     adherence: schedMins ? adherentMins / schedMins : 1,
     conformance: schedWorkMins ? workedMins / schedWorkMins : 1,
   }
+}
+
+// ---- shrinkage breakdown ----
+
+/** In-office shrinkage: *scheduled* break/lunch/meeting/training/coaching
+ *  minutes by AUX code — shrinkage that happens while at work, as opposed to
+ *  PTO/leave (out-of-office, computed from ptoRequests at the page level). */
+export function inOfficeShrinkageByCode(days: AgentDay[]): Record<string, number> {
+  const totals: Record<string, number> = {}
+  for (const day of days) {
+    for (const seg of day.scheduled) {
+      const cat = AUX_BY_CODE[seg.code]?.cat
+      if (cat !== "break" && cat !== "shrink") continue
+      totals[seg.code] = (totals[seg.code] ?? 0) + (seg.endMin - seg.startMin)
+    }
+  }
+  return totals
 }
 
 // ---- real-time escalation ladder ----

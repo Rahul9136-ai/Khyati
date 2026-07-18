@@ -24,13 +24,19 @@ const variant: Record<SwapStatus, "success" | "warning" | "default" | "destructi
 }
 
 export function Swaps() {
-  const { agents, queues, forecasts, shrinkage, swaps, proposeSwap, setSwapStatus } = useWfm()
+  const { agents, queues, forecasts, shrinkage, swaps, proposeSwap, setSwapStatus, currentRole, currentAgentId, can } = useWfm()
   const byId = useMemo(() => Object.fromEntries(agents.map((a) => [a.id, a])), [agents])
+  const isAgent = currentRole === "Agent"
+  const canManage = can("swaps", "edit")
 
   const [open, setOpen] = useState(false)
-  const [fromId, setFromId] = useState(agents[0]?.id ?? "")
-  const [toId, setToId] = useState(agents[1]?.id ?? "")
+  const [fromId, setFromId] = useState(isAgent ? currentAgentId : agents[0]?.id ?? "")
+  const [toId, setToId] = useState(agents.find((a) => a.id !== (isAgent ? currentAgentId : agents[0]?.id))?.id ?? "")
   const [error, setError] = useState("")
+
+  const visibleSwaps = isAgent
+    ? swaps.filter((s) => s.fromAgentId === currentAgentId || s.toAgentId === currentAgentId)
+    : swaps
 
   // Live SL-impact preview while the dialog is open.
   const preview = useMemo(
@@ -38,14 +44,16 @@ export function Swaps() {
     [fromId, toId, agents, queues, forecasts, shrinkage],
   )
 
-  const autoCount = swaps.filter((s) => s.status === "Auto-Approved").length
-  const pendingCount = swaps.filter((s) => s.status === "Pending").length
+  const autoCount = visibleSwaps.filter((s) => s.status === "Auto-Approved").length
+  const pendingCount = visibleSwaps.filter((s) => s.status === "Pending").length
 
   const agentOpts = agents.map((a) => ({ value: a.id, label: `${a.name} · ${a.shift}` }))
+  const counterpartOpts = agentOpts.filter((o) => o.value !== currentAgentId)
 
   function reset() {
-    setFromId(agents[0]?.id ?? "")
-    setToId(agents[1]?.id ?? "")
+    const from = isAgent ? currentAgentId : agents[0]?.id ?? ""
+    setFromId(from)
+    setToId(agents.find((a) => a.id !== from)?.id ?? "")
     setError("")
   }
 
@@ -71,7 +79,7 @@ export function Swaps() {
               sheets={() => [
                 {
                   name: "Swaps",
-                  rows: swaps.map((s) => ({
+                  rows: visibleSwaps.map((s) => ({
                     From: byId[s.fromAgentId]?.name ?? s.fromAgentId,
                     To: byId[s.toAgentId]?.name ?? s.toAgentId,
                     "SL impact (pp)": (s.slImpact * 100).toFixed(2),
@@ -82,17 +90,17 @@ export function Swaps() {
                 },
               ]}
             />
-            <PermissionGate module="swaps">
+            {(canManage || isAgent) && (
               <Button onClick={() => { reset(); setOpen(true) }}>
                 <Repeat className="h-4 w-4" /> Propose swap
               </Button>
-            </PermissionGate>
+            )}
           </>
         }
       />
 
       <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <KpiCard label="Total swaps" value={swaps.length} hint="all time" icon={ArrowLeftRight} />
+        <KpiCard label="Total swaps" value={visibleSwaps.length} hint="all time" icon={ArrowLeftRight} />
         <KpiCard label="Auto-approved" value={autoCount} hint="SL-neutral, applied instantly" tone="good" icon={CheckCircle2} />
         <KpiCard label="Pending approval" value={pendingCount} hint="escalated to Team Leader" tone={pendingCount ? "warn" : undefined} icon={Clock3} />
         <KpiCard label="Auto-approve rule" value="−0.5pp" hint="max allowed SL drop" icon={ShieldAlert} />
@@ -111,7 +119,7 @@ export function Swaps() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {swaps.map((s) => {
+              {visibleSwaps.map((s) => {
                 const a = byId[s.fromAgentId]
                 const b = byId[s.toAgentId]
                 return (
@@ -147,10 +155,10 @@ export function Swaps() {
                   </TableRow>
                 )
               })}
-              {swaps.length === 0 && (
+              {visibleSwaps.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                    No swap requests yet. Agents propose a swap; harmless ones apply themselves.
+                    {isAgent ? "You haven't proposed or received any swaps yet." : "No swap requests yet. Agents propose a swap; harmless ones apply themselves."}
                   </TableCell>
                 </TableRow>
               )}
@@ -174,11 +182,17 @@ export function Swaps() {
         <div className="space-y-4">
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-muted-foreground">Agent A</span>
-            <Select value={fromId} onChange={(e) => { setFromId(e.target.value); setError("") }} options={agentOpts} className="w-full" />
+            {isAgent ? (
+              <div className="flex h-9 w-full items-center rounded-md border bg-muted/40 px-3 text-sm text-muted-foreground">
+                {byId[currentAgentId]?.name ?? "You"} · {byId[currentAgentId]?.shift}
+              </div>
+            ) : (
+              <Select value={fromId} onChange={(e) => { setFromId(e.target.value); setError("") }} options={agentOpts} className="w-full" />
+            )}
           </label>
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-muted-foreground">Agent B</span>
-            <Select value={toId} onChange={(e) => { setToId(e.target.value); setError("") }} options={agentOpts} className="w-full" />
+            <Select value={toId} onChange={(e) => { setToId(e.target.value); setError("") }} options={isAgent ? counterpartOpts : agentOpts} className="w-full" />
           </label>
           {preview && (
             <div className="rounded-lg border bg-background/40 p-3 text-sm">

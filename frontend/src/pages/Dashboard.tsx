@@ -1,6 +1,7 @@
 import { Activity, Gauge, Percent, Phone, Users } from "lucide-react"
 import { useMemo } from "react"
 
+import { AgentWorkspace } from "@/components/agent-workspace"
 import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
 import { ExportButton } from "@/components/export-button"
@@ -13,7 +14,7 @@ import { buildPlan, fmtPct, fmtSec, summarisePlan } from "@/lib/domain/planning"
 import { useWfm } from "@/store/wfm"
 
 export function Dashboard() {
-  const { forecasts, shrinkage, nowIdx, agents, rta, queueId, queues } = useWfm()
+  const { forecasts, shrinkage, nowIdx, agents, rta, queueId, queues, currentRole, currentAgentId } = useWfm()
   const queue = queues.find((q) => q.id === queueId)!
   const volume = forecasts[queue.id]
 
@@ -46,6 +47,10 @@ export function Dashboard() {
         : `Current interval (${now.label}) is at risk — ${fmtPct(now.projSL)} SL, add cover.`,
     ],
     tone: sum.underIntervals > 6 ? ("bad" as const) : sum.underIntervals ? ("warn" as const) : ("good" as const),
+  }
+
+  if (currentRole === "Agent") {
+    return <AgentWorkspace agentId={currentAgentId} />
   }
 
   return (

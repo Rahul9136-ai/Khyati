@@ -1,7 +1,7 @@
 import { KeyRound, Loader2, LogIn } from "lucide-react"
 import { useState } from "react"
 
-import { SephoraLogo } from "@/components/sephora-logo"
+import { PurviLogo } from "@/components/purvi-logo"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -36,9 +36,9 @@ export function Login() {
     <div className="grid min-h-screen place-items-center bg-background p-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center gap-2">
-          <SephoraLogo size="lg" />
+          <PurviLogo size="lg" />
           <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-muted-foreground">
-            Workforce Management
+            A Product of Purvi Technology
           </p>
         </div>
 

@@ -85,11 +85,11 @@ export const DEFAULT_PERMISSIONS: PermissionMatrix = {
   },
   Planner: {
     dashboard: V, forecasting: V, capacity: E, erlang: E, scenarios: E, scheduling: E, shiftPatterns: E, swaps: V,
-    intraday: V, realtime: N, adherence: N, automation: V, help: V, employees: V, skills: V, pto: V, reports: V, copilot: V, audit: N, settings: N,
+    intraday: V, realtime: N, adherence: V, automation: V, help: V, employees: V, skills: V, pto: V, reports: V, copilot: V, audit: N, settings: N,
   },
   Scheduler: {
     dashboard: V, forecasting: N, capacity: V, erlang: N, scenarios: V, scheduling: E, shiftPatterns: E, swaps: E,
-    intraday: V, realtime: N, adherence: N, automation: N, help: V, employees: V, skills: V, pto: V, reports: V, copilot: N, audit: N, settings: N,
+    intraday: V, realtime: N, adherence: V, automation: N, help: V, employees: V, skills: V, pto: V, reports: V, copilot: N, audit: N, settings: N,
   },
   RTA: {
     dashboard: V, forecasting: N, capacity: N, erlang: N, scenarios: N, scheduling: V, shiftPatterns: N, swaps: V,
@@ -97,15 +97,19 @@ export const DEFAULT_PERMISSIONS: PermissionMatrix = {
   },
   "Team Leader": {
     dashboard: V, forecasting: N, capacity: N, erlang: N, scenarios: N, scheduling: V, shiftPatterns: N, swaps: E,
-    intraday: V, realtime: E, adherence: E, automation: N, help: V, employees: V, skills: E, pto: E, reports: V, copilot: N, audit: N, settings: N,
+    intraday: V, realtime: E, adherence: V, automation: N, help: V, employees: V, skills: E, pto: E, reports: V, copilot: N, audit: N, settings: N,
   },
   "Operations Manager": {
-    dashboard: E, forecasting: V, capacity: V, erlang: N, scenarios: V, scheduling: V, shiftPatterns: N, swaps: V,
+    dashboard: E, forecasting: V, capacity: V, erlang: N, scenarios: V, scheduling: V, shiftPatterns: N, swaps: E,
     intraday: V, realtime: E, adherence: E, automation: V, help: V, employees: V, skills: V, pto: E, reports: E, copilot: V, audit: V, settings: N,
   },
+  // Agent's pto/swaps are view-level by design: they can always create their
+  // own PTO request / propose their own swap (self-service, gated in-page by
+  // role rather than this matrix), but must NOT satisfy the edit-level check
+  // that unlocks approving/denying *other* agents' requests.
   Agent: {
-    dashboard: V, forecasting: N, capacity: N, erlang: N, scenarios: N, scheduling: V, shiftPatterns: N, swaps: E,
-    intraday: N, realtime: N, adherence: N, automation: N, help: V, employees: N, skills: N, pto: E, reports: N, copilot: N, audit: N, settings: N,
+    dashboard: V, forecasting: N, capacity: N, erlang: N, scenarios: N, scheduling: V, shiftPatterns: N, swaps: V,
+    intraday: N, realtime: N, adherence: N, automation: N, help: V, employees: N, skills: N, pto: V, reports: N, copilot: N, audit: N, settings: N,
   },
   "Read-Only Viewer": {
     dashboard: V, forecasting: V, capacity: V, erlang: V, scenarios: V, scheduling: V, shiftPatterns: V, swaps: V,
@@ -123,6 +127,13 @@ export function effectiveLevel(
 ): AccessLevel {
   return permissions[role]?.[moduleId] ?? DEFAULT_PERMISSIONS[role]?.[moduleId] ?? "none"
 }
+
+// Adherence & shrinkage change requests go through three tiers, each
+// restricted to a specific set of designations rather than a plain edit-level
+// check — approving a change and actually executing it are different jobs.
+export const CAN_RAISE_ADHERENCE_REQUEST: Role[] = ["Agent", "Team Leader", "Super Admin"]
+export const CAN_APPROVE_ADHERENCE_REQUEST: Role[] = ["Operations Manager", "Business Admin", "Super Admin"]
+export const CAN_APPLY_ADHERENCE_REQUEST: Role[] = ["RTA", "Scheduler", "Planner", "Super Admin"]
 
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
   "Super Admin": "Full system access, including RBAC configuration.",

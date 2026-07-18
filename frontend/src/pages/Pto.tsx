@@ -25,20 +25,22 @@ const variant: Record<PtoStatus, "warning" | "success" | "destructive" | "defaul
 }
 
 export function Pto() {
-  const { agents, ptoRequests, addPtoRequest, setPtoStatus, ruleState } = useWfm()
+  const { agents, ptoRequests, addPtoRequest, setPtoStatus, ruleState, currentRole, currentAgentId, can } = useWfm()
   const byId = useMemo(() => Object.fromEntries(agents.map((a) => [a.id, a])), [agents])
+  const isAgent = currentRole === "Agent"
+  const canManage = can("pto", "edit")
 
   const [open, setOpen] = useState(false)
-  const [agentId, setAgentId] = useState(agents[0]?.id ?? "")
+  const [agentId, setAgentId] = useState(isAgent ? currentAgentId : agents[0]?.id ?? "")
   const [type, setType] = useState(TYPES[0])
   const [from, setFrom] = useState(ymd(TODAY))
   const [to, setTo] = useState(ymd(addDays(TODAY, 1)))
   const [error, setError] = useState("")
 
-  const rows = useMemo(
-    () => ptoRequests.map((r) => ({ ...r, agentName: byId[r.agentId]?.name ?? r.agentId })),
-    [ptoRequests, byId],
-  )
+  const rows = useMemo(() => {
+    const all = ptoRequests.map((r) => ({ ...r, agentName: byId[r.agentId]?.name ?? r.agentId }))
+    return isAgent ? all.filter((r) => r.agentId === currentAgentId) : all
+  }, [ptoRequests, byId, isAgent, currentAgentId])
   const pending = rows.filter((r) => r.status === "Pending").length
   const approved = rows.filter((r) => r.status === "Approved" || r.status === "Auto-Approved").length
   const autoApproved = rows.filter((r) => r.status === "Auto-Approved").length
@@ -46,7 +48,7 @@ export function Pto() {
   const autoRuleOn = ruleState["pto-auto-approve"] !== false
 
   function reset() {
-    setAgentId(agents[0]?.id ?? "")
+    setAgentId(isAgent ? currentAgentId : agents[0]?.id ?? "")
     setType(TYPES[0])
     setFrom(ymd(TODAY))
     setTo(ymd(addDays(TODAY, 1)))
@@ -75,11 +77,11 @@ export function Pto() {
                 { name: "Leave Requests", rows: rows.map((r) => ({ Employee: r.agentName, Type: r.type, From: r.from, To: r.to, Days: r.days, Status: r.status })) },
               ]}
             />
-            <PermissionGate module="pto">
+            {(canManage || isAgent) && (
               <Button onClick={() => { reset(); setOpen(true) }}>
                 <PlaneTakeoff className="h-4 w-4" /> New request
               </Button>
-            </PermissionGate>
+            )}
           </>
         }
       />
@@ -164,7 +166,13 @@ export function Pto() {
         <div className="space-y-4">
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-muted-foreground">Employee</span>
-            <Select value={agentId} onChange={(e) => { setAgentId(e.target.value); setError("") }} options={agents.map((a) => ({ value: a.id, label: `${a.name} · ${a.team}` }))} className="w-full" />
+            {isAgent ? (
+              <div className="flex h-9 w-full items-center rounded-md border bg-muted/40 px-3 text-sm text-muted-foreground">
+                {byId[currentAgentId]?.name ?? "You"} · {byId[currentAgentId]?.team}
+              </div>
+            ) : (
+              <Select value={agentId} onChange={(e) => { setAgentId(e.target.value); setError("") }} options={agents.map((a) => ({ value: a.id, label: `${a.name} · ${a.team}` }))} className="w-full" />
+            )}
           </label>
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-muted-foreground">Leave type</span>

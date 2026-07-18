@@ -31,8 +31,10 @@ function coveredIdx(shift: string): boolean[] {
 }
 
 export function Scheduling() {
-  const { queueId, forecasts, shrinkage, agents, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule } = useWfm()
+  const { queueId, forecasts, shrinkage, agents, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule, currentRole, currentAgentId } = useWfm()
   const queue = queues.find((q) => q.id === queueId)!
+  // Agents only ever see their own row — everyone else sees the full roster.
+  const visibleAgents = currentRole === "Agent" ? agents.filter((a) => a.id === currentAgentId) : agents
   const plan = useMemo(() => buildPlan(forecasts[queue.id], queue.aht, queue, shrinkage, agents), [forecasts, queue, shrinkage, agents])
   const sum = useMemo(() => summarisePlan(plan), [plan])
 
@@ -236,7 +238,7 @@ export function Scheduling() {
                 </tr>
               </thead>
               <tbody>
-                {agents.map((a) => {
+                {visibleAgents.map((a) => {
                   const cov = coveredIdx(a.shift)
                   const skilled = a.skills.includes(queue.id)
                   const markers = agentBreakMarkers(a, shiftPatterns, breakOverrides)
