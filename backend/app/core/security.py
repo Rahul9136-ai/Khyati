@@ -7,6 +7,7 @@ stored server-side as SHA-256 hashes so a DB leak cannot replay sessions.
 from __future__ import annotations
 
 import hashlib
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -19,6 +20,18 @@ from app.core.config import settings
 from app.core.exceptions import AuthenticationError
 
 _hasher = PasswordHasher()
+
+_TEMP_PW_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def generate_temp_password(length: int = 14) -> str:
+    """One-time temp password for bulk-provisioned accounts.
+
+    Excludes visually ambiguous characters (0/O, 1/l/I) since these get
+    printed/copy-pasted by admins onboarding real employees. Never persisted
+    anywhere in plaintext beyond the single API response that mints it.
+    """
+    return "".join(secrets.choice(_TEMP_PW_ALPHABET) for _ in range(length))
 
 TokenType = Literal["access", "refresh"]
 

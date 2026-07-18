@@ -1,15 +1,18 @@
 """Workforce services: tenant-scoped CRUD for org structure and employees."""
 from __future__ import annotations
 
+import secrets
 import uuid
 from typing import Any, TypeVar
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core.exceptions import AppError, ConflictError, NotFoundError, ValidationError
+from app.core.security import generate_temp_password
 from app.modules.identity.models import User
-from app.modules.identity.service import record_audit
+from app.modules.identity.schemas import UserCreate
+from app.modules.identity.service import create_user, record_audit
 from app.modules.workforce.models import (
     BusinessUnit,
     Country,
@@ -24,6 +27,9 @@ from app.modules.workforce.models import (
     Team,
 )
 from app.modules.workforce.schemas import (
+    EmployeeBulkImportResult,
+    EmployeeBulkImportRow,
+    EmployeeImportRow,
     EmployeeIn,
     EmployeeSkillIn,
     EmployeeUpdate,
@@ -228,6 +234,87 @@ async def set_employee_skills(
         entity_id=emp.id, after={"skills": [str(s.skill_id) for s in skills]},
     )
     return emp
+
+
+async def _resolve_team_id(db: AsyncSession, org_id: uuid.UUID, team_name: str | None) -> uuid.UUID | None:
+    name = (team_name or "").strip()
+    if not name:
+        return None
+    result = await db.execute(
+        select(Team).where(Team.organization_id == org_id, func.lower(Team.name) == name.lower())
+    )
+    team = result.scalar_one_or_none()
+    return team.id if team else None
+
+
+async def bulk_import_employees(
+    db: AsyncSession, org_id: uuid.UUID, rows: list[EmployeeImportRow], *, actor: User
+) -> EmployeeBulkImportResult:
+    """One row -> one Employee (roster) + one linked User (real login), so
+    "employee" and "person who can sign in" never drift apart.
+
+    Each row runs inside its own SAVEPOINT (`db.begin_nested()`): a bad row
+    (duplicate email, unknown role name, …) rolls back just that row and the
+    loop continues, instead of one typo in a 200-row sheet discarding the
+    whole batch — the request-scoped session (see app/db/session.py) only
+    commits once, at the very end, on success.
+    """
+    results: list[EmployeeBulkImportRow] = []
+    created = 0
+    for i, row in enumerate(rows, start=1):
+        try:
+            async with db.begin_nested():
+                team_id = await _resolve_team_id(db, org_id, row.team)
+                employee_code = row.employee_code.strip() if row.employee_code else ""
+                if not employee_code:
+                    employee_code = f"E{secrets.token_hex(3).upper()}"
+
+                emp = await create_employee(
+                    db, org_id,
+                    EmployeeIn(
+                        employee_code=employee_code,
+                        first_name=row.first_name.strip(),
+                        last_name=row.last_name.strip(),
+                        email=row.email,
+                        team_id=team_id,
+                        employment_type=row.employment_type,
+                        weekly_hours=row.weekly_hours or 40.0,
+                        hire_date=row.hire_date,
+                    ),
+                    actor=actor,
+                )
+                temp_password = generate_temp_password()
+                user = await create_user(
+                    db,
+                    UserCreate(
+                        email=row.email,
+                        password=temp_password,
+                        full_name=emp.full_name,
+                        role_names=[row.role.strip()],
+                        organization_id=org_id,
+                        employee_id=emp.id,
+                    ),
+                    actor=actor,
+                )
+        except AppError as exc:
+            results.append(EmployeeBulkImportRow(row=i, status="error", email=row.email, error=exc.message))
+            continue
+        created += 1
+        results.append(
+            EmployeeBulkImportRow(
+                row=i, status="created", employee_code=emp.employee_code, email=user.email,
+                full_name=user.full_name, role=row.role.strip(),
+                team_matched=bool(row.team) and team_id is not None,
+                temp_password=temp_password,
+            )
+        )
+    await record_audit(
+        db, actor=actor, action="employee.bulk_import", entity_type="employee",
+        after={"total": len(rows), "created": created, "failed": len(rows) - created},
+    )
+    return EmployeeBulkImportResult(
+        total=len(rows), created=created, failed=len(rows) - created, results=results
+    )
 
 
 __all__ = [

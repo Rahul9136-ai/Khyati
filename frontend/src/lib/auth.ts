@@ -11,8 +11,11 @@ export interface SessionUser {
   permission_codes: string[]
 }
 
-/** Backend system roles → the frontend designation driving RoleGuards. */
-const SERVER_ROLE_MAP: Record<string, Role> = {
+/** Backend system roles → the frontend designation driving RoleGuards. Also
+ *  doubles as the canonical list of role names the real backend accepts
+ *  (see backend/app/modules/identity/rbac.py's ROLE_MATRIX) — used by the
+ *  bulk employee importer to validate a CSV's "role" column client-side. */
+export const SERVER_ROLE_MAP: Record<string, Role> = {
   "Super Admin": "Super Admin",
   "WFM Director": "WFM Director",
   "Planning Manager": "WFM Manager",

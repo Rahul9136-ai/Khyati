@@ -26,6 +26,8 @@ from app.modules.workforce.schemas import (
     BusinessUnitOut,
     CountryIn,
     CountryOut,
+    EmployeeBulkImportRequest,
+    EmployeeBulkImportResult,
     EmployeeIn,
     EmployeeOut,
     EmployeeSkillIn,
@@ -51,6 +53,9 @@ AnyUser = Annotated[User, Depends(get_current_user)]
 OrgAdmin = Annotated[User, Depends(require_permission("admin:org"))]
 EmpReader = Annotated[User, Depends(require_permission("employee:read"))]
 EmpWriter = Annotated[User, Depends(require_permission("employee:write"))]
+# Bulk import mints real login accounts (admin:users), not just roster rows —
+# gated on the more sensitive of the two capabilities the action needs.
+UserAdmin = Annotated[User, Depends(require_permission("admin:users"))]
 
 
 @org_router.get("", response_model=ApiResponse[OrganizationOut])
@@ -162,6 +167,19 @@ async def get_employee(employee_id: uuid.UUID, db: DbSession, user: EmpReader):
 async def create_employee(body: EmployeeIn, db: DbSession, actor: EmpWriter):
     emp = await service.create_employee(db, service.org_scope(actor), body, actor=actor)
     return ApiResponse(data=EmployeeOut.model_validate(emp))
+
+
+@employees_router.post(
+    "/bulk-import", response_model=ApiResponse[EmployeeBulkImportResult], status_code=201
+)
+async def bulk_import_employees(
+    body: EmployeeBulkImportRequest, db: DbSession, actor: UserAdmin
+):
+    """Onboard many employees at once: each row creates an Employee (roster)
+    row and a linked User (real login, real temp password) row together.
+    Partial success — one bad row is reported, not fatal to the batch."""
+    result = await service.bulk_import_employees(db, service.org_scope(actor), body.rows, actor=actor)
+    return ApiResponse(data=result)
 
 
 @employees_router.patch("/{employee_id}", response_model=ApiResponse[EmployeeOut])

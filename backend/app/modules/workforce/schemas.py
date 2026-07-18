@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -192,3 +193,50 @@ class EmployeeOut(BaseModel):
     termination_date: date | None
     skills: list[EmployeeSkillOut]
     created_at: datetime
+
+
+# ------------------------------------------------------- bulk employee import
+#
+# One CSV/Excel row -> one Employee (roster) row AND one linked User (login)
+# row, created together so "employee" and "person who can sign in" never
+# drift apart. Real backend accounts, real hashed passwords — this is the
+# actual onboarding path, distinct from the frontend's client-only RBAC demo.
+
+
+class EmployeeImportRow(BaseModel):
+    """Loosely-typed input row — most fields are optional strings so a single
+    bad cell fails just that row (see workforce.service.bulk_import_employees)
+    rather than the whole request's pydantic validation."""
+
+    employee_code: str | None = None
+    first_name: str
+    last_name: str = ""
+    email: EmailStr
+    team: str | None = None
+    role: str
+    employment_type: str = "full_time"
+    weekly_hours: float | None = None
+    hire_date: date | None = None
+
+
+class EmployeeBulkImportRequest(BaseModel):
+    rows: list[EmployeeImportRow] = Field(min_length=1, max_length=500)
+
+
+class EmployeeBulkImportRow(BaseModel):
+    row: int
+    status: Literal["created", "error"]
+    employee_code: str | None = None
+    email: str | None = None
+    full_name: str | None = None
+    role: str | None = None
+    team_matched: bool | None = None
+    temp_password: str | None = None
+    error: str | None = None
+
+
+class EmployeeBulkImportResult(BaseModel):
+    total: int
+    created: int
+    failed: int
+    results: list[EmployeeBulkImportRow]

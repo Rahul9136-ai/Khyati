@@ -1,5 +1,6 @@
-import { useState } from "react"
-import { ShieldCheck, Trash2 } from "lucide-react"
+import { useRef, useState } from "react"
+import * as XLSX from "xlsx"
+import { AlertTriangle, CheckCircle2, Copy, FileDown, ShieldCheck, Trash2, Upload, XCircle } from "lucide-react"
 
 import { PermissionGate } from "@/components/permission-gate"
 import { PageHeader } from "@/components/page-header"
@@ -11,12 +12,37 @@ import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { api, type ApiError } from "@/lib/api"
+import { SERVER_ROLE_MAP } from "@/lib/auth"
 import { THRESHOLD_META } from "@/lib/domain/automation"
 import { type AccessLevel, effectiveLevel, MODULES, ROLE_DESCRIPTIONS, ROLES, type Role } from "@/lib/domain/roles"
+import {
+  downloadEmployeeImportTemplate,
+  parseEmployeeImportFile,
+  type EmployeeImportRow,
+} from "@/lib/employeeImport"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+interface BulkImportRowResult {
+  row: number
+  status: "created" | "error"
+  employee_code?: string
+  email?: string
+  full_name?: string
+  role?: string
+  team_matched?: boolean
+  temp_password?: string
+  error?: string
+}
+interface BulkImportResult {
+  total: number
+  created: number
+  failed: number
+  results: BulkImportRowResult[]
+}
 
 const NEXT: Record<AccessLevel, AccessLevel> = { none: "view", view: "edit", edit: "none" }
 const CELL_STYLE: Record<AccessLevel, string> = {
@@ -27,7 +53,10 @@ const CELL_STYLE: Record<AccessLevel, string> = {
 const CELL_LABEL: Record<AccessLevel, string> = { none: "—", view: "View", edit: "Edit" }
 
 export function Settings() {
-  const { permissions, setPermission, can, users, inviteUser, setUserRole, removeUser, thresholds, setThreshold } = useWfm()
+  const {
+    permissions, setPermission, can, users, inviteUser, setUserRole, removeUser,
+    thresholds, setThreshold, addAgent, shiftPatterns,
+  } = useWfm()
   const editable = can("settings", "edit")
 
   // invite-user form state
@@ -55,6 +84,83 @@ export function Settings() {
     setOpen(false)
   }
 
+  // bulk employee import — real backend accounts (Employee + linked User),
+  // see lib/employeeImport.ts and POST /employees/bulk-import.
+  const bulkFileRef = useRef<HTMLInputElement>(null)
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkRows, setBulkRows] = useState<EmployeeImportRow[]>([])
+  const [bulkParseErrors, setBulkParseErrors] = useState<string[]>([])
+  const [bulkFileName, setBulkFileName] = useState("")
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkApiError, setBulkApiError] = useState("")
+  const [bulkResult, setBulkResult] = useState<BulkImportResult | null>(null)
+
+  function resetBulk() {
+    setBulkRows([])
+    setBulkParseErrors([])
+    setBulkFileName("")
+    setBulkApiError("")
+    setBulkResult(null)
+  }
+
+  async function onBulkFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ""
+    if (!file) return
+    setBulkResult(null)
+    setBulkApiError("")
+    setBulkFileName(file.name)
+    const { rows, errors } = await parseEmployeeImportFile(file)
+    setBulkRows(rows)
+    setBulkParseErrors(errors)
+  }
+
+  async function submitBulkImport() {
+    if (!bulkRows.length) return
+    setBulkBusy(true)
+    setBulkApiError("")
+    try {
+      const res = await api.post("/employees/bulk-import", { rows: bulkRows })
+      const result = res.data.data as BulkImportResult
+      setBulkResult(result)
+      // Mirror successful rows into this demo's own roster/RBAC preview so
+      // they show up immediately in Scheduling/Adherence/Settings > Users —
+      // the real accounts already exist on the backend regardless.
+      result.results.forEach((r, i) => {
+        if (r.status !== "created") return
+        const source = bulkRows[i]
+        addAgent({
+          name: r.full_name ?? `${source.first_name} ${source.last_name ?? ""}`.trim(),
+          skills: [],
+          shiftPatternId: shiftPatterns[0]?.id ?? "",
+          team: source.team || "Imported",
+        })
+        const frontendRole = (r.role && SERVER_ROLE_MAP[r.role]) || "Agent"
+        if (r.email && !users.some((u) => u.email.toLowerCase() === r.email!.toLowerCase())) {
+          inviteUser({ name: r.full_name ?? source.first_name, email: r.email, role: frontendRole })
+        }
+      })
+    } catch (err) {
+      setBulkApiError((err as ApiError).message ?? "Import failed — is the backend running?")
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  function downloadCredentials() {
+    if (!bulkResult) return
+    const created = bulkResult.results.filter((r) => r.status === "created")
+    const ws = XLSX.utils.json_to_sheet(
+      created.map((r) => ({
+        Email: r.email, "Temporary Password": r.temp_password, Role: r.role,
+        "Employee Code": r.employee_code,
+      })),
+    )
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, "Credentials")
+    XLSX.writeFile(wb, "new-employee-credentials.xlsx")
+  }
+
   return (
     <>
       <PageHeader
@@ -62,6 +168,9 @@ export function Settings() {
         subtitle="Users · designation-level access · organisation"
         actions={
           <PermissionGate module="settings">
+            <Button variant="outline" onClick={() => { resetBulk(); setBulkOpen(true) }}>
+              <Upload className="h-4 w-4" /> Bulk import employees
+            </Button>
             <Button onClick={() => { resetForm(); setOpen(true) }}>
               <ShieldCheck className="h-4 w-4" /> Invite user
             </Button>
@@ -255,6 +364,114 @@ export function Settings() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        title="Bulk import employees"
+        description="Each row creates a real backend account — an Employee roster record and a linked User login with a generated temporary password. Requires the backend API to be running."
+        className="max-w-2xl"
+        footer={
+          bulkResult ? (
+            <>
+              <Button variant="outline" onClick={downloadCredentials} disabled={!bulkResult.created}>
+                <FileDown className="h-4 w-4" /> Download credentials
+              </Button>
+              <Button onClick={() => setBulkOpen(false)}>Done</Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
+              <Button onClick={submitBulkImport} disabled={!bulkRows.length || bulkBusy}>
+                <Upload className="h-4 w-4" /> {bulkBusy ? "Importing…" : `Import ${bulkRows.length || ""} employee${bulkRows.length === 1 ? "" : "s"}`}
+              </Button>
+            </>
+          )
+        }
+      >
+        <div className="space-y-4">
+          {!bulkResult && (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  ref={bulkFileRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={onBulkFile}
+                />
+                <Button variant="outline" onClick={() => downloadEmployeeImportTemplate()}>
+                  <FileDown className="h-4 w-4" /> Download template
+                </Button>
+                <Button variant="outline" onClick={() => bulkFileRef.current?.click()}>
+                  <Upload className="h-4 w-4" /> Choose file
+                </Button>
+                {bulkFileName && <span className="text-xs text-muted-foreground">{bulkFileName}</span>}
+              </div>
+
+              {bulkParseErrors.length > 0 && (
+                <div className="max-h-32 space-y-1 overflow-auto rounded-lg border border-destructive/30 bg-destructive/5 p-2.5 text-xs text-destructive">
+                  {bulkParseErrors.map((e, i) => <p key={i}>{e}</p>)}
+                </div>
+              )}
+              {bulkRows.length > 0 && (
+                <p className="text-sm text-muted-foreground">
+                  {bulkRows.length} row{bulkRows.length === 1 ? "" : "s"} parsed and ready to import
+                  {bulkParseErrors.length > 0 && ` (${bulkParseErrors.length} row${bulkParseErrors.length === 1 ? "" : "s"} skipped — see above)`}.
+                </p>
+              )}
+              {bulkApiError && (
+                <p className="flex items-center gap-1.5 text-sm text-destructive">
+                  <AlertTriangle className="h-4 w-4 shrink-0" /> {bulkApiError}
+                </p>
+              )}
+            </>
+          )}
+
+          {bulkResult && (
+            <>
+              <div className="flex items-center gap-3 text-sm">
+                <Badge variant="success">{bulkResult.created} created</Badge>
+                {bulkResult.failed > 0 && <Badge variant="destructive">{bulkResult.failed} failed</Badge>}
+                <span className="text-muted-foreground">of {bulkResult.total} rows</span>
+              </div>
+              <div className="max-h-80 space-y-1.5 overflow-auto pr-1">
+                {bulkResult.results.map((r) => (
+                  <div key={r.row} className="flex items-start gap-2 rounded-lg border px-3 py-2 text-sm">
+                    {r.status === "created"
+                      ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-500" />
+                      : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />}
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium">{r.email ?? `Row ${r.row}`}</div>
+                      {r.status === "created" ? (
+                        <div className="truncate text-xs text-muted-foreground">
+                          {r.role} · {r.employee_code}
+                          {r.team_matched === false && " · team not matched"}
+                        </div>
+                      ) : (
+                        <div className="truncate text-xs text-destructive">{r.error}</div>
+                      )}
+                    </div>
+                    {r.status === "created" && r.temp_password && (
+                      <button
+                        type="button"
+                        title="Copy temporary password"
+                        onClick={() => navigator.clipboard.writeText(r.temp_password!)}
+                        className="flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 font-mono text-xs text-muted-foreground hover:bg-accent"
+                      >
+                        <Copy className="h-3 w-3" /> {r.temp_password}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Temporary passwords are shown once, here, and never stored in this browser — download or copy them now.
+              </p>
+            </>
+          )}
+        </div>
+      </Dialog>
 
       <Dialog
         open={open}
