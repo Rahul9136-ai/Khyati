@@ -29,6 +29,7 @@ export interface AlertInputs {
   thresholds: Thresholds
   ptoPending: number
   swapsPending: number
+  skillChangePending: number
 }
 
 export function computeAlerts(inp: AlertInputs): WfmAlert[] {
@@ -80,6 +81,17 @@ export function computeAlerts(inp: AlertInputs): WfmAlert[] {
       title: `${inp.swapsPending} shift swap(s) awaiting approval`,
       detail: "Projected SL impact exceeded the auto-approve tolerance.",
       to: "/swaps",
+    })
+  }
+
+  if (inp.skillChangePending > 0) {
+    out.push({
+      id: "skill-change-pending",
+      ts: now,
+      severity: "warning",
+      title: `${inp.skillChangePending} skill re-balance recommendation(s)`,
+      detail: "SL dropping or volume spiking on a queue — AI found agents who could flex over. Needs WFM + Ops approval.",
+      to: "/rta",
     })
   }
 

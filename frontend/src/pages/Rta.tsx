@@ -7,17 +7,23 @@ import { PageHeader } from "@/components/page-header"
 import { PermissionGate } from "@/components/permission-gate"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Activity, ClipboardCheck, PhoneCall, Siren, UserX, Zap } from "lucide-react"
+import { ArrowRight, Activity, ClipboardCheck, PhoneCall, RefreshCw, Siren, UserX, Zap } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
 import { buildAgentDay, DAY_START, escalationFor, scoreAgentDay, type EscalationLevel } from "@/lib/domain/adherence"
 import { agentAdherencePct, AUX, AUX_BY_CODE, inAdherence } from "@/lib/domain/seed"
 import { buildPlan, fmtPct } from "@/lib/domain/planning"
+import { CAN_APPROVE_SKILL_CHANGE_OPS, CAN_APPROVE_SKILL_CHANGE_WFM } from "@/lib/domain/roles"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
 
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`
 
 export function Rta() {
-  const { agents, rta, recallAgent, recallMany, forecasts, shrinkage, nowIdx, queues, thresholds, shiftPatterns, breakOverrides, ruleState } = useWfm()
+  const {
+    agents, rta, recallAgent, recallMany, forecasts, shrinkage, nowIdx, queues, thresholds,
+    shiftPatterns, breakOverrides, ruleState, currentRole,
+    skillChangeRecommendations, scanSkillRecommendations, approveSkillChange, rejectSkillChange,
+  } = useWfm()
   const byId = useMemo(() => Object.fromEntries(agents.map((a) => [a.id, a])), [agents])
 
   const [tick, setTick] = useState(0)
@@ -98,6 +104,12 @@ export function Rta() {
   }, [live])
 
   const dist = AUX.map((a) => ({ ...a, count: live.filter((r) => r.actual === a.code).length })).filter((a) => a.count)
+
+  const queueById = useMemo(() => Object.fromEntries(queues.map((q) => [q.id, q])), [queues])
+  const canApproveWfm = CAN_APPROVE_SKILL_CHANGE_WFM.includes(currentRole)
+  const canApproveOps = CAN_APPROVE_SKILL_CHANGE_OPS.includes(currentRole)
+  const pendingSkillChanges = skillChangeRecommendations.filter((r) => r.status === "Pending")
+  const decidedSkillChanges = skillChangeRecommendations.filter((r) => r.status !== "Pending").slice(0, 5)
 
   const insight = {
     headline: slAtRisk ? `SL at risk: ${recs.length} break recall${recs.length === 1 ? "" : "s"} recommended.` : `Floor healthy — ${fmtPct(stats.adherence)} adherence, ${stats.onPhone} on the phones.`,
@@ -232,6 +244,74 @@ export function Rta() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="glass mt-4">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0">
+          <div>
+            <CardTitle>RTA skill re-balancing</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Runs automatically in the background — the moment SL drops or volume spikes on a queue, AI proposes
+              moving an agent with the right skills from a queue running a surplus. It only switches once a WFM
+              Manager <i>and</i> an Operations Manager have both approved.
+            </p>
+          </div>
+          <PermissionGate module="realtime" fallback={<Badge variant="secondary">view only</Badge>}>
+            <Button size="sm" variant="outline" onClick={() => scanSkillRecommendations()}>
+              <RefreshCw className="h-4 w-4" /> Check now
+            </Button>
+          </PermissionGate>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {pendingSkillChanges.length === 0 && decidedSkillChanges.length === 0 && (
+            <p className="text-sm text-muted-foreground">Every queue is balanced right now — nothing to recommend.</p>
+          )}
+          {pendingSkillChanges.map((r) => (
+            <div key={r.id} className="flex flex-wrap items-center gap-3 rounded-lg border bg-background/40 p-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                  {r.agentName}
+                  <span className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
+                    <span className="rounded px-1.5 py-0.5" style={{ background: `${queueById[r.fromQueueId]?.color}26`, color: queueById[r.fromQueueId]?.color }}>{r.fromQueueName}</span>
+                    <ArrowRight className="h-3 w-3" />
+                    <span className="rounded px-1.5 py-0.5" style={{ background: `${queueById[r.toQueueId]?.color}26`, color: queueById[r.toQueueId]?.color }}>{r.toQueueName}</span>
+                  </span>
+                </div>
+                <p className="mt-0.5 truncate text-xs text-muted-foreground" title={r.reason}>{r.reason}</p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Badge variant={r.wfmApprovedBy ? "success" : "warning"}>WFM {r.wfmApprovedBy ? "✓" : "pending"}</Badge>
+                <Badge variant={r.opsApprovedBy ? "success" : "warning"}>Ops {r.opsApprovedBy ? "✓" : "pending"}</Badge>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {canApproveWfm && !r.wfmApprovedBy && (
+                  <Button size="sm" variant="outline" onClick={() => approveSkillChange(r.id, "wfm")}>Approve (WFM)</Button>
+                )}
+                {canApproveOps && !r.opsApprovedBy && (
+                  <Button size="sm" variant="outline" onClick={() => approveSkillChange(r.id, "ops")}>Approve (Ops)</Button>
+                )}
+                {(canApproveWfm || canApproveOps) && (
+                  <Button size="sm" variant="ghost" onClick={() => rejectSkillChange(r.id)}>Reject</Button>
+                )}
+              </div>
+            </div>
+          ))}
+          {decidedSkillChanges.length > 0 && (
+            <div className="border-t pt-2">
+              <p className="mb-1.5 text-xs font-medium text-muted-foreground">Recent decisions</p>
+              <div className="space-y-1.5">
+                {decidedSkillChanges.map((r) => (
+                  <div key={r.id} className="flex flex-wrap items-center gap-2 text-xs">
+                    <Badge variant={r.status === "Applied" ? "success" : "destructive"}>{r.status.toLowerCase()}</Badge>
+                    <span className="text-muted-foreground">
+                      {r.agentName} · {r.fromQueueName} → {r.toQueueName}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="glass mt-4">
         <CardHeader>

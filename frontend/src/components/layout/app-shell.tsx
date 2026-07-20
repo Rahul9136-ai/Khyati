@@ -1,8 +1,10 @@
 import { LogOut, Search } from "lucide-react"
 import { NavLink } from "react-router-dom"
 
+import { MessagePopup } from "@/components/layout/message-popup"
 import { NotificationsBell } from "@/components/layout/notifications-bell"
 import { QueuePicker } from "@/components/layout/queue-picker"
+import { SendMessageButton } from "@/components/layout/send-message-button"
 import { PurviLogo } from "@/components/purvi-logo"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Select } from "@/components/ui/select"
@@ -107,6 +109,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               />
             </div>
           )}
+          <SendMessageButton />
           <NotificationsBell />
           <ThemeToggle />
           {user && (
@@ -134,6 +137,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </header>
         <main className="flex-1 p-5 lg:p-6">{children}</main>
       </div>
+
+      <MessagePopup />
     </div>
   )
 }

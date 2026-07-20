@@ -30,6 +30,7 @@ import { effectiveSegments, optimiseBreaks, type BreakOverrides } from "@/lib/do
 import { buildPlan, summarisePlan } from "@/lib/domain/planning"
 import type { Scenario } from "@/lib/domain/scenario"
 import { AGENTS, forecastFor, inAdherence, makeRTA, QUEUES, SHRINKAGE, TEAMS } from "@/lib/domain/seed"
+import { recommendSkillChanges } from "@/lib/domain/skillRecommend"
 import { DEFAULT_SHIFT_PATTERNS, shiftStringFor, type ShiftPattern } from "@/lib/domain/shiftPatterns"
 import type { Agent, Queue, RtaEntry } from "@/lib/domain/types"
 
@@ -79,6 +80,43 @@ export interface PtoRequest {
   to: string
   days: number
   status: PtoStatus
+}
+
+// Broadcast messages (Team Leader / WFM Manager → agent, team, or everyone).
+// Pop up on screen for the recipient(s) rather than sitting in the passive
+// notifications bell — see components/layout/message-popup.tsx.
+export type MessageAudience = "agent" | "team" | "all"
+export interface TeamMessage {
+  id: string
+  fromName: string
+  fromRole: Role
+  audience: MessageAudience
+  agentId?: string // audience === "agent"
+  team?: string // audience === "team"
+  text: string
+  urgent: boolean
+  ts: number
+  /** Viewer keys ("agent:<id>" or "role:<Role>") that have acknowledged it. */
+  dismissedBy: string[]
+}
+
+// RTA skill re-balancing: system-generated recommendation to move an agent's
+// skill from a surplus queue to a short one, live until a WFM Manager AND an
+// Operations Manager have both signed off — see lib/domain/skillRecommend.ts.
+export type SkillChangeStatus = "Pending" | "Rejected" | "Applied"
+export interface SkillChangeRecommendation {
+  id: string
+  agentId: string
+  agentName: string
+  fromQueueId: string
+  fromQueueName: string
+  toQueueId: string
+  toQueueName: string
+  reason: string
+  generatedAt: number
+  status: SkillChangeStatus
+  wfmApprovedBy?: string
+  opsApprovedBy?: string
 }
 
 const skillLabel = (id: string, queues: Queue[]) => queues.find((q) => q.id === id)?.name ?? id
@@ -270,6 +308,19 @@ interface WfmState {
    *  segment into breakOverrides; for an exception it just marks Applied
    *  (only then does it count toward the adherence score). */
   applyException: (id: string) => void
+
+  // Broadcast messages: Team Leader/WFM Manager -> agent, team, or everyone.
+  messages: TeamMessage[]
+  sendMessage: (m: { audience: MessageAudience; agentId?: string; team?: string; text: string; urgent: boolean }) => void
+  dismissMessage: (id: string, viewerKey: string) => void
+
+  // RTA skill re-balancing: scan for candidates, then a WFM Manager + an
+  // Operations Manager both have to approve before the skill actually switches.
+  skillChangeRecommendations: SkillChangeRecommendation[]
+  scanSkillRecommendations: () => number
+  /** Records one tier's approval; once both tiers are in, applies the switch. */
+  approveSkillChange: (id: string, tier: "wfm" | "ops") => void
+  rejectSkillChange: (id: string) => void
 }
 
 const DEFAULT_USER = "Avery Owens"
@@ -811,7 +862,11 @@ export const useWfm = create<WfmState>()(
         }),
 
       alerts: [],
-      recomputeAlerts: () =>
+      recomputeAlerts: () => {
+        // Auto-scan for skill re-balancing candidates first (SL dropping or a
+        // volume spike on some queue) so a real recommendation is already
+        // waiting — not gated behind someone manually clicking "Scan" on RTA.
+        get().scanSkillRecommendations()
         set((s) => ({
           alerts: computeAlerts({
             queues: s.queues,
@@ -823,8 +878,10 @@ export const useWfm = create<WfmState>()(
             thresholds: s.thresholds,
             ptoPending: s.ptoRequests.filter((r) => r.status === "Pending").length,
             swapsPending: s.swaps.filter((r) => r.status === "Pending").length,
+            skillChangePending: s.skillChangeRecommendations.filter((r) => r.status === "Pending").length,
           }),
-        })),
+        }))
+      },
 
       exceptions: seedExceptions(AGENTS),
       addException: (e) =>
@@ -892,6 +949,142 @@ export const useWfm = create<WfmState>()(
             ],
           }
         }),
+
+      messages: [],
+      sendMessage: (m) =>
+        set((s) => {
+          const msg: TeamMessage = {
+            id: "msg" + uid(),
+            fromName: s.currentUser,
+            fromRole: s.currentRole,
+            audience: m.audience,
+            agentId: m.agentId,
+            team: m.team,
+            text: m.text,
+            urgent: m.urgent,
+            ts: Date.now(),
+            dismissedBy: [],
+          }
+          const target =
+            m.audience === "agent"
+              ? (s.agents.find((a) => a.id === m.agentId)?.name ?? m.agentId)
+              : m.audience === "team"
+                ? `Team ${m.team}`
+                : "everyone"
+          return {
+            messages: [msg, ...s.messages],
+            auditLog: [
+              entry(s.currentUser, "Real-Time", "Sent message", `To ${target}${m.urgent ? " · urgent" : ""} · ${m.text}`),
+              ...s.auditLog,
+            ],
+          }
+        }),
+      dismissMessage: (id, viewerKey) =>
+        set((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === id && !m.dismissedBy.includes(viewerKey)
+              ? { ...m, dismissedBy: [...m.dismissedBy, viewerKey] }
+              : m,
+          ),
+        })),
+
+      skillChangeRecommendations: [],
+      scanSkillRecommendations: () => {
+        let added = 0
+        set((s) => {
+          const candidates = recommendSkillChanges(s.queues, s.forecasts, s.shrinkage, s.agents, s.nowIdx)
+          const existingPending = new Set(
+            s.skillChangeRecommendations
+              .filter((r) => r.status === "Pending")
+              .map((r) => `${r.agentId}:${r.toQueueId}`),
+          )
+          const fresh = candidates.filter((c) => !existingPending.has(`${c.agentId}:${c.toQueueId}`))
+          added = fresh.length
+          if (!fresh.length) return s
+          const now = Date.now()
+          const newRecs: SkillChangeRecommendation[] = fresh.map((c) => ({
+            id: "sc" + uid(),
+            agentId: c.agentId,
+            agentName: c.agentName,
+            fromQueueId: c.fromQueueId,
+            fromQueueName: c.fromQueueName,
+            toQueueId: c.toQueueId,
+            toQueueName: c.toQueueName,
+            reason: c.reason,
+            generatedAt: now,
+            status: "Pending",
+          }))
+          return {
+            skillChangeRecommendations: [...newRecs, ...s.skillChangeRecommendations],
+            auditLog: [
+              entry(s.currentUser, "Real-Time", "Scanned for skill re-balancing", `${newRecs.length} new recommendation(s)`),
+              ...s.auditLog,
+            ],
+          }
+        })
+        return added
+      },
+      approveSkillChange: (id, tier) =>
+        set((s) => {
+          const rec = s.skillChangeRecommendations.find((r) => r.id === id)
+          if (!rec || rec.status !== "Pending") return s
+          const updated: SkillChangeRecommendation = {
+            ...rec,
+            wfmApprovedBy: tier === "wfm" ? s.currentUser : rec.wfmApprovedBy,
+            opsApprovedBy: tier === "ops" ? s.currentUser : rec.opsApprovedBy,
+          }
+          const bothApproved = !!updated.wfmApprovedBy && !!updated.opsApprovedBy
+
+          if (!bothApproved) {
+            return {
+              skillChangeRecommendations: s.skillChangeRecommendations.map((r) => (r.id === id ? updated : r)),
+              auditLog: [
+                entry(
+                  s.currentUser,
+                  "Real-Time",
+                  `${tier === "wfm" ? "WFM" : "Ops"} approved skill switch`,
+                  `${rec.agentName} · ${rec.fromQueueName} → ${rec.toQueueName}`,
+                ),
+                ...s.auditLog,
+              ],
+            }
+          }
+
+          updated.status = "Applied"
+          const agent = s.agents.find((a) => a.id === rec.agentId)
+          return {
+            agents: s.agents.map((a) =>
+              a.id === rec.agentId
+                ? { ...a, skills: [...new Set(a.skills.map((sk) => (sk === rec.fromQueueId ? rec.toQueueId : sk)))] }
+                : a,
+            ),
+            skillChangeRecommendations: s.skillChangeRecommendations.map((r) => (r.id === id ? updated : r)),
+            auditLog: [
+              entry(
+                s.currentUser,
+                "Real-Time",
+                "Applied RTA skill switch",
+                `${agent?.name ?? rec.agentName} · ${rec.fromQueueName} → ${rec.toQueueName}`,
+              ),
+              ...s.auditLog,
+            ],
+          }
+        }),
+      rejectSkillChange: (id) =>
+        set((s) => {
+          const rec = s.skillChangeRecommendations.find((r) => r.id === id)
+          return {
+            skillChangeRecommendations: s.skillChangeRecommendations.map((r) =>
+              r.id === id ? { ...r, status: "Rejected" as SkillChangeStatus } : r,
+            ),
+            auditLog: rec
+              ? [
+                  entry(s.currentUser, "Real-Time", "Rejected skill switch recommendation", `${rec.agentName} · ${rec.fromQueueName} → ${rec.toQueueName}`),
+                  ...s.auditLog,
+                ]
+              : s.auditLog,
+          }
+        }),
     }),
     {
       name: "flowforce-wfm",
@@ -941,6 +1134,8 @@ export const useWfm = create<WfmState>()(
         ruleState: s.ruleState,
         exceptions: s.exceptions,
         pipelineAutoRun: s.pipelineAutoRun,
+        messages: s.messages,
+        skillChangeRecommendations: s.skillChangeRecommendations,
       }),
     },
   ),

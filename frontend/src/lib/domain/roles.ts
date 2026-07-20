@@ -135,6 +135,18 @@ export const CAN_RAISE_ADHERENCE_REQUEST: Role[] = ["Agent", "Team Leader", "Sup
 export const CAN_APPROVE_ADHERENCE_REQUEST: Role[] = ["Operations Manager", "Business Admin", "Super Admin"]
 export const CAN_APPLY_ADHERENCE_REQUEST: Role[] = ["RTA", "Scheduler", "Planner", "Super Admin"]
 
+// Broadcast messages: Team Leaders and the WFM Manager can push a message to
+// a specific agent, a whole team, or everyone — it pops up on screen for the
+// recipient(s) rather than sitting passively in the notifications bell.
+export const CAN_SEND_MESSAGE: Role[] = ["Team Leader", "WFM Manager", "Super Admin"]
+
+// RTA skill re-balancing: the recommendation is system-generated, but the
+// actual roster skill switch needs sign-off from BOTH sides — the WFM
+// Manager (who owns staffing/skills) and Operations Manager (who owns the
+// floor) — before it's applied. Either alone is a decision half-made.
+export const CAN_APPROVE_SKILL_CHANGE_WFM: Role[] = ["WFM Manager", "Super Admin"]
+export const CAN_APPROVE_SKILL_CHANGE_OPS: Role[] = ["Operations Manager", "Super Admin"]
+
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
   "Super Admin": "Full system access, including RBAC configuration.",
   "Business Admin": "Runs the business day-to-day; can't clear the audit trail.",
