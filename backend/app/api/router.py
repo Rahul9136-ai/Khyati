@@ -14,6 +14,7 @@ from app.modules.identity.router import (
     roles_router,
     users_router,
 )
+from app.modules.integrations.router import router as integrations_router
 from app.modules.intraday.router import router as intraday_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.planning.router import router as planning_router
@@ -37,6 +38,7 @@ api_router.include_router(planning_router)
 api_router.include_router(scheduling_router)
 api_router.include_router(intraday_router)
 api_router.include_router(requests_router)
+api_router.include_router(integrations_router)
 api_router.include_router(attendance_router)
 api_router.include_router(reports_router)
 api_router.include_router(notifications_router)

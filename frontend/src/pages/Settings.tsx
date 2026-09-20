@@ -2,6 +2,7 @@ import { useRef, useState } from "react"
 import * as XLSX from "xlsx"
 import { AlertTriangle, CheckCircle2, Copy, FileDown, ShieldCheck, Trash2, Upload, XCircle } from "lucide-react"
 
+import { IntegrationsSettings } from "@/components/integrations-settings"
 import { PermissionGate } from "@/components/permission-gate"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
@@ -183,8 +184,13 @@ export function Settings() {
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="roles">Roles & Permissions</TabsTrigger>
           <TabsTrigger value="thresholds">Thresholds</TabsTrigger>
+          <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="org">Organisation</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="integrations">
+          <IntegrationsSettings />
+        </TabsContent>
 
         <TabsContent value="thresholds">
           <Card className="glass max-w-3xl">

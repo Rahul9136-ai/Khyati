@@ -26,11 +26,13 @@ from app.modules.forecasting.schemas import ForecastRequest, PointIn, SeriesUplo
 from app.modules.forecasting.service import create_series, run_forecast, transition_forecast
 from app.modules.identity.schemas import UserCreate
 from app.modules.identity.service import create_user, seed_rbac
+from app.modules.integrations.schemas import ApprovalCreate
+from app.modules.integrations.service import create_approval, get_or_create_config
 from app.modules.intraday.schemas import ActualIn
 from app.modules.intraday.service import upsert_actuals
 from app.modules.planning.schemas import Assumptions, PlanCreate, PlanWeekIn
 from app.modules.planning.service import create_plan
-from app.modules.scheduling.models import ShiftTemplate
+from app.modules.scheduling.models import ScheduleShift, ShiftTemplate
 from app.modules.scheduling.schemas import GenerateScheduleRequest
 from app.modules.scheduling.service import generate_schedule, publish_schedule
 from app.modules.workforce.models import (
@@ -294,6 +296,68 @@ async def seed_demo() -> dict:
                          staffed=round(max(1, offered * 310 / 1800 / 0.85), 1))
             )
         await upsert_actuals(db, org.id, actuals)
+
+        # ---- Slack/Teams approval bridge -------------------------------------
+        # Channels enabled in "simulated" mode (no real creds) so the demo shows
+        # cards being dispatched to Slack + Teams and routed to the OM for
+        # sign-off, with zero external setup. Swap in real webhooks/tokens in
+        # Settings → Integrations to go live.
+        bridge = await get_or_create_config(db, org.id)
+        bridge.slack_enabled = True
+        bridge.teams_enabled = True
+        bridge.slack_channel = "#wfm-approvals"
+        bridge.auto_apply_on_approve = True
+        await db.flush()
+
+        first_shift = (
+            await db.execute(
+                select(ScheduleShift)
+                .where(ScheduleShift.schedule_id == schedule.id)
+                .order_by(ScheduleShift.start_ts)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        await create_approval(
+            db, org.id,
+            ApprovalCreate(
+                source="intraday", kind="overtime",
+                title="Offer 2h OT on Voice — volume 14% over forecast",
+                summary=("Voice Support is tracking 14% above forecast with SL at 74%. "
+                         "RTA proposes offering 2 hours of overtime to 3 agents to protect SL."),
+                queue_id=voice_q.id, employee_id=employees[0].id,
+                payload={"queue": "Voice Support", "hours": 2, "agents": 3},
+            ),
+            actor=admin,
+        )
+        if first_shift is not None:
+            await create_approval(
+                db, org.id,
+                ApprovalCreate(
+                    source="scheduling", kind="shift_change",
+                    title="Extend early shift by 1h to cover afternoon peak",
+                    summary=("Scheduler proposes extending an early shift to 17:30 to close "
+                             "a projected coverage gap in the 16:00–17:30 window."),
+                    employee_id=first_shift.employee_id,
+                    payload={
+                        "shift_id": str(first_shift.id),
+                        "new_end_ts": (first_shift.end_ts + timedelta(hours=1)).isoformat(),
+                    },
+                ),
+                actor=admin,
+            )
+        await create_approval(
+            db, org.id,
+            ApprovalCreate(
+                source="intraday", kind="reforecast_publish",
+                title="Publish intraday reforecast (+9% remaining day)",
+                summary=("Observed pacing implies a +9% reforecast for the rest of the day. "
+                         "Publishing updates downstream staffing recommendations."),
+                queue_id=voice_q.id,
+                payload={"queue": "Voice Support", "adjustment_pct": 9},
+            ),
+            actor=admin,
+        )
 
         await db.commit()
         return {

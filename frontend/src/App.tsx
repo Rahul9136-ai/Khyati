@@ -5,6 +5,7 @@ import { AuthGate } from "@/components/auth-gate"
 import { AppShell } from "@/components/layout/app-shell"
 import { RoleGuard } from "@/components/role-guard"
 import { Adherence } from "@/pages/Adherence"
+import { Approvals } from "@/pages/Approvals"
 import { Audit } from "@/pages/Audit"
 import { Automation } from "@/pages/Automation"
 import { Autonomy } from "@/pages/Autonomy"
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="/swaps" element={<RoleGuard module="swaps"><Swaps /></RoleGuard>} />
         <Route path="/intraday" element={<RoleGuard module="intraday"><Intraday /></RoleGuard>} />
         <Route path="/rta" element={<RoleGuard module="realtime"><Rta /></RoleGuard>} />
+        <Route path="/approvals" element={<RoleGuard module="approvals"><Approvals /></RoleGuard>} />
         <Route path="/adherence" element={<RoleGuard module="adherence"><Adherence /></RoleGuard>} />
         <Route path="/automation" element={<RoleGuard module="automation"><Automation /></RoleGuard>} />
         <Route path="/autonomy" element={<RoleGuard module="automation"><Autonomy /></RoleGuard>} />

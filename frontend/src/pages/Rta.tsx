@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { Link } from "react-router-dom"
 
 import { AiSummary } from "@/components/ai-summary"
 import { ExportButton } from "@/components/export-button"
@@ -127,6 +128,14 @@ export function Rta() {
         title="Real-Time Monitor (RTA)"
         subtitle="AUX wallboard · live adherence · AI break recovery"
         actions={
+          <>
+          <PermissionGate module="approvals">
+            <Button asChild variant="outline">
+              <Link to="/approvals?source=intraday&raise=1">
+                <Siren className="h-4 w-4" /> Request OM sign-off
+              </Link>
+            </Button>
+          </PermissionGate>
           <ExportButton
             filename="realtime-adherence"
             sheets={() => [
@@ -143,6 +152,7 @@ export function Rta() {
               { name: "Break Recovery", rows: recs.map((r) => ({ Name: r.name, "On break": r.aux, "Team Lead": r.tl, Helps: r.helps.map((h) => queues.find((q) => q.id === h)?.name).join(", ") })) },
             ]}
           />
+          </>
         }
       />
 

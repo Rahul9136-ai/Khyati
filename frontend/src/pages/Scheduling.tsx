@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react"
-import { CalendarClock, CheckCircle2, FileDown, RotateCcw, Sparkles, Upload, Wand2 } from "lucide-react"
+import { CalendarClock, CheckCircle2, FileDown, RotateCcw, Send, Sparkles, Upload, Wand2 } from "lucide-react"
 import { Link } from "react-router-dom"
 
 import { AiSummary } from "@/components/ai-summary"
@@ -122,6 +122,13 @@ export function Scheduling() {
         actions={
           <>
             <Badge variant="secondary" className="hidden lg:inline-flex">skilled for {queue.name}</Badge>
+            <PermissionGate module="approvals">
+              <Button asChild variant="outline">
+                <Link to="/approvals?source=scheduling&raise=1">
+                  <Send className="h-4 w-4" /> Request OM sign-off
+                </Link>
+              </Button>
+            </PermissionGate>
             <PermissionGate module="scheduling">
               <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={onFile} />
               <Button variant="outline" onClick={() => downloadTemplate(agents)}>

@@ -43,6 +43,8 @@ PERMISSIONS: dict[str, str] = {
     # autonomous agents
     "agent:read": "View autonomous agent activity and decisions",
     "agent:manage": "Run agents, govern autonomy policy, approve/reject actions",
+    # integrations (Slack/Teams approval bridge)
+    "integration:manage": "Connect and configure Slack/Teams approval channels",
     # misc
     "audit:read": "View audit logs",
     "ai:use": "Use AI assistant features",
