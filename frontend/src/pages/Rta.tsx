@@ -249,6 +249,20 @@ export function Rta() {
                     Recall all {recs.length} & notify TLs
                   </Button>
                 </PermissionGate>
+                <PermissionGate module="approvals">
+                  <Button asChild variant="outline" className="mt-2 w-full">
+                    <Link to={`/approvals?source=intraday&raise=1&kind=break_recovery&title=${
+                      encodeURIComponent(`Break recall — SL at risk, ${recs.length} agent${recs.length === 1 ? "" : "s"}`)
+                    }&summary=${
+                      encodeURIComponent(
+                        `SL at risk. Recommend recalling ${recs.map((r) => r.name).join(", ")} off deferrable breaks. ` +
+                        `Flag TLs ${[...new Set(recs.map((r) => r.tl))].join(", ")}.`,
+                      )
+                    }`}>
+                      <Siren className="h-4 w-4" /> Request OM sign-off for recall
+                    </Link>
+                  </Button>
+                </PermissionGate>
               </>
             )}
           </CardContent>

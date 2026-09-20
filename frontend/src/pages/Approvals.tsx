@@ -195,28 +195,41 @@ export function Approvals() {
 
       <RaiseDialog open={raiseOpen} onClose={() => setRaiseOpen(false)}
         initialSource={(params.get("source") as ApprovalSource) || "intraday"}
+        initialKind={params.get("kind") || undefined}
+        initialTitle={params.get("title") || ""}
+        initialSummary={params.get("summary") || ""}
         onDone={() => qc.invalidateQueries({ queryKey: ["approvals"] })} />
     </>
   )
 }
 
 function RaiseDialog({
-  open, onClose, initialSource, onDone,
+  open, onClose, initialSource, initialKind, initialTitle = "", initialSummary = "", onDone,
 }: {
   open: boolean
   onClose: () => void
   initialSource: ApprovalSource
+  initialKind?: string
+  initialTitle?: string
+  initialSummary?: string
   onDone: () => void
 }) {
   const [source, setSource] = useState<ApprovalSource>(initialSource)
-  const [kind, setKind] = useState(KINDS_BY_SOURCE[initialSource][0].value)
-  const [title, setTitle] = useState("")
-  const [summary, setSummary] = useState("")
+  const [kind, setKind] = useState(initialKind || KINDS_BY_SOURCE[initialSource][0].value)
+  const [title, setTitle] = useState(initialTitle)
+  const [summary, setSummary] = useState(initialSummary)
   const [busy, setBusy] = useState(false)
 
+  // when opened (e.g. deep-linked from RTA/Scheduling), seed from the prefill.
   useEffect(() => {
-    if (open) { setSource(initialSource); setKind(KINDS_BY_SOURCE[initialSource][0].value) }
-  }, [open, initialSource])
+    if (!open) return
+    const kinds = KINDS_BY_SOURCE[initialSource]
+    const validKind = initialKind && kinds.some((k) => k.value === initialKind)
+    setSource(initialSource)
+    setKind(validKind ? (initialKind as string) : kinds[0].value)
+    setTitle(initialTitle)
+    setSummary(initialSummary)
+  }, [open, initialSource, initialKind, initialTitle, initialSummary])
 
   async function submit() {
     if (!title.trim()) return
