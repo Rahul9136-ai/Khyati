@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Activity, CalendarRange, Info, Layers, TrendingUp, Users } from "lucide-react"
+import { Activity, CalendarRange, Download, FlaskConical, Info, Layers, TrendingUp, Users } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import {
   Bar, BarChart, CartesianGrid, Legend, Line, ComposedChart, ResponsiveContainer,
@@ -7,16 +7,19 @@ import {
 } from "recharts"
 
 import { KpiCard } from "@/components/kpi-card"
+import { MovementTab } from "@/pages/planning/MovementTab"
+import { NewHireTab } from "@/pages/planning/NewHireTab"
 import { PageHeader } from "@/components/page-header"
 import { PermissionGate } from "@/components/permission-gate"
-import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   BREAKDOWN_ROWS, CATEGORY_ROWS, FORMULA_NOTES, type MonthResult,
-  getCapacity, listLobs, monthLabel, updateConfig, updateDemand,
+  type ScenarioResult, exportCapacityXlsx, getCapacity, listLobs, monthLabel,
+  runScenario, updateConfig, updateDemand,
 } from "@/lib/hcplanning"
 import { cn } from "@/lib/utils"
 
@@ -110,6 +113,11 @@ export function Planning() {
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
                 <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-sky-500/70" /> Editable</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-emerald-500/70" /> Calculated</span>
+                {table && results.length > 0 && (
+                  <Button size="sm" variant="outline" onClick={() => exportCapacityXlsx(table)}>
+                    <Download className="h-3.5 w-3.5" /> Export
+                  </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent className="overflow-x-auto">
@@ -182,10 +190,8 @@ export function Planning() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="newhire"><Placeholder title="New Hire Planning"
-          note="Hiring → Training → Nesting → Production pipeline (90% / 95% throughput), feeding Ramp. Arrives in Phase 2." /></TabsContent>
-        <TabsContent value="movement"><Placeholder title="Agent Movement"
-          note="Move-in / move-out between LOBs affecting monthly capacity. Arrives in Phase 3. (The engine already honours planned movement dates.)" /></TabsContent>
+        <TabsContent value="newhire">{lobId && <NewHireTab lobId={lobId} />}</TabsContent>
+        <TabsContent value="movement">{lobId && <MovementTab lobId={lobId} lobs={lobs} />}</TabsContent>
 
         <TabsContent value="summary">
           <div className="grid gap-4 lg:grid-cols-2">
@@ -221,6 +227,9 @@ export function Planning() {
               </CardContent>
             </Card>
           </div>
+          {lobId && results.length > 0 && (
+            <ScenarioPanel lobId={lobId} from={results[0].month} to={results[results.length - 1].month} />
+          )}
         </TabsContent>
       </Tabs>
     </>
@@ -260,14 +269,77 @@ function ConfigStrip({
   )
 }
 
-function Placeholder({ title, note }: { title: string; note: string }) {
+function ScenarioPanel({ lobId, from, to }: { lobId: string; from: string; to: string }) {
+  const [ooo, setOoo] = useState("")
+  const [attr, setAttr] = useState("")
+  const [demandPct, setDemandPct] = useState("")
+  const [result, setResult] = useState<ScenarioResult | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function run() {
+    setBusy(true)
+    try {
+      setResult(await runScenario(lobId, from, to, {
+        ooo_shrinkage: ooo ? +ooo / 100 : undefined,
+        attrition: attr ? +attr / 100 : undefined,
+        demand_pct: demandPct ? +demandPct : undefined,
+      }))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const b = result?.baseline[0]
+  const s = result?.scenario[0]
+  const delta = (get: (r: MonthResult) => number | null) =>
+    b && s ? ((get(s) ?? 0) - (get(b) ?? 0)) : 0
+
   return (
-    <Card className="glass">
-      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
-      <CardContent className="py-8 text-center text-muted-foreground">
-        <Badge variant="secondary" className="mb-2">Coming soon</Badge>
-        <p className="mx-auto max-w-md text-sm">{note}</p>
+    <Card className="glass mt-4">
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-sm"><FlaskConical className="h-4 w-4 text-primary" /> Scenario planning</CardTitle>
+        <p className="text-xs text-muted-foreground">What-if against the live plan — the baseline is never changed.</p>
+      </CardHeader>
+      <CardContent>
+        <PermissionGate module="planning" fallback={<p className="text-sm text-muted-foreground">Read-only.</p>}>
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="text-sm"><span className="mb-1 block text-muted-foreground">OOO Shrinkage %</span>
+              <Input type="number" value={ooo} onChange={(e) => setOoo(e.target.value)} placeholder="baseline" className="h-9 w-28" /></label>
+            <label className="text-sm"><span className="mb-1 block text-muted-foreground">Attrition %</span>
+              <Input type="number" value={attr} onChange={(e) => setAttr(e.target.value)} placeholder="baseline" className="h-9 w-28" /></label>
+            <label className="text-sm"><span className="mb-1 block text-muted-foreground">Demand ±%</span>
+              <Input type="number" value={demandPct} onChange={(e) => setDemandPct(e.target.value)} placeholder="0" className="h-9 w-28" /></label>
+            <Button disabled={busy} onClick={run}><FlaskConical className="h-4 w-4" /> Run scenario</Button>
+          </div>
+        </PermissionGate>
+        {result && b && s && (
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {([
+              ["Required HC", (r: MonthResult) => r.required_hc],
+              ["Closing HC", (r: MonthResult) => r.closing_hc],
+              ["Capacity %", (r: MonthResult) => r.capacity_pct],
+              ["Excess/Deficit", (r: MonthResult) => r.excess_deficit],
+            ] as const).map(([label, get]) => (
+              <div key={label} className="rounded-lg border p-3">
+                <div className="text-xs text-muted-foreground">{label} ({monthLabel(from)})</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-sm text-muted-foreground line-through">{fmtKpi(get(b), label)}</span>
+                  <span className="text-lg font-semibold">{fmtKpi(get(s), label)}</span>
+                </div>
+                <div className={cn("text-xs", delta(get) >= 0 ? "text-emerald-600" : "text-destructive")}>
+                  {delta(get) >= 0 ? "+" : ""}{delta(get).toFixed(2)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   )
 }
+
+function fmtKpi(v: number | null, label: string): string {
+  if (v === null || v === undefined) return "—"
+  return label === "Capacity %" ? `${(v * 100).toFixed(0)}%` : v.toFixed(1)
+}
+

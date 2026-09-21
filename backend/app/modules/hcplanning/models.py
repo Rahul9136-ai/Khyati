@@ -71,6 +71,8 @@ class HcPlanningConfig(UUIDMixin, TenantMixin, TimestampMixin, Base):
     weekly_hours: Mapped[float] = mapped_column(Float, default=40.0)
     hiring_throughput: Mapped[float] = mapped_column(Float, default=0.90)
     training_throughput: Mapped[float] = mapped_column(Float, default=0.95)
+    training_days: Mapped[int] = mapped_column(default=21)
+    nesting_days: Mapped[int] = mapped_column(default=9)
     # last actual month (YYYY-MM); later months are projected
     actuals_through: Mapped[str | None] = mapped_column(String(7), nullable=True)
     # [{bucket, months_to, label}]; empty ⇒ engine defaults
@@ -93,3 +95,23 @@ class HcDemand(UUIDMixin, TenantMixin, TimestampMixin, Base):
     month: Mapped[str] = mapped_column(String(7), index=True)  # YYYY-MM
     billable_fte: Mapped[float] = mapped_column(Float, default=0.0)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class NewHireBatch(UUIDMixin, TenantMixin, TimestampMixin, Base):
+    """A planned hiring intake that flows to production and feeds Ramp."""
+
+    __tablename__ = "new_hire_batches"
+
+    lob_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("lobs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    hire_date: Mapped[date] = mapped_column(Date, index=True)
+    planned_hires: Mapped[float] = mapped_column(Float, default=0.0)
+    experience_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    location: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # optional per-batch overrides (fall back to config)
+    hiring_throughput: Mapped[float | None] = mapped_column(Float, nullable=True)
+    training_throughput: Mapped[float | None] = mapped_column(Float, nullable=True)
+    training_days: Mapped[int | None] = mapped_column(nullable=True)
+    nesting_days: Mapped[int | None] = mapped_column(nullable=True)
+    note: Mapped[str] = mapped_column(String(255), default="")

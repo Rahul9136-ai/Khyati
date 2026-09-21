@@ -367,6 +367,7 @@ async def seed_demo() -> dict:
             AgentPlanningProfile,
             HcDemand,
             HcPlanningConfig,
+            NewHireBatch,
         )
 
         plan_status_cycle = ["FTE", "FTE", "FTE", "Ramp", "OJT", "FTE", "Notice Period",
@@ -392,6 +393,14 @@ async def seed_demo() -> dict:
             hiring_throughput=0.90, training_throughput=0.95,
             actuals_through=add_months(start, 4),
         ))
+        # a couple of demo hiring batches (feed Ramp ~1 month after hire)
+        first_of = date.today().replace(day=1)
+        db.add(NewHireBatch(organization_id=org.id, lob_id=lob.id,
+                            hire_date=first_of + timedelta(days=90), planned_hires=20,
+                            experience_type="Fresher", note="Q-hire wave 1"))
+        db.add(NewHireBatch(organization_id=org.id, lob_id=lob.id,
+                            hire_date=first_of + timedelta(days=210), planned_hires=30,
+                            experience_type="Fresher", note="Q-hire wave 2"))
         await db.flush()
 
         await db.commit()

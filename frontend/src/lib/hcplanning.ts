@@ -16,6 +16,8 @@ export interface PlanningConfig {
   weekly_hours: number
   hiring_throughput: number
   training_throughput: number
+  training_days: number
+  nesting_days: number
   actuals_through: string | null
   tenure_bands: unknown[]
   monthly_overrides: Record<string, unknown>
@@ -79,6 +81,98 @@ export async function getCapacity(lobId: string, from?: string, to?: string) {
   return res.data.data as CapacityTable
 }
 
+export interface Batch {
+  id: string
+  lob_id: string | null
+  hire_date: string
+  planned_hires: number
+  experience_type: string | null
+  location: string | null
+  note: string
+}
+
+export interface PipelineStage {
+  hire_date: string
+  training_start: string
+  nesting_start: string
+  production_date: string
+  production_month: string
+  planned_hires: number
+  successful_hires: number
+  entering_training: number
+  production: number
+}
+
+export async function listBatches(lobId?: string) {
+  const res = await api.get("/hc-planning/new-hire-batches", { params: { lob_id: lobId } })
+  return res.data.data as Batch[]
+}
+
+export async function createBatch(body: { lob_id: string; hire_date: string; planned_hires: number; note?: string }) {
+  return (await api.post("/hc-planning/new-hire-batches", body)).data.data as Batch
+}
+
+export async function updateBatch(id: string, body: Partial<{ hire_date: string; planned_hires: number; note: string }>) {
+  return (await api.put(`/hc-planning/new-hire-batches/${id}`, body)).data.data as Batch
+}
+
+export async function deleteBatch(id: string) {
+  await api.delete(`/hc-planning/new-hire-batches/${id}`)
+}
+
+export async function getPipeline(lobId?: string) {
+  const res = await api.get("/hc-planning/new-hire-pipeline", { params: { lob_id: lobId } })
+  return res.data.data as PipelineStage[]
+}
+
+export interface AgentRow {
+  employee_id: string
+  name: string
+  lob_id: string | null
+  location: string | null
+  planning_status: string
+  dop: string | null
+  experience_type: string | null
+  move_out_date: string | null
+  move_in_date: string | null
+  target_lob_id: string | null
+}
+
+export async function listAgents(lobId: string) {
+  const res = await api.get("/hc-planning/agents", { params: { lob_id: lobId } })
+  return res.data.data as AgentRow[]
+}
+
+export async function updateProfile(
+  employeeId: string,
+  body: Partial<{ move_out_date: string | null; move_in_date: string | null; target_lob_id: string | null; planning_status: string; dop: string }>,
+) {
+  return (await api.put(`/hc-planning/employees/${employeeId}/profile`, body)).data.data
+}
+
+export interface ScenarioResult {
+  lob_id: string | null
+  lob_name: string | null
+  months: string[]
+  baseline: MonthResult[]
+  scenario: MonthResult[]
+}
+
+export interface ScenarioOverrides {
+  ooo_shrinkage?: number
+  io_shrinkage?: number
+  attrition?: number
+  demand_pct?: number
+  extra_hires?: { hire_date: string; count: number }[]
+}
+
+export async function runScenario(lobId: string, from: string, to: string, ov: ScenarioOverrides) {
+  const res = await api.post("/hc-planning/scenario", {
+    lob_id: lobId, from_month: from, to_month: to, ...ov,
+  })
+  return res.data.data as ScenarioResult
+}
+
 export async function getConfig(lobId?: string) {
   const res = await api.get("/hc-planning/config", { params: { lob_id: lobId } })
   return res.data.data as PlanningConfig
@@ -97,6 +191,26 @@ export async function getDemand(lobId?: string) {
 export async function updateDemand(lobId: string, items: { month: string; billable_fte: number }[]) {
   const res = await api.put("/hc-planning/demand", { lob_id: lobId, items })
   return res.data.data as DemandRow[]
+}
+
+/** Export the capacity table to an .xlsx file (metrics as rows, months as columns). */
+export async function exportCapacityXlsx(table: CapacityTable) {
+  const XLSX = await import("xlsx")
+  const rows = [...CATEGORY_ROWS, ...BREAKDOWN_ROWS.map((r) => ({ ...r, kind: "calc" as const }))]
+  const aoa: (string | number | null)[][] = [
+    ["Metric", ...table.months.map(monthLabel)],
+    ...rows.map((row) => [
+      row.label,
+      ...table.results.map((r) => {
+        const v = r[row.field] as number | null
+        return v === null || v === undefined ? "" : Number(v.toFixed(4))
+      }),
+    ]),
+  ]
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, "Capacity Plan")
+  XLSX.writeFile(wb, `capacity-plan-${table.lob_name ?? "lob"}.xlsx`)
 }
 
 /** Format a YYYY-MM month key as e.g. "Jan-26". */

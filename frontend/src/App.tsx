@@ -9,7 +9,6 @@ import { Approvals } from "@/pages/Approvals"
 import { Audit } from "@/pages/Audit"
 import { Automation } from "@/pages/Automation"
 import { Autonomy } from "@/pages/Autonomy"
-import { Capacity } from "@/pages/Capacity"
 import { Copilot } from "@/pages/Copilot"
 import { Dashboard } from "@/pages/Dashboard"
 import { Employees } from "@/pages/Employees"
@@ -36,7 +35,6 @@ export default function App() {
         <Routes>
         <Route path="/" element={<RoleGuard module="dashboard"><Dashboard /></RoleGuard>} />
         <Route path="/forecasting" element={<RoleGuard module="forecasting"><Forecasting /></RoleGuard>} />
-        <Route path="/capacity" element={<RoleGuard module="capacity"><Capacity /></RoleGuard>} />
         <Route path="/erlang" element={<RoleGuard module="erlang"><Erlang /></RoleGuard>} />
         <Route path="/scenarios" element={<RoleGuard module="scenarios"><Scenarios /></RoleGuard>} />
         <Route path="/scheduling" element={<RoleGuard module="scheduling"><Scheduling /></RoleGuard>} />
