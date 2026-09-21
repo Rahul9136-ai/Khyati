@@ -66,6 +66,8 @@ class PlanningConfig:
     weekly_hours: float = 40.0
     hiring_throughput: float = 0.90
     training_throughput: float = 0.95
+    training_days: int = 21   # hire → nesting
+    nesting_days: int = 9     # nesting → production (21 + 9 ≈ one month)
 
     ooo_by_month: dict[str, float] = field(default_factory=dict)
     io_by_month: dict[str, float] = field(default_factory=dict)

@@ -129,6 +129,40 @@ def test_inactive_agent_drops_out():
     assert is_productive(a, "2026-04") is False
 
 
+def test_newhire_pipeline_throughput_and_rounding():
+    from app.modules.hcplanning.engine.newhire import HiringBatch, batch_stages
+
+    s = batch_stages(HiringBatch(hire_date=date(2026, 6, 1), planned_hires=20),
+                     hiring_throughput=0.9, training_throughput=0.95,
+                     training_days=21, nesting_days=9)
+    # 20 × 0.9 × 0.95 = 17.1 → ROUND → 17
+    assert s.production == 17
+    assert s.production_month == "2026-07"  # hire + 30 days lands next month
+    s2 = batch_stages(HiringBatch(hire_date=date(2026, 1, 1), planned_hires=30),
+                      hiring_throughput=0.9, training_throughput=0.95,
+                      training_days=21, nesting_days=9)
+    assert s2.production == 26  # 30 × 0.9 × 0.95 = 25.65 → 26
+
+
+def test_newhire_production_feeds_ramp():
+    from app.modules.hcplanning.engine.newhire import HiringBatch, production_by_month
+
+    months = ["2026-01", "2026-02", "2026-03"]
+    agents = [AgentRecord(status="Ramp", lob="X", dop=date(2020, 1, 1))]
+    cfg = PlanningConfig(actuals_through="2026-01")  # project from Feb
+    # hire mid-Jan so production (hire + 30 days) lands in Feb, a projected month
+    prod = production_by_month(
+        [HiringBatch(hire_date=date(2026, 1, 10), planned_hires=20)],
+        hiring_throughput=0.9, training_throughput=0.95, training_days=21, nesting_days=9)
+    assert prod == {"2026-02": 17.0}
+    table = build_capacity_table(agents, "X", months, {m: 0 for m in months}, cfg,
+                                 newhire_production_by_month=prod)
+    ramp = table.row("ramp")
+    # Jan: roster ramp = 1 (actual). Feb: 1×(1−attr) + 17 new-hire production
+    assert ramp[0] == 1
+    assert abs(ramp[1] - (1 * (1 - cfg.attrition) + 17)) < 1e-6
+
+
 def test_closing_hc_override_and_flag():
     months = ["2026-01"]
     agents = [AgentRecord(status="FTE", lob="X", dop=date(2020, 1, 1))]

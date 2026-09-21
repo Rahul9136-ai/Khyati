@@ -21,6 +21,8 @@ class ConfigIn(BaseModel):
     weekly_hours: float | None = None
     hiring_throughput: float | None = None
     training_throughput: float | None = None
+    training_days: int | None = None
+    nesting_days: int | None = None
     actuals_through: str | None = None
     tenure_bands: list[TenureBandDTO] | None = None
     monthly_overrides: dict | None = None
@@ -37,6 +39,8 @@ class ConfigOut(BaseModel):
     weekly_hours: float
     hiring_throughput: float
     training_throughput: float
+    training_days: int
+    nesting_days: int
     actuals_through: str | None
     tenure_bands: list
     monthly_overrides: dict
@@ -113,3 +117,64 @@ class CapacityTableOut(BaseModel):
     results: list[MonthResultOut]
     config: ConfigOut
     agent_count: int
+
+
+class BatchIn(BaseModel):
+    lob_id: uuid.UUID | None = None
+    hire_date: date
+    planned_hires: float = Field(ge=0)
+    experience_type: str | None = None
+    location: str | None = None
+    hiring_throughput: float | None = None
+    training_throughput: float | None = None
+    training_days: int | None = None
+    nesting_days: int | None = None
+    note: str = ""
+
+
+class BatchUpdate(BaseModel):
+    hire_date: date | None = None
+    planned_hires: float | None = None
+    experience_type: str | None = None
+    location: str | None = None
+    hiring_throughput: float | None = None
+    training_throughput: float | None = None
+    training_days: int | None = None
+    nesting_days: int | None = None
+    note: str | None = None
+
+
+class BatchOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    lob_id: uuid.UUID | None
+    hire_date: date
+    planned_hires: float
+    experience_type: str | None
+    location: str | None
+    note: str
+
+
+class AgentRowOut(BaseModel):
+    employee_id: uuid.UUID
+    name: str
+    lob_id: uuid.UUID | None
+    location: str | None
+    planning_status: str
+    dop: date | None
+    experience_type: str | None
+    move_out_date: date | None
+    move_in_date: date | None
+    target_lob_id: uuid.UUID | None
+
+
+class PipelineStageOut(BaseModel):
+    hire_date: date
+    training_start: date
+    nesting_start: date
+    production_date: date
+    production_month: str
+    planned_hires: float
+    successful_hires: float
+    entering_training: float
+    production: float

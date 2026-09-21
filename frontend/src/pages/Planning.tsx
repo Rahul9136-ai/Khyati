@@ -7,9 +7,10 @@ import {
 } from "recharts"
 
 import { KpiCard } from "@/components/kpi-card"
+import { MovementTab } from "@/pages/planning/MovementTab"
+import { NewHireTab } from "@/pages/planning/NewHireTab"
 import { PageHeader } from "@/components/page-header"
 import { PermissionGate } from "@/components/permission-gate"
-import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
@@ -182,10 +183,8 @@ export function Planning() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="newhire"><Placeholder title="New Hire Planning"
-          note="Hiring → Training → Nesting → Production pipeline (90% / 95% throughput), feeding Ramp. Arrives in Phase 2." /></TabsContent>
-        <TabsContent value="movement"><Placeholder title="Agent Movement"
-          note="Move-in / move-out between LOBs affecting monthly capacity. Arrives in Phase 3. (The engine already honours planned movement dates.)" /></TabsContent>
+        <TabsContent value="newhire">{lobId && <NewHireTab lobId={lobId} />}</TabsContent>
+        <TabsContent value="movement">{lobId && <MovementTab lobId={lobId} lobs={lobs} />}</TabsContent>
 
         <TabsContent value="summary">
           <div className="grid gap-4 lg:grid-cols-2">
@@ -260,14 +259,3 @@ function ConfigStrip({
   )
 }
 
-function Placeholder({ title, note }: { title: string; note: string }) {
-  return (
-    <Card className="glass">
-      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
-      <CardContent className="py-8 text-center text-muted-foreground">
-        <Badge variant="secondary" className="mb-2">Coming soon</Badge>
-        <p className="mx-auto max-w-md text-sm">{note}</p>
-      </CardContent>
-    </Card>
-  )
-}

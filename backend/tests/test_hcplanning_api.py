@@ -80,6 +80,63 @@ async def test_closing_override_applies(client: AsyncClient, admin: dict):
     assert jan["fte_ramp"] == 4  # calculated value still exposed
 
 
+async def test_newhire_batch_pipeline_and_ramp_feed(client: AsyncClient, admin: dict):
+    h = admin["headers"]
+    lob_id = await _setup(client, h)
+    await client.put("/api/v1/hc-planning/config", headers=h, json={
+        "lob_id": lob_id, "actuals_through": "2026-01",
+        "hiring_throughput": 0.9, "training_throughput": 0.95,
+        "training_days": 21, "nesting_days": 9})
+    # hire mid-Jan → production lands Feb (a projected month)
+    r = await client.post("/api/v1/hc-planning/new-hire-batches", headers=h, json={
+        "lob_id": lob_id, "hire_date": "2026-01-10", "planned_hires": 20})
+    assert r.status_code == 201, r.text
+
+    pipe = (await client.get("/api/v1/hc-planning/new-hire-pipeline", headers=h,
+                             params={"lob_id": lob_id})).json()["data"]
+    assert pipe[0]["production"] == 17 and pipe[0]["production_month"] == "2026-02"
+
+    await client.put("/api/v1/hc-planning/demand", headers=h, json={
+        "lob_id": lob_id, "items": [{"month": "2026-01", "billable_fte": 1},
+                                    {"month": "2026-02", "billable_fte": 1}]})
+    cap = (await client.get(
+        "/api/v1/hc-planning/capacity", headers=h,
+        params={"lob_id": lob_id, "from": "2026-01", "to": "2026-02"})).json()["data"]
+    # Feb ramp jumps by ~17 from the new-hire production
+    assert cap["results"][1]["ramp"] > cap["results"][0]["ramp"] + 16
+
+
+async def test_agent_movement_shifts_capacity(client: AsyncClient, admin: dict):
+    h = admin["headers"]
+    struct = await create_structure(client, h)
+    lob_a = struct["lob"]["id"]
+    # second LOB
+    lob_b = (await client.post("/api/v1/org/lobs", headers=h, json={
+        "business_unit_id": struct["bu"]["id"], "name": "Support B", "code": "SUPB"},
+    )).json()["data"]["id"]
+    emps = await create_employees(client, h, struct["team"]["id"], lob_a, count=2)
+    for e in emps:
+        await client.put(f"/api/v1/hc-planning/employees/{e['id']}/profile", headers=h,
+                         json={"planning_status": "FTE", "dop": "2025-01-01"})
+    # move one agent from A to B starting 2026-03
+    await client.put(f"/api/v1/hc-planning/employees/{emps[0]['id']}/profile", headers=h, json={
+        "move_out_date": "2026-03-01", "move_in_date": "2026-03-01", "target_lob_id": lob_b})
+    await client.put("/api/v1/hc-planning/demand", headers=h, json={
+        "lob_id": lob_a, "items": [{"month": "2026-02", "billable_fte": 1},
+                                   {"month": "2026-03", "billable_fte": 1}]})
+
+    cap_a = (await client.get(
+        "/api/v1/hc-planning/capacity", headers=h,
+        params={"lob_id": lob_a, "from": "2026-02", "to": "2026-03"})).json()["data"]
+    # LOB A loses one FTE in March (agent moved out)
+    assert cap_a["results"][0]["fte"] == 2  # Feb
+    assert cap_a["results"][1]["fte"] == 1  # Mar
+
+    agents = (await client.get("/api/v1/hc-planning/agents", headers=h,
+                               params={"lob_id": lob_a})).json()["data"]
+    assert any(a["target_lob_id"] == lob_b for a in agents)
+
+
 async def test_capacity_requires_valid_lob(client: AsyncClient, admin: dict):
     h = admin["headers"]
     import uuid
