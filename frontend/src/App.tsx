@@ -17,6 +17,7 @@ import { Erlang } from "@/pages/Erlang"
 import { Forecasting } from "@/pages/Forecasting"
 import { Help } from "@/pages/Help"
 import { Intraday } from "@/pages/Intraday"
+import { Planning } from "@/pages/Planning"
 import { Pto } from "@/pages/Pto"
 import { Reports } from "@/pages/Reports"
 import { Rta } from "@/pages/Rta"
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/erlang" element={<RoleGuard module="erlang"><Erlang /></RoleGuard>} />
         <Route path="/scenarios" element={<RoleGuard module="scenarios"><Scenarios /></RoleGuard>} />
         <Route path="/scheduling" element={<RoleGuard module="scheduling"><Scheduling /></RoleGuard>} />
+        <Route path="/planning" element={<RoleGuard module="planning"><Planning /></RoleGuard>} />
         <Route path="/shift-patterns" element={<RoleGuard module="shiftPatterns"><ShiftPatterns /></RoleGuard>} />
         <Route path="/swaps" element={<RoleGuard module="swaps"><Swaps /></RoleGuard>} />
         <Route path="/intraday" element={<RoleGuard module="intraday"><Intraday /></RoleGuard>} />

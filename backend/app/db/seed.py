@@ -359,6 +359,41 @@ async def seed_demo() -> dict:
             actor=admin,
         )
 
+        # ---- HC planning (AGS Health CP model) --------------------------------
+        # Planning profiles for the seeded employees + monthly demand + config,
+        # so the Planning → Capacity screen has a live, computable LOB.
+        from app.modules.hcplanning.engine.dates import add_months, month_key
+        from app.modules.hcplanning.models import (
+            AgentPlanningProfile,
+            HcDemand,
+            HcPlanningConfig,
+        )
+
+        plan_status_cycle = ["FTE", "FTE", "FTE", "Ramp", "OJT", "FTE", "Notice Period",
+                             "FTE", "Maternity Leave", "FTE"]
+        for i, emp in enumerate(employees):
+            db.add(AgentPlanningProfile(
+                organization_id=org.id, employee_id=emp.id,
+                planning_status=plan_status_cycle[i % len(plan_status_cycle)],
+                dop=(emp.hire_date + timedelta(days=30)) if emp.hire_date else None,
+                experience_type=("Fresher" if i % 4 == 0 else "Lateral"),
+                function="Non-Voice", current_function="Non-Voice",
+            ))
+
+        start = month_key(date.today().replace(day=1))
+        months = [add_months(start, k) for k in range(14)]
+        base = 15.0
+        for k, m in enumerate(months):
+            db.add(HcDemand(organization_id=org.id, lob_id=lob.id, month=m,
+                            billable_fte=round(base + k * 0.3, 2)))
+        db.add(HcPlanningConfig(
+            organization_id=org.id, lob_id=lob.id,
+            ooo_shrinkage=0.04, io_shrinkage=0.04, attrition=0.0125, weekly_hours=40,
+            hiring_throughput=0.90, training_throughput=0.95,
+            actuals_through=add_months(start, 4),
+        ))
+        await db.flush()
+
         await db.commit()
         return {
             "status": "seeded",

@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   Clock,
   FlaskConical,
+  Gauge,
   History,
   LayoutDashboard,
   Repeat,
@@ -52,6 +53,12 @@ export const NAV: NavGroup[] = [
       { to: "/scheduling", label: "Scheduling", icon: CalendarRange, module: "scheduling" },
       { to: "/shift-patterns", label: "Shift Patterns", icon: CalendarClock, module: "shiftPatterns" },
       { to: "/swaps", label: "Shift Swaps", icon: Repeat, module: "swaps" },
+    ],
+  },
+  {
+    group: "Planning",
+    items: [
+      { to: "/planning", label: "Planning", icon: Gauge, module: "planning" },
     ],
   },
   {
