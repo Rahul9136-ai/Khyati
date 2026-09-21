@@ -47,18 +47,12 @@ export const NAV: NavGroup[] = [
     group: "Plan",
     items: [
       { to: "/forecasting", label: "Forecasting", icon: TrendingUp, module: "forecasting" },
-      { to: "/capacity", label: "Capacity Planning", icon: BarChart3, module: "capacity" },
+      { to: "/planning", label: "Capacity Planning", icon: Gauge, module: "planning" },
       { to: "/erlang", label: "Erlang Calculator", icon: Calculator, module: "erlang" },
       { to: "/scenarios", label: "Scenario Studio", icon: FlaskConical, module: "scenarios" },
       { to: "/scheduling", label: "Scheduling", icon: CalendarRange, module: "scheduling" },
       { to: "/shift-patterns", label: "Shift Patterns", icon: CalendarClock, module: "shiftPatterns" },
       { to: "/swaps", label: "Shift Swaps", icon: Repeat, module: "swaps" },
-    ],
-  },
-  {
-    group: "Planning",
-    items: [
-      { to: "/planning", label: "Planning", icon: Gauge, module: "planning" },
     ],
   },
   {
