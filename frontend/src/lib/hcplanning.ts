@@ -150,6 +150,29 @@ export async function updateProfile(
   return (await api.put(`/hc-planning/employees/${employeeId}/profile`, body)).data.data
 }
 
+export interface ScenarioResult {
+  lob_id: string | null
+  lob_name: string | null
+  months: string[]
+  baseline: MonthResult[]
+  scenario: MonthResult[]
+}
+
+export interface ScenarioOverrides {
+  ooo_shrinkage?: number
+  io_shrinkage?: number
+  attrition?: number
+  demand_pct?: number
+  extra_hires?: { hire_date: string; count: number }[]
+}
+
+export async function runScenario(lobId: string, from: string, to: string, ov: ScenarioOverrides) {
+  const res = await api.post("/hc-planning/scenario", {
+    lob_id: lobId, from_month: from, to_month: to, ...ov,
+  })
+  return res.data.data as ScenarioResult
+}
+
 export async function getConfig(lobId?: string) {
   const res = await api.get("/hc-planning/config", { params: { lob_id: lobId } })
   return res.data.data as PlanningConfig
@@ -168,6 +191,26 @@ export async function getDemand(lobId?: string) {
 export async function updateDemand(lobId: string, items: { month: string; billable_fte: number }[]) {
   const res = await api.put("/hc-planning/demand", { lob_id: lobId, items })
   return res.data.data as DemandRow[]
+}
+
+/** Export the capacity table to an .xlsx file (metrics as rows, months as columns). */
+export async function exportCapacityXlsx(table: CapacityTable) {
+  const XLSX = await import("xlsx")
+  const rows = [...CATEGORY_ROWS, ...BREAKDOWN_ROWS.map((r) => ({ ...r, kind: "calc" as const }))]
+  const aoa: (string | number | null)[][] = [
+    ["Metric", ...table.months.map(monthLabel)],
+    ...rows.map((row) => [
+      row.label,
+      ...table.results.map((r) => {
+        const v = r[row.field] as number | null
+        return v === null || v === undefined ? "" : Number(v.toFixed(4))
+      }),
+    ]),
+  ]
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, "Capacity Plan")
+  XLSX.writeFile(wb, `capacity-plan-${table.lob_name ?? "lob"}.xlsx`)
 }
 
 /** Format a YYYY-MM month key as e.g. "Jan-26". */

@@ -22,6 +22,8 @@ from app.modules.hcplanning.schemas import (
     PipelineStageOut,
     ProfileIn,
     ProfileOut,
+    ScenarioIn,
+    ScenarioOut,
 )
 from app.modules.identity.models import User
 from app.modules.workforce.service import org_scope
@@ -104,6 +106,23 @@ async def delete_batch(batch_id: uuid.UUID, db: DbSession, actor: Writer):
 async def newhire_pipeline(db: DbSession, user: Reader, lob_id: uuid.UUID | None = None):
     stages = await service.newhire_pipeline(db, org_scope(user), lob_id)
     return ApiResponse(data=[PipelineStageOut(**s.__dict__) for s in stages])
+
+
+@router.post("/scenario", response_model=ApiResponse[ScenarioOut])
+async def run_scenario(body: ScenarioIn, db: DbSession, user: Reader):
+    """Baseline vs what-if — the stored plan is never mutated."""
+    out = await service.compute_scenario(
+        db, org_scope(user), body.lob_id,
+        from_month=body.from_month, to_month=body.to_month,
+        overrides=body.model_dump(exclude={"lob_id", "from_month", "to_month"}),
+    )
+    return ApiResponse(data=ScenarioOut(
+        lob_id=body.lob_id,
+        lob_name=out["baseline"]["lob"].name if out["baseline"]["lob"] else None,
+        months=out["baseline"]["months"],
+        baseline=[MonthResultOut(**r.as_dict()) for r in out["baseline"]["results"]],
+        scenario=[MonthResultOut(**r.as_dict()) for r in out["scenario"]["results"]],
+    ))
 
 
 @router.get("/capacity", response_model=ApiResponse[CapacityTableOut])

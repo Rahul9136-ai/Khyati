@@ -137,6 +137,30 @@ async def test_agent_movement_shifts_capacity(client: AsyncClient, admin: dict):
     assert any(a["target_lob_id"] == lob_b for a in agents)
 
 
+async def test_scenario_does_not_mutate_baseline(client: AsyncClient, admin: dict):
+    h = admin["headers"]
+    lob_id = await _setup(client, h)
+    await client.put("/api/v1/hc-planning/demand", headers=h, json={
+        "lob_id": lob_id, "items": [{"month": "2026-01", "billable_fte": 10}]})
+    await client.put("/api/v1/hc-planning/config", headers=h,
+                     json={"lob_id": lob_id, "ooo_shrinkage": 0.04, "io_shrinkage": 0.04})
+
+    r = await client.post("/api/v1/hc-planning/scenario", headers=h, json={
+        "lob_id": lob_id, "from_month": "2026-01", "to_month": "2026-01",
+        "ooo_shrinkage": 0.10, "demand_pct": 20})
+    assert r.status_code == 200, r.text
+    d = r.json()["data"]
+    base, scen = d["baseline"][0], d["scenario"][0]
+    # baseline uses stored 4% shrinkage + billable 10; scenario 10% + billable 12
+    assert abs(base["required_hc"] - 10 / (0.96 * 0.96)) < 1e-6
+    assert abs(scen["required_hc"] - 12 / (0.90 * 0.96)) < 1e-6
+    # baseline unchanged after scenario call
+    cap = (await client.get(
+        "/api/v1/hc-planning/capacity", headers=h,
+        params={"lob_id": lob_id, "from": "2026-01", "to": "2026-01"})).json()["data"]
+    assert abs(cap["results"][0]["required_hc"] - base["required_hc"]) < 1e-6
+
+
 async def test_capacity_requires_valid_lob(client: AsyncClient, admin: dict):
     h = admin["headers"]
     import uuid

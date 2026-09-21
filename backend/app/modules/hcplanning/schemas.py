@@ -119,6 +119,32 @@ class CapacityTableOut(BaseModel):
     agent_count: int
 
 
+class ExtraHire(BaseModel):
+    hire_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    count: float = Field(ge=0)
+
+
+class ScenarioIn(BaseModel):
+    lob_id: uuid.UUID
+    from_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
+    to_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
+    ooo_shrinkage: float | None = None
+    io_shrinkage: float | None = None
+    attrition: float | None = None
+    hiring_throughput: float | None = None
+    training_throughput: float | None = None
+    demand_pct: float | None = None  # +/- % applied to Billable FTE
+    extra_hires: list[ExtraHire] = Field(default_factory=list)
+
+
+class ScenarioOut(BaseModel):
+    lob_id: uuid.UUID | None
+    lob_name: str | None
+    months: list[str]
+    baseline: list[MonthResultOut]
+    scenario: list[MonthResultOut]
+
+
 class BatchIn(BaseModel):
     lob_id: uuid.UUID | None = None
     hire_date: date

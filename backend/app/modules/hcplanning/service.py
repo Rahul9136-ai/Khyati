@@ -334,3 +334,62 @@ async def compute_capacity(
 
 def default_month_window(anchor: str, past: int = 0, ahead: int = 13) -> tuple[str, str]:
     return add_months(anchor, -past), add_months(anchor, ahead)
+
+
+# --------------------------------------------------------------------------- #
+# Scenario planning (baseline vs what-if; the baseline is never mutated)
+# --------------------------------------------------------------------------- #
+async def compute_scenario(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    lob_id: uuid.UUID,
+    *,
+    from_month: str | None = None,
+    to_month: str | None = None,
+    overrides: dict,
+) -> dict:
+    from datetime import date
+
+    baseline = await compute_capacity(
+        db, org_id, lob_id, from_month=from_month, to_month=to_month
+    )
+    months = baseline["months"]
+    if not months:
+        return {"baseline": baseline, "scenario": baseline}
+
+    cfg_row = await get_config_row(db, org_id, lob_id)
+    cfg = to_engine_config(cfg_row)  # fresh instance — safe to mutate
+    for key in ("ooo_shrinkage", "io_shrinkage", "attrition",
+                "hiring_throughput", "training_throughput"):
+        if overrides.get(key) is not None:
+            setattr(cfg, key, overrides[key])
+    cfg.validate()
+
+    agents = await build_agent_records(db, org_id, lob_id)
+    demand = {r.month: r.billable_fte for r in await list_demand(db, org_id, lob_id)}
+    mult = 1 + (overrides.get("demand_pct") or 0) / 100.0
+    billable = {m: demand.get(m, 0.0) * mult for m in months}
+
+    batches = _to_hiring_batches(await list_batches(db, org_id, lob_id))
+    for eh in overrides.get("extra_hires") or []:
+        batches.append(HiringBatch(
+            hire_date=date.fromisoformat(eh["hire_date"]),
+            planned_hires=float(eh["count"]),
+        ))
+    newhire = production_by_month(
+        batches, hiring_throughput=cfg.hiring_throughput,
+        training_throughput=cfg.training_throughput,
+        training_days=cfg.training_days, nesting_days=cfg.nesting_days,
+    )
+    closing_overrides = {
+        m: v for m, v in (cfg_row.closing_overrides or {}).items() if m in months
+    }
+    table = build_capacity_table(
+        agents, str(lob_id), months, billable, cfg,
+        newhire_production_by_month=newhire, closing_overrides=closing_overrides,
+    )
+    scenario = {
+        "lob": baseline["lob"], "months": months, "results": table.results,
+        "config_row": cfg_row, "agents": len(agents),
+    }
+    return {"baseline": baseline, "scenario": scenario}

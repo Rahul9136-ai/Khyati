@@ -155,7 +155,7 @@ def test_newhire_production_feeds_ramp():
         [HiringBatch(hire_date=date(2026, 1, 10), planned_hires=20)],
         hiring_throughput=0.9, training_throughput=0.95, training_days=21, nesting_days=9)
     assert prod == {"2026-02": 17.0}
-    table = build_capacity_table(agents, "X", months, {m: 0 for m in months}, cfg,
+    table = build_capacity_table(agents, "X", months, dict.fromkeys(months, 0), cfg,
                                  newhire_production_by_month=prod)
     ramp = table.row("ramp")
     # Jan: roster ramp = 1 (actual). Feb: 1×(1−attr) + 17 new-hire production
