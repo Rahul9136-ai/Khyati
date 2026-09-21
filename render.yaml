@@ -1,0 +1,51 @@
+# Render Blueprint — one-click deploy of the FlowForce WFM backend + Postgres.
+# https://render.com/docs/blueprint-spec  · deploy: https://dashboard.render.com/blueprints
+#
+# After this backend is live, deploy the frontend on Vercel (see DEPLOY.md) and
+# set BACKEND_CORS_ORIGINS / APP_WEB_URL here to your Vercel URL.
+
+databases:
+  - name: khyati-db
+    plan: free
+    databaseName: wfm
+    user: wfm
+
+services:
+  - type: web
+    name: khyati-backend
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/v1/health
+    # Bind uvicorn to Render's $PORT; run migrations then seed demo data
+    # (the seeder is idempotent — it skips if the demo org already exists).
+    dockerCommand: >-
+      sh -c "alembic upgrade head &&
+      python -m app.db.seed &&
+      uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: DB_BACKEND
+        value: postgres
+      - key: POSTGRES_HOST
+        fromDatabase: { name: khyati-db, property: host }
+      - key: POSTGRES_PORT
+        fromDatabase: { name: khyati-db, property: port }
+      - key: POSTGRES_USER
+        fromDatabase: { name: khyati-db, property: user }
+      - key: POSTGRES_PASSWORD
+        fromDatabase: { name: khyati-db, property: password }
+      - key: POSTGRES_DB
+        fromDatabase: { name: khyati-db, property: database }
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      # Set these to your Vercel frontend URL after deploying it (no trailing slash):
+      - key: BACKEND_CORS_ORIGINS
+        sync: false
+      - key: APP_WEB_URL
+        sync: false
