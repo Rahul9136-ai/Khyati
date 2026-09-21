@@ -190,7 +190,7 @@ export function Planning() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="newhire">{lobId && <NewHireTab lobId={lobId} />}</TabsContent>
+        <TabsContent value="newhire">{lobId && <NewHireTab lobId={lobId} capacity={table} />}</TabsContent>
         <TabsContent value="movement">{lobId && <MovementTab lobId={lobId} lobs={lobs} />}</TabsContent>
 
         <TabsContent value="summary">
