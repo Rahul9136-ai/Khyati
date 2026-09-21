@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-sonnet-5"
 
+    # --- Public URLs (Slack/Teams approval-bridge callbacks + deep links) ---
+    # API base the messaging platforms POST their button callbacks back to.
+    APP_PUBLIC_URL: str = "http://localhost:8000"
+    # Web app base used for deep links in Slack/Teams cards ("Open in FlowForce").
+    APP_WEB_URL: str = "http://localhost:5173"
+
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
     def _split_origins(cls, v: str | list[str]) -> list[str]:

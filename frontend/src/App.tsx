@@ -5,6 +5,7 @@ import { AuthGate } from "@/components/auth-gate"
 import { AppShell } from "@/components/layout/app-shell"
 import { RoleGuard } from "@/components/role-guard"
 import { Adherence } from "@/pages/Adherence"
+import { Approvals } from "@/pages/Approvals"
 import { Audit } from "@/pages/Audit"
 import { Automation } from "@/pages/Automation"
 import { Autonomy } from "@/pages/Autonomy"
@@ -16,6 +17,7 @@ import { Erlang } from "@/pages/Erlang"
 import { Forecasting } from "@/pages/Forecasting"
 import { Help } from "@/pages/Help"
 import { Intraday } from "@/pages/Intraday"
+import { Planning } from "@/pages/Planning"
 import { Pto } from "@/pages/Pto"
 import { Reports } from "@/pages/Reports"
 import { Rta } from "@/pages/Rta"
@@ -38,10 +40,12 @@ export default function App() {
         <Route path="/erlang" element={<RoleGuard module="erlang"><Erlang /></RoleGuard>} />
         <Route path="/scenarios" element={<RoleGuard module="scenarios"><Scenarios /></RoleGuard>} />
         <Route path="/scheduling" element={<RoleGuard module="scheduling"><Scheduling /></RoleGuard>} />
+        <Route path="/planning" element={<RoleGuard module="planning"><Planning /></RoleGuard>} />
         <Route path="/shift-patterns" element={<RoleGuard module="shiftPatterns"><ShiftPatterns /></RoleGuard>} />
         <Route path="/swaps" element={<RoleGuard module="swaps"><Swaps /></RoleGuard>} />
         <Route path="/intraday" element={<RoleGuard module="intraday"><Intraday /></RoleGuard>} />
         <Route path="/rta" element={<RoleGuard module="realtime"><Rta /></RoleGuard>} />
+        <Route path="/approvals" element={<RoleGuard module="approvals"><Approvals /></RoleGuard>} />
         <Route path="/adherence" element={<RoleGuard module="adherence"><Adherence /></RoleGuard>} />
         <Route path="/automation" element={<RoleGuard module="automation"><Automation /></RoleGuard>} />
         <Route path="/autonomy" element={<RoleGuard module="automation"><Autonomy /></RoleGuard>} />

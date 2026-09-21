@@ -14,6 +14,9 @@ PERMISSIONS: dict[str, str] = {
     # capacity planning
     "plan:read": "View capacity plans and Erlang calculators",
     "plan:write": "Create and edit capacity plans / scenarios",
+    # headcount planning (AGS Health CP model)
+    "planning:read": "View HC planning (capacity, new hire, movement)",
+    "planning:write": "Edit HC planning inputs, demand and assumptions",
     # scheduling
     "schedule:read": "View schedules",
     "schedule:write": "Create and edit schedules and shift templates",
@@ -43,6 +46,8 @@ PERMISSIONS: dict[str, str] = {
     # autonomous agents
     "agent:read": "View autonomous agent activity and decisions",
     "agent:manage": "Run agents, govern autonomy policy, approve/reject actions",
+    # integrations (Slack/Teams approval bridge)
+    "integration:manage": "Connect and configure Slack/Teams approval channels",
     # misc
     "audit:read": "View audit logs",
     "ai:use": "Use AI assistant features",
@@ -57,6 +62,7 @@ ROLE_MATRIX: dict[str, list[str]] = {
     "Planning Manager": [
         "forecast:read", "forecast:write", "forecast:approve",
         "plan:read", "plan:write",
+        "planning:read", "planning:write",
         "schedule:read", "intraday:read",
         "request:read", "request:approve_wfm",
         "attendance:read", "employee:read",
@@ -89,6 +95,7 @@ ROLE_MATRIX: dict[str, list[str]] = {
     ],
     "Operations Manager": [
         "request:read", "request:create", "request:approve_manager",
+        "planning:read",
         "schedule:read", "intraday:read",
         "attendance:read", "employee:read",
         "report:read", "report:export",

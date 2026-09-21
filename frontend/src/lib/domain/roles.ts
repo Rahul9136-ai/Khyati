@@ -37,10 +37,12 @@ export const MODULES: ModuleDef[] = [
   { id: "erlang", label: "Erlang Calculator" },
   { id: "scenarios", label: "Scenario Studio" },
   { id: "scheduling", label: "Scheduling" },
+  { id: "planning", label: "Planning" },
   { id: "shiftPatterns", label: "Shift Patterns" },
   { id: "swaps", label: "Shift Swaps" },
   { id: "intraday", label: "Intraday" },
   { id: "realtime", label: "Real-Time Monitor" },
+  { id: "approvals", label: "Approval Bridge" },
   { id: "adherence", label: "Adherence" },
   { id: "automation", label: "Automation" },
   { id: "help", label: "Methodology" },
@@ -64,56 +66,56 @@ const N: AccessLevel = "none"
 // real contact-centre WFM org is actually structured.
 export const DEFAULT_PERMISSIONS: PermissionMatrix = {
   "Super Admin": {
-    dashboard: E, forecasting: E, capacity: E, erlang: E, scenarios: E, scheduling: E, shiftPatterns: E, swaps: E,
-    intraday: E, realtime: E, adherence: E, automation: E, help: V, employees: E, skills: E, pto: E, reports: E, copilot: E, audit: E, settings: E,
+    dashboard: E, forecasting: E, capacity: E, erlang: E, scenarios: E, scheduling: E, planning: E, shiftPatterns: E, swaps: E,
+    intraday: E, realtime: E, approvals: E, adherence: E, automation: E, help: V, employees: E, skills: E, pto: E, reports: E, copilot: E, audit: E, settings: E,
   },
   "Business Admin": {
-    dashboard: E, forecasting: E, capacity: E, erlang: E, scenarios: E, scheduling: E, shiftPatterns: E, swaps: V,
-    intraday: E, realtime: E, adherence: E, automation: E, help: V, employees: E, skills: E, pto: E, reports: E, copilot: E, audit: V, settings: E,
+    dashboard: E, forecasting: E, capacity: E, erlang: E, scenarios: E, scheduling: E, planning: E, shiftPatterns: E, swaps: V,
+    intraday: E, realtime: E, approvals: E, adherence: E, automation: E, help: V, employees: E, skills: E, pto: E, reports: E, copilot: E, audit: V, settings: E,
   },
   "WFM Director": {
-    dashboard: E, forecasting: E, capacity: E, erlang: E, scenarios: E, scheduling: E, shiftPatterns: E, swaps: V,
-    intraday: V, realtime: V, adherence: V, automation: V, help: V, employees: E, skills: E, pto: E, reports: E, copilot: E, audit: V, settings: N,
+    dashboard: E, forecasting: E, capacity: E, erlang: E, scenarios: E, scheduling: E, planning: E, shiftPatterns: E, swaps: V,
+    intraday: V, realtime: V, approvals: V, adherence: V, automation: V, help: V, employees: E, skills: E, pto: E, reports: E, copilot: E, audit: V, settings: N,
   },
   "WFM Manager": {
-    dashboard: E, forecasting: E, capacity: E, erlang: E, scenarios: E, scheduling: E, shiftPatterns: E, swaps: E,
-    intraday: V, realtime: V, adherence: V, automation: E, help: V, employees: V, skills: V, pto: E, reports: E, copilot: E, audit: V, settings: N,
+    dashboard: E, forecasting: E, capacity: E, erlang: E, scenarios: E, scheduling: E, planning: E, shiftPatterns: E, swaps: E,
+    intraday: V, realtime: V, approvals: E, adherence: V, automation: E, help: V, employees: V, skills: V, pto: E, reports: E, copilot: E, audit: V, settings: N,
   },
   "Forecasting Manager": {
-    dashboard: V, forecasting: E, capacity: E, erlang: E, scenarios: E, scheduling: V, shiftPatterns: N, swaps: N,
-    intraday: V, realtime: N, adherence: N, automation: V, help: V, employees: N, skills: N, pto: N, reports: V, copilot: E, audit: N, settings: N,
+    dashboard: V, forecasting: E, capacity: E, erlang: E, scenarios: E, scheduling: V, planning: V, shiftPatterns: N, swaps: N,
+    intraday: V, realtime: N, approvals: N, adherence: N, automation: V, help: V, employees: N, skills: N, pto: N, reports: V, copilot: E, audit: N, settings: N,
   },
   Planner: {
-    dashboard: V, forecasting: V, capacity: E, erlang: E, scenarios: E, scheduling: E, shiftPatterns: E, swaps: V,
-    intraday: V, realtime: N, adherence: V, automation: V, help: V, employees: V, skills: V, pto: V, reports: V, copilot: V, audit: N, settings: N,
+    dashboard: V, forecasting: V, capacity: E, erlang: E, scenarios: E, scheduling: E, planning: E, shiftPatterns: E, swaps: V,
+    intraday: V, realtime: N, approvals: V, adherence: V, automation: V, help: V, employees: V, skills: V, pto: V, reports: V, copilot: V, audit: N, settings: N,
   },
   Scheduler: {
-    dashboard: V, forecasting: N, capacity: V, erlang: N, scenarios: V, scheduling: E, shiftPatterns: E, swaps: E,
-    intraday: V, realtime: N, adherence: V, automation: N, help: V, employees: V, skills: V, pto: V, reports: V, copilot: N, audit: N, settings: N,
+    dashboard: V, forecasting: N, capacity: V, erlang: N, scenarios: V, scheduling: E, planning: E, shiftPatterns: E, swaps: E,
+    intraday: V, realtime: N, approvals: E, adherence: V, automation: N, help: V, employees: V, skills: V, pto: V, reports: V, copilot: N, audit: N, settings: N,
   },
   RTA: {
-    dashboard: V, forecasting: N, capacity: N, erlang: N, scenarios: N, scheduling: V, shiftPatterns: N, swaps: V,
-    intraday: E, realtime: E, adherence: E, automation: V, help: V, employees: V, skills: N, pto: N, reports: V, copilot: N, audit: N, settings: N,
+    dashboard: V, forecasting: N, capacity: N, erlang: N, scenarios: N, scheduling: V, planning: V, shiftPatterns: N, swaps: V,
+    intraday: E, realtime: E, approvals: E, adherence: E, automation: V, help: V, employees: V, skills: N, pto: N, reports: V, copilot: N, audit: N, settings: N,
   },
   "Team Leader": {
-    dashboard: V, forecasting: N, capacity: N, erlang: N, scenarios: N, scheduling: V, shiftPatterns: N, swaps: E,
-    intraday: V, realtime: E, adherence: V, automation: N, help: V, employees: V, skills: E, pto: E, reports: V, copilot: N, audit: N, settings: N,
+    dashboard: V, forecasting: N, capacity: N, erlang: N, scenarios: N, scheduling: V, planning: N, shiftPatterns: N, swaps: E,
+    intraday: V, realtime: E, approvals: E, adherence: V, automation: N, help: V, employees: V, skills: E, pto: E, reports: V, copilot: N, audit: N, settings: N,
   },
   "Operations Manager": {
-    dashboard: E, forecasting: V, capacity: V, erlang: N, scenarios: V, scheduling: V, shiftPatterns: N, swaps: E,
-    intraday: V, realtime: E, adherence: E, automation: V, help: V, employees: V, skills: V, pto: E, reports: E, copilot: V, audit: V, settings: N,
+    dashboard: E, forecasting: V, capacity: V, erlang: N, scenarios: V, scheduling: V, planning: V, shiftPatterns: N, swaps: E,
+    intraday: V, realtime: E, approvals: E, adherence: E, automation: V, help: V, employees: V, skills: V, pto: E, reports: E, copilot: V, audit: V, settings: N,
   },
   // Agent's pto/swaps are view-level by design: they can always create their
   // own PTO request / propose their own swap (self-service, gated in-page by
   // role rather than this matrix), but must NOT satisfy the edit-level check
   // that unlocks approving/denying *other* agents' requests.
   Agent: {
-    dashboard: V, forecasting: N, capacity: N, erlang: N, scenarios: N, scheduling: V, shiftPatterns: N, swaps: V,
-    intraday: N, realtime: N, adherence: N, automation: N, help: V, employees: N, skills: N, pto: V, reports: N, copilot: N, audit: N, settings: N,
+    dashboard: V, forecasting: N, capacity: N, erlang: N, scenarios: N, scheduling: V, planning: N, shiftPatterns: N, swaps: V,
+    intraday: N, realtime: N, approvals: N, adherence: N, automation: N, help: V, employees: N, skills: N, pto: V, reports: N, copilot: N, audit: N, settings: N,
   },
   "Read-Only Viewer": {
-    dashboard: V, forecasting: V, capacity: V, erlang: V, scenarios: V, scheduling: V, shiftPatterns: V, swaps: V,
-    intraday: V, realtime: V, adherence: V, automation: V, help: V, employees: V, skills: V, pto: V, reports: V, copilot: V, audit: V, settings: N,
+    dashboard: V, forecasting: V, capacity: V, erlang: V, scenarios: V, scheduling: V, planning: V, shiftPatterns: V, swaps: V,
+    intraday: V, realtime: V, approvals: V, adherence: V, automation: V, help: V, employees: V, skills: V, pto: V, reports: V, copilot: V, audit: V, settings: N,
   },
 }
 

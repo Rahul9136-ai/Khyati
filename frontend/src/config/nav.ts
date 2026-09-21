@@ -4,11 +4,13 @@ import {
   BookOpenText,
   Bot,
   CalendarClock,
+  CheckCheck,
   CalendarRange,
   Calculator,
   ClipboardCheck,
   Clock,
   FlaskConical,
+  Gauge,
   History,
   LayoutDashboard,
   Repeat,
@@ -54,10 +56,17 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
+    group: "Planning",
+    items: [
+      { to: "/planning", label: "Planning", icon: Gauge, module: "planning" },
+    ],
+  },
+  {
     group: "Operate",
     items: [
       { to: "/intraday", label: "Intraday", icon: Clock, module: "intraday" },
       { to: "/rta", label: "Real-Time Monitor", icon: Activity, module: "realtime" },
+      { to: "/approvals", label: "Approval Bridge", icon: CheckCheck, module: "approvals" },
       { to: "/adherence", label: "Adherence", icon: ClipboardCheck, module: "adherence" },
       { to: "/automation", label: "Automation Center", icon: Workflow, module: "automation" },
       { to: "/autonomy", label: "Autonomous Agents", icon: Bot, module: "automation" },
