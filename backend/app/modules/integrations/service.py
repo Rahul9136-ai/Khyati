@@ -9,13 +9,16 @@ approval's timeline and the global audit trail.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import NotFoundError, PermissionDeniedError, ValidationError
+from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError, ValidationError
+from app.modules.ai import schedule_parser
+from app.modules.attendance.schemas import RecordIn
+from app.modules.attendance.service import create_record, delete_record, find_code_by_category, find_record
 from app.modules.identity.models import Role, User, user_roles
 from app.modules.identity.service import record_audit
 from app.modules.integrations.adapters import SlackAdapter, TeamsAdapter, kind_label
@@ -30,6 +33,7 @@ from app.modules.integrations.models import (
 from app.modules.integrations.schemas import ApprovalCreate, IntegrationConfigIn
 from app.modules.notifications.service import notify_employees, notify_user
 from app.modules.scheduling.models import ScheduleShift
+from app.modules.scheduling.service import find_shift_for_employee_on_date
 from app.modules.workforce.models import Employee
 
 # OM sign-off reuses the existing "operations manager" approval permission.
@@ -131,8 +135,11 @@ def _log_event(
 
 
 async def create_approval(
-    db: AsyncSession, org_id: uuid.UUID, payload: ApprovalCreate, *, actor: User
+    db: AsyncSession, org_id: uuid.UUID, payload: ApprovalCreate, *, actor: User | None
 ) -> ApprovalRequest:
+    """`actor` is None for an approval raised by the inbound automation (no human in
+    the loop yet) — the audit trail then reads "system", same as any other
+    unattended action (see `record_audit`)."""
     if payload.source not in SOURCES:
         raise ValidationError(f"Unknown source '{payload.source}'")
     if payload.kind not in KINDS:
@@ -157,12 +164,12 @@ async def create_approval(
         assigned_om_id=om.id if om else None,
         employee_id=payload.employee_id,
         queue_id=payload.queue_id,
-        requested_by=actor.id,
+        requested_by=actor.id if actor else None,
         expires_at=datetime.now(UTC) + timedelta(hours=APPROVAL_TTL_HOURS),
     )
     db.add(approval)
     await db.flush()
-    _log_event(db, approval, "created", actor_email=actor.email,
+    _log_event(db, approval, "created", actor_email=actor.email if actor else "system",
                detail=f"{kind_label(payload.kind)} raised from {payload.source}")
 
     await _dispatch(db, approval, config, requested=payload.channels)
@@ -274,19 +281,20 @@ async def decide_approval(
     return approval
 
 
-async def _apply(db: AsyncSession, approval: ApprovalRequest, *, actor: User) -> None:
+async def _apply(db: AsyncSession, approval: ApprovalRequest, *, actor: User | None) -> None:
     """Apply the approved change to the live plan.
 
-    Where the payload names a concrete `shift_id`, the schedule is really
-    mutated; other kinds record an applied decision on the timeline + audit
-    trail (the hook the downstream module reads).
+    Where the payload names (or resolves to) a concrete `shift_id`, or the kind is
+    a leave/absence mark, the schedule is really mutated; other kinds record an
+    applied decision on the timeline + audit trail (the hook the downstream module
+    reads). `actor` is None when nothing decided this except the automation policy.
     """
     try:
         result = await _apply_change(db, approval)
         approval.status = "applied"
         approval.applied_at = datetime.now(UTC)
         approval.apply_result = result
-        _log_event(db, approval, "applied", actor_email=actor.email,
+        _log_event(db, approval, "applied", actor_email=actor.email if actor else "system",
                    detail=result.get("detail", "applied"))
         await record_audit(
             db, actor=actor, action="approval.apply", entity_type="approval_request",
@@ -296,6 +304,40 @@ async def _apply(db: AsyncSession, approval: ApprovalRequest, *, actor: User) ->
         approval.status = "failed"
         approval.apply_result = {"error": str(exc)}
         _log_event(db, approval, "failed", detail=f"apply failed: {exc}")
+
+
+async def auto_decide_and_apply(db: AsyncSession, approval: ApprovalRequest, *, note: str) -> ApprovalRequest:
+    """Apply an approval with no human decision — the confidence-gated automation
+    policy's own sign-off, not an Operations Manager's. Logged like a real decision
+    (`decided_via="auto"`) so it's indistinguishable in the audit trail except for
+    who's on record as deciding it.
+
+    If the apply itself fails (e.g. the message named a day with no matching shift),
+    the approval is left `pending` rather than `failed` — "the automation couldn't
+    resolve this" is a reason to ask a human, not to drop the request.
+    """
+    now = datetime.now(UTC)
+    approval.decided_by = None
+    approval.decided_at = now
+    approval.decided_via = "auto"
+    approval.decision_note = note
+    approval.status = "approved"
+    _log_event(db, approval, "approved", channel="auto", actor_email="system", detail=note)
+    await record_audit(
+        db, actor=None, action="approval.approve", entity_type="approval_request",
+        entity_id=approval.id, after={"status": "approved", "via": "auto"}, note=note,
+    )
+
+    await _apply(db, approval, actor=None)
+    if approval.status == "failed":
+        reason = (approval.apply_result or {}).get("error", "unknown error")
+        approval.status = "pending"
+        approval.decision_note = f"Auto-apply attempted but failed ({reason}) — routed back for manual approval"
+        _log_event(db, approval, "note", detail=approval.decision_note)
+
+    await db.flush()
+    await db.refresh(approval, ["events"])
+    return approval
 
 
 async def _apply_change(db: AsyncSession, approval: ApprovalRequest) -> dict:
@@ -309,28 +351,16 @@ async def _apply_change(db: AsyncSession, approval: ApprovalRequest) -> dict:
         shift = await db.get(ScheduleShift, uuid.UUID(str(shift_id)))
         if shift is None:
             raise NotFoundError("Target shift not found")
-        before = {
-            "start_ts": shift.start_ts.isoformat() if shift.start_ts else None,
-            "end_ts": shift.end_ts.isoformat() if shift.end_ts else None,
-            "activities": list(shift.activities or []),
-        }
-        if payload.get("new_start_ts"):
-            shift.start_ts = datetime.fromisoformat(payload["new_start_ts"])
-        if payload.get("new_end_ts"):
-            shift.end_ts = datetime.fromisoformat(payload["new_end_ts"])
-        if payload.get("activities") is not None:
-            shift.activities = payload["activities"]
-        await db.flush()
-        return {
-            "applied": approval.kind, "shift_id": str(shift.id),
-            "before": before,
-            "after": {
-                "start_ts": shift.start_ts.isoformat() if shift.start_ts else None,
-                "end_ts": shift.end_ts.isoformat() if shift.end_ts else None,
-                "activities": list(shift.activities or []),
-            },
-            "detail": f"{kind_label(approval.kind)} applied to shift {shift.id}",
-        }
+        return await _apply_shift_change(shift, approval, payload)
+
+    # "Change Shift Timing" raised with no `shift_id` — an automated command only
+    # ever knows *who* and *when*, not which roster row that is; resolve it here.
+    if approval.kind == "shift_change" and not shift_id and approval.employee_id and payload.get("date"):
+        day = date.fromisoformat(payload["date"])
+        shift = await find_shift_for_employee_on_date(db, approval.organization_id, approval.employee_id, day)
+        if shift is None:
+            raise NotFoundError(f"No shift found for this employee on {day.isoformat()}")
+        return await _apply_shift_change(shift, approval, payload)
 
     # Swap two employees between two shifts when both are supplied.
     if (approval.kind == "shift_swap"
@@ -344,12 +374,91 @@ async def _apply_change(db: AsyncSession, approval: ApprovalRequest) -> dict:
         return {"applied": "shift_swap", "shifts": [str(a.id), str(b.id)],
                 "detail": "Swapped employees between the two shifts"}
 
+    if approval.kind in ("leave_mark", "leave_cancel", "absence_mark"):
+        return await _apply_leave_or_absence(db, approval, payload)
+
     # Kinds without a direct roster target: record the decision as the applied hook.
     return {
         "applied": approval.kind, "target": "recorded",
         "payload": payload,
         "detail": f"{kind_label(approval.kind)} approved and recorded for downstream execution",
     }
+
+
+async def _apply_shift_change(shift: ScheduleShift, approval: ApprovalRequest, payload: dict) -> dict:
+    before = {
+        "start_ts": shift.start_ts.isoformat() if shift.start_ts else None,
+        "end_ts": shift.end_ts.isoformat() if shift.end_ts else None,
+        "activities": list(shift.activities or []),
+    }
+    # an automated command resolves to minutes-since-midnight on the shift's own day
+    # (see schedule_parser.resolve_clock_range); the in-app raise dialog can instead
+    # give exact timestamps directly.
+    start_min, end_min = payload.get("new_start_minutes"), payload.get("new_end_minutes")
+    if start_min is not None and end_min is not None:
+        midnight = datetime.combine(shift.day, time(0, 0), tzinfo=UTC)
+        shift.start_ts = midnight + timedelta(minutes=start_min)
+        shift.end_ts = midnight + timedelta(minutes=end_min)
+    else:
+        if payload.get("new_start_ts"):
+            shift.start_ts = datetime.fromisoformat(payload["new_start_ts"])
+        if payload.get("new_end_ts"):
+            shift.end_ts = datetime.fromisoformat(payload["new_end_ts"])
+    if payload.get("activities") is not None:
+        shift.activities = payload["activities"]
+    if shift.end_ts <= shift.start_ts:
+        raise ValidationError("Resolved shift end is not after its start")
+    return {
+        "applied": approval.kind, "shift_id": str(shift.id),
+        "before": before,
+        "after": {
+            "start_ts": shift.start_ts.isoformat() if shift.start_ts else None,
+            "end_ts": shift.end_ts.isoformat() if shift.end_ts else None,
+            "activities": list(shift.activities or []),
+        },
+        "detail": f"{kind_label(approval.kind)} applied to shift {shift.id}",
+    }
+
+
+async def _apply_leave_or_absence(db: AsyncSession, approval: ApprovalRequest, payload: dict) -> dict:
+    if not approval.employee_id:
+        raise ValidationError("No matched employee to apply this to")
+    if not payload.get("date"):
+        raise ValidationError("No single resolvable date to apply this to")
+    day = date.fromisoformat(payload["date"])
+    org_id = approval.organization_id
+    employee_id = approval.employee_id
+
+    if approval.kind == "leave_cancel":
+        record = await find_record(db, org_id, employee_id, day, schedule_parser.LEAVE_CATEGORIES)
+        if record is None:
+            raise NotFoundError(f"No leave record found for {day.isoformat()} to cancel")
+        await delete_record(db, record.id, actor=None)
+        return {"applied": "leave_cancel", "employee_id": str(employee_id), "date": payload["date"],
+                "detail": f"Cancelled the leave record for {day.isoformat()}"}
+
+    categories = (
+        schedule_parser.LEAVE_CATEGORIES if approval.kind == "leave_mark"
+        else schedule_parser.absence_categories(payload.get("raw_message", ""))
+    )
+    code = await find_code_by_category(db, org_id, categories)
+    if code is None:
+        raise ValidationError(f"No attendance code configured for category in {categories}")
+    existing = await find_record(db, org_id, employee_id, day, [code.category])
+    if existing:  # already marked — idempotent, not a failure (e.g. a repeated message)
+        return {"applied": approval.kind, "employee_id": str(employee_id), "date": payload["date"],
+                "code": code.code, "detail": f"Already recorded as {code.name} for {day.isoformat()}"}
+    try:
+        record = await create_record(
+            db, org_id, RecordIn(employee_id=employee_id, code_id=code.id, day=day),
+            actor=None, source="automation",
+        )
+    except ConflictError:
+        return {"applied": approval.kind, "employee_id": str(employee_id), "date": payload["date"],
+                "code": code.code, "detail": f"Already recorded as {code.name} for {day.isoformat()}"}
+    return {"applied": approval.kind, "employee_id": str(employee_id), "date": payload["date"],
+            "record_id": str(record.id), "code": code.code,
+            "detail": f"Recorded {code.name} for {day.isoformat()}"}
 
 
 # --------------------------------------------------------------------------- #

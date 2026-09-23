@@ -8,6 +8,7 @@ production to Ramp.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from app.modules.hcplanning.engine.agents import (
@@ -28,6 +29,12 @@ def required_hc(billable_fte: float, ooo_shrinkage: float, io_shrinkage: float) 
     if denom <= 0:
         raise ValueError("Combined shrinkage must be < 100%")
     return billable_fte / denom
+
+
+def whole_hc(value: float) -> int:
+    """Round up to a whole number, away from zero (Excel ROUNDUP). The 1e-6 pre-round
+    absorbs float noise so an exact 17.000000000000004 doesn't become 18."""
+    return int(math.copysign(math.ceil(round(abs(value), 6)), value))
 
 
 def production_agents(counts: dict[str, float], cfg: PlanningConfig) -> float:
@@ -177,8 +184,27 @@ def build_capacity_table(
         closing = override if override is not None else fte_ramp
 
         billable = billable_by_month.get(month, 0.0)
+        if cfg.whole_headcount:
+            billable = whole_hc(billable)  # demand is planned in whole FTE; Required HC is derived from it
         req = required_hc(billable, cfg.ooo(month), cfg.io(month))
+        util = overall_utilization(billable, prod_agents)
+        prod_util = productive_utilization(billable, counts, fte, ramp, cfg)
+        buf = buffer_pct(prod_agents, billable)
+        hc_vs_billable = prod_agents - billable
+
+        # Report whole people: round up at the output only (the projection above stays
+        # unrounded so attrition compounds correctly). Everything derived from
+        # Required / Closing — capacity %, excess/deficit, OT/VTO — uses the rounded
+        # figures so the table reads consistently. Ratios (utilisation, buffer) come
+        # from the raw counts.
+        if cfg.whole_headcount:
+            req, closing, prod_agents, fte_ramp = (whole_hc(x) for x in (req, closing, prod_agents, fte_ramp))
+            hc_vs_billable = whole_hc(hc_vs_billable)
+            cat = {k: whole_hc(v) for k, v in cat.items()}
         excess = excess_deficit(closing, req)
+        ot_vto = ot_vto_hours(excess, cfg.weekly_hours)
+        if cfg.whole_headcount:
+            ot_vto = whole_hc(ot_vto)
         mix = resource_mix(agents, lob, month, cfg)
 
         table.results.append(MonthResult(
@@ -191,11 +217,11 @@ def build_capacity_table(
             closing_overridden=override is not None,
             capacity_pct=capacity_pct(closing, req),
             excess_deficit=excess,
-            ot_vto_hours=ot_vto_hours(excess, cfg.weekly_hours),
-            overall_utilization=overall_utilization(billable, prod_agents),
-            productive_utilization=productive_utilization(billable, counts, fte, ramp, cfg),
-            buffer_pct=buffer_pct(prod_agents, billable),
-            headcount_vs_billable=prod_agents - billable,
+            ot_vto_hours=ot_vto,
+            overall_utilization=util,
+            productive_utilization=prod_util,
+            buffer_pct=buf,
+            headcount_vs_billable=hc_vs_billable,
             req_hc_vs_actual=excess,
             fresher_lt_1yr=mix["fresher_lt_1yr"],
             lateral_gt_1yr=mix["lateral_gt_1yr"],

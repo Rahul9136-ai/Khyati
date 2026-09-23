@@ -5,6 +5,7 @@ import { AiSummary } from "@/components/ai-summary"
 import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
+import { ScheduleRequestCard } from "@/components/schedule-request-card"
 import { PermissionGate } from "@/components/permission-gate"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -155,6 +156,8 @@ export function Rta() {
           </>
         }
       />
+
+      <ScheduleRequestCard source="intraday" />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <KpiCard label="Adherence" value={fmtPct(stats.adherence)} hint={`${stats.inAdh}/${stats.total} on plan`} tone={stats.adherence >= thresholds.adherenceTarget ? "good" : stats.adherence >= 0.8 ? "warn" : "bad"} icon={Activity} />

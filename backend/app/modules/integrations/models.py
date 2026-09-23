@@ -38,6 +38,8 @@ KINDS = (
     "overtime", "vto", "reforecast_publish", "break_recovery", "skill_rebalance",
     # scheduling
     "shift_change", "break_move", "shift_swap", "extra_shift",
+    # raised from a parsed schedule-change message (either tab)
+    "leave_mark", "leave_cancel", "absence_mark", "schedule_request",
 )
 
 # Lifecycle: pending → approved/rejected; approved → applied (or failed).
@@ -70,6 +72,22 @@ class IntegrationConfig(UUIDMixin, TenantMixin, TimestampMixin, Base):
     default_approver_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     # apply the change automatically the moment the OM approves
     auto_apply_on_approve: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # --- inbound automation: @mention the bot in a designated channel to raise
+    # (and, above the confidence threshold, immediately apply) a schedule-change
+    # request with no human pasting the message into the app. ---
+    automation_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # "High" ⇒ only High-confidence parses auto-apply (Medium/Low still go to the OM).
+    # "Medium" ⇒ High and Medium auto-apply. "Off" ⇒ never auto-apply, even if enabled
+    # (messages are still auto-parsed and raised for approval — see automation.py).
+    auto_apply_min_confidence: Mapped[str] = mapped_column(String(8), default="High")
+    slack_command_channel: Mapped[str] = mapped_column(String(128), default="")
+    teams_command_channel: Mapped[str] = mapped_column(String(256), default="")
+    # optional Azure Bot Framework app registration, for a REAL Teams reply;
+    # blank ⇒ the reply is simulated (recorded, not sent) like the rest of the
+    # Teams integration when it isn't fully configured.
+    teams_app_id: Mapped[str] = mapped_column(String(128), default="")
+    teams_app_password: Mapped[str] = mapped_column(String(256), default="")
 
     @property
     def any_channel_live(self) -> bool:

@@ -1,5 +1,5 @@
 import { LogOut, Search } from "lucide-react"
-import { NavLink } from "react-router-dom"
+import { NavLink, useLocation } from "react-router-dom"
 
 import { MessagePopup } from "@/components/layout/message-popup"
 import { NotificationsBell } from "@/components/layout/notifications-bell"
@@ -10,6 +10,7 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import { Select } from "@/components/ui/select"
 import { NAV } from "@/config/nav"
 import { initialsOf } from "@/lib/auth"
+import { METHODS } from "@/lib/domain/forecast"
 import type { ModuleId } from "@/lib/domain/roles"
 import { effectiveLevel, ROLES } from "@/lib/domain/roles"
 import { cn } from "@/lib/utils"
@@ -26,6 +27,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const user = useAuth((s) => s.user)
   const logout = useAuth((s) => s.logout)
   const visible = (moduleId: ModuleId) => effectiveLevel(permissions, currentRole, moduleId) !== "none"
+  const location = useLocation()
+  const activeTab = new URLSearchParams(location.search).get("tab") ?? "capacity"
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -48,24 +51,48 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
                   {g.group}
                 </p>
-                {items.map((it) => (
-                  <NavLink
-                    key={it.to}
-                    to={it.to}
-                    end={it.to === "/"}
-                    className={({ isActive }) =>
-                      cn(
-                        "mb-0.5 flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                        isActive
-                          ? "bg-primary/15 text-primary"
-                          : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                      )
-                    }
-                  >
-                    <it.icon className="h-4 w-4" />
-                    {it.label}
-                  </NavLink>
-                ))}
+                {items.map((it) => {
+                  const onThisPage = location.pathname === it.to
+                  return (
+                    <div key={it.to}>
+                      <NavLink
+                        to={it.to}
+                        end={it.to === "/"}
+                        className={({ isActive }) =>
+                          cn(
+                            "mb-0.5 flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                            isActive
+                              ? "bg-primary/15 text-primary"
+                              : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                          )
+                        }
+                      >
+                        <it.icon className="h-4 w-4" />
+                        {it.label}
+                      </NavLink>
+                      {/* Sub-sections (e.g. Capacity Planning's four tabs) appear once
+                          you're on that page, so clicking the parent surfaces them. */}
+                      {it.children && onThisPage && (
+                        <div className="mb-0.5 ml-4 border-l pl-3">
+                          {it.children.map((child) => (
+                            <NavLink
+                              key={child.to}
+                              to={child.to}
+                              className={cn(
+                                "mb-0.5 block rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                                activeTab === child.tab
+                                  ? "bg-primary/15 text-primary"
+                                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                              )}
+                            >
+                              {child.label}
+                            </NavLink>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )
           })}
@@ -73,7 +100,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="border-t p-4 text-[11px] text-muted-foreground">
           Powered by FlowForce WFM
           <br />
-          v0.1 · Erlang-C engine · 5 models
+          v0.1 · Erlang-C engine · {METHODS.length} models
         </div>
       </aside>
 

@@ -44,7 +44,7 @@ export function Copilot() {
     }
     if (t.includes("model") || t.includes("forecast") || t.includes("accurate") || t.includes("mape")) {
       const lines = perQueue.map((x) => `${x.q.name}: ${x.bt.best.name} (${fmtPct(x.bt.best.mape)} MAPE)`)
-      return `Most accurate model per queue right now —\n• ${lines.join("\n• ")}.\nStatistical models win on stable day-totals; ML (LinReg) captures trend on longer horizons.`
+      return `Most accurate model per queue right now —\n• ${lines.join("\n• ")}.\nStatistical, ML and deep-learning models all compete; the lowest back-test MAPE is applied.`
     }
     if (t.includes("hire") || t.includes("capacity") || t.includes("fte")) {
       const req = perQueue.reduce((a, x) => a + x.sum.reqHours, 0)

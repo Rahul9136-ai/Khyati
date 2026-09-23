@@ -54,6 +54,13 @@ export interface IntegrationConfig {
   default_approver_id: string | null
   auto_apply_on_approve: boolean
   any_channel_live: boolean
+  // inbound automation — see AutomationSettings
+  automation_enabled: boolean
+  auto_apply_min_confidence: "High" | "Medium" | "Off"
+  slack_command_channel: string
+  teams_command_channel: string
+  teams_app_id_set: boolean
+  teams_app_password_set: boolean
 }
 
 export interface ConfigPatch {
@@ -66,6 +73,12 @@ export interface ConfigPatch {
   teams_webhook_url?: string
   teams_security_token?: string
   auto_apply_on_approve?: boolean
+  automation_enabled?: boolean
+  auto_apply_min_confidence?: "High" | "Medium" | "Off"
+  slack_command_channel?: string
+  teams_command_channel?: string
+  teams_app_id?: string
+  teams_app_password?: string
 }
 
 export interface RaiseApproval {
@@ -75,7 +88,16 @@ export interface RaiseApproval {
   summary?: string
   payload?: Record<string, unknown>
   channels?: Channel[]
+  employee_id?: string // backend employee UUID — lets the approval route to that employee's OM
 }
+
+// Raised from a parsed schedule-change message; valid from either tab.
+const REQUEST_KINDS = [
+  { value: "leave_mark", label: "Leave request" },
+  { value: "leave_cancel", label: "Leave cancellation" },
+  { value: "absence_mark", label: "Absence / sickness" },
+  { value: "schedule_request", label: "Schedule change request" },
+]
 
 // Kinds the UI offers per source (mirrors the backend's KINDS catalogue).
 export const KINDS_BY_SOURCE: Record<ApprovalSource, { value: string; label: string }[]> = {
@@ -85,12 +107,14 @@ export const KINDS_BY_SOURCE: Record<ApprovalSource, { value: string; label: str
     { value: "reforecast_publish", label: "Publish intraday reforecast" },
     { value: "break_recovery", label: "Break recovery (recall)" },
     { value: "skill_rebalance", label: "Skill re-balance" },
+    ...REQUEST_KINDS,
   ],
   scheduling: [
     { value: "shift_change", label: "Shift change" },
     { value: "break_move", label: "Break move" },
     { value: "shift_swap", label: "Shift swap" },
     { value: "extra_shift", label: "Extra shift" },
+    ...REQUEST_KINDS,
   ],
 }
 

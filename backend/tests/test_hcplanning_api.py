@@ -58,8 +58,8 @@ async def test_config_demand_and_capacity_flow(client: AsyncClient, admin: dict)
     assert jan["fte"] == 3 and jan["ramp"] == 1
     assert jan["production_agents"] == 4
     assert jan["fte_ramp"] == 4 and jan["closing_hc"] == 4
-    # Required HC = 3 / (0.96*0.96) = 3.255…
-    assert abs(jan["required_hc"] - 3.0 / (0.96 * 0.96)) < 1e-6
+    # Required HC = ceil(3 / (0.96*0.96) = 3.255…) = 4 — whole people
+    assert jan["required_hc"] == 4
     # Excess/Deficit = Closing - Required ; OT/VTO = excess * 40
     assert abs(jan["excess_deficit"] - (4 - jan["required_hc"])) < 1e-6
     assert abs(jan["ot_vto_hours"] - jan["excess_deficit"] * 40) < 1e-6
@@ -152,8 +152,9 @@ async def test_scenario_does_not_mutate_baseline(client: AsyncClient, admin: dic
     d = r.json()["data"]
     base, scen = d["baseline"][0], d["scenario"][0]
     # baseline uses stored 4% shrinkage + billable 10; scenario 10% + billable 12
-    assert abs(base["required_hc"] - 10 / (0.96 * 0.96)) < 1e-6
-    assert abs(scen["required_hc"] - 12 / (0.90 * 0.96)) < 1e-6
+    # (10.85 → 11, 13.89 → 14: Required HC is rounded up to whole people)
+    assert base["required_hc"] == 11
+    assert scen["required_hc"] == 14
     # baseline unchanged after scenario call
     cap = (await client.get(
         "/api/v1/hc-planning/capacity", headers=h,

@@ -17,6 +17,10 @@ export interface Scenario {
   shrinkagePct: number | null
   /** Agents added (+) or lost (−) among those skilled for the scope. */
   agentDelta: number
+  /** Logged events (see externalFactors.ts) this scenario's volume % was computed
+   *  from, if it was built that way rather than typed by hand — display-only
+   *  provenance; `volumePct` is always the number the engine actually uses. */
+  eventIds?: string[]
   createdAt: number
 }
 

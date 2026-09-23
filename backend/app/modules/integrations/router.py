@@ -8,6 +8,7 @@ by verifying the platform signature / shared token rather than a JWT.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Annotated
 
@@ -15,7 +16,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.deps import DbSession, require_permission
 from app.modules.identity.models import User
-from app.modules.integrations import service
+from app.modules.integrations import automation, service
 from app.modules.integrations.models import IntegrationConfig
 from app.modules.integrations.schemas import (
     ApprovalCreate,
@@ -55,6 +56,12 @@ def _config_out(config: IntegrationConfig) -> IntegrationConfigOut:
         default_approver_id=config.default_approver_id,
         auto_apply_on_approve=config.auto_apply_on_approve,
         any_channel_live=config.any_channel_live,
+        automation_enabled=config.automation_enabled,
+        auto_apply_min_confidence=config.auto_apply_min_confidence,
+        slack_command_channel=config.slack_command_channel,
+        teams_command_channel=config.teams_command_channel,
+        teams_app_id_set=bool(config.teams_app_id),
+        teams_app_password_set=bool(config.teams_app_password),
     )
 
 
@@ -205,6 +212,91 @@ async def teams_actions(request: Request, db: DbSession):
     except Exception as exc:  # noqa: BLE001
         return Response(status_code=200, content=f"Could not record decision: {exc}")
     return Response(status_code=200, content=f"Decision recorded ({action}) in FlowForce WFM.")
+
+
+@router.post("/slack/events", include_in_schema=False)
+async def slack_events(request: Request, db: DbSession):
+    """Slack Events API — an @mention of the bot in the designated command channel
+    is parsed as a schedule-change request (see `automation.handle_inbound_command`).
+    Every other event is acknowledged and ignored."""
+    raw = await request.body()
+    body = json.loads(raw or b"{}")
+    if body.get("type") == "url_verification":  # Slack's one-time endpoint check
+        return {"challenge": body.get("challenge", "")}
+
+    config = await _config_for_request(db, request)
+    if config is None or not verify_slack_signature(
+        config.slack_signing_secret,
+        request.headers.get("X-Slack-Request-Timestamp"),
+        request.headers.get("X-Slack-Signature"),
+        raw,
+    ):
+        return Response(status_code=401, content="invalid signature")
+
+    # Slack retries a slow/failed delivery; the first attempt already processed it.
+    if request.headers.get("X-Slack-Retry-Num"):
+        return {"ok": True}
+
+    event = body.get("event", {})
+    if (
+        body.get("type") != "event_callback"
+        or event.get("type") != "app_mention"
+        or event.get("bot_id")  # never react to a message (e.g. our own reply) posted by a bot
+        or not config.automation_enabled
+        or not config.slack_command_channel
+        or event.get("channel") != config.slack_command_channel
+    ):
+        return {"ok": True}
+
+    text = re.sub(r"^\s*<@[^>]+>[:,]?\s*", "", event.get("text", "")).strip()
+    if not text:
+        return {"ok": True}
+
+    await automation.handle_inbound_command(
+        db, config, source="slack", text=text,
+        reply_target={"channel": event["channel"], "thread_ts": event.get("thread_ts") or event.get("ts")},
+    )
+    return {"ok": True}
+
+
+@router.post("/teams/messages", include_in_schema=False)
+async def teams_messages(request: Request, db: DbSession):
+    """Bot Framework inbound message activity — an @mention in the designated
+    command channel is parsed the same way as the Slack path above.
+
+    Demo simplification: real Bot Framework auth validates a Microsoft-signed JWT
+    against Azure AD; instead (mirroring `teams_security_token` on the existing
+    Action.Http callback, for the same reason) this expects the same shared secret
+    back in a header, since that's the one already configured here for Teams."""
+    body = await request.json()
+    config = await _config_for_teams(db)
+    if config is None or not verify_teams_token(
+        config.teams_security_token, request.headers.get("X-Teams-Command-Token"),
+    ):
+        return Response(status_code=401, content="invalid token")
+    if body.get("type") != "message":
+        return Response(status_code=200)
+
+    conversation_id = (body.get("conversation") or {}).get("id", "")
+    if (
+        not config.automation_enabled
+        or not config.teams_command_channel
+        or conversation_id != config.teams_command_channel
+    ):
+        return Response(status_code=200)
+
+    text = re.sub(r"^\s*<at>.*?</at>[:,]?\s*", "", body.get("text", ""), flags=re.I).strip()
+    if not text:
+        return Response(status_code=200)
+
+    await automation.handle_inbound_command(
+        db, config, source="teams", text=text,
+        reply_target={
+            "service_url": body.get("serviceUrl", ""), "conversation_id": conversation_id,
+            "activity_id": body.get("id"),
+        },
+    )
+    return Response(status_code=200)
 
 
 async def _config_for_request(db: DbSession, request: Request) -> IntegrationConfig | None:

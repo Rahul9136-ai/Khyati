@@ -26,14 +26,18 @@ The repo is a monorepo with two independently runnable halves:
 - Actuals import (Excel/CSV) that appends to history and retrains automatically.
 - Daily/Weekly/Monthly granularity, custom date ranges, ramp-up/ramp-down planning, and a
   90-day horizon.
-- **External factors overlay** — log one-off events (marketing campaigns, holidays, weather,
-  outages) with a date range, queue, and expected volume impact %; overlapping factors compound
-  multiplicatively and adjust the forecast for that window, with an honest baseline-vs-adjusted
-  comparison and an Excel import/template.
-- **Capacity Planning** and a standalone **Erlang C Calculator**.
-- **Scenario Studio** — what-if simulation (volume %, AHT %, shrinkage override, headcount ±)
-  run through the same Erlang C engine as the live plan, with side-by-side before/after and an
-  FTE-gap verdict.
+- **Events log (external factors)** — log one-off events (marketing campaigns, holidays,
+  weather, outages, client wins/losses, product launches, seasonal peaks) with a date range
+  (past or future), queue, and expected volume impact %; overlapping events compound
+  multiplicatively. Shared between Forecasting (adjusts that queue's date-range forecast, with
+  an honest baseline-vs-adjusted comparison) and Scenario Studio (below) — log an event once,
+  see it in both. Excel import/template included.
+- **Capacity Planning**, powered by the same Erlang C engine used throughout the app.
+- **Scenario Studio** — the events log's volume & staffing-requirement impact, past and future,
+  in one chart (baseline vs adjusted, by day); build a what-if scenario's volume % directly from
+  one or more logged events (compounded), or type a volume %/AHT %/shrinkage override/headcount
+  change by hand, run through the same Erlang C engine as the live plan, with side-by-side
+  before/after and an FTE-gap verdict.
 
 ### Scheduling
 - Daily shift-plan grid with global, reusable **shift patterns** (start/end + break/lunch

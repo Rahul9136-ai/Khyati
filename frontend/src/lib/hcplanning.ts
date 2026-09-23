@@ -241,7 +241,8 @@ export const BREAKDOWN_ROWS: { field: keyof MonthResult; label: string }[] = [
 
 /** Human-readable calculation notes for the "how is this calculated?" tooltips. */
 export const FORMULA_NOTES: Partial<Record<keyof MonthResult, string>> = {
-  required_hc: "Billable FTE / ((1 − OOO Shrinkage) × (1 − IO Shrinkage))",
+  billable_fte: "Demand in whole FTE — entries are rounded up",
+  required_hc: "Billable FTE / ((1 − OOO Shrinkage) × (1 − IO Shrinkage)), rounded up to a whole person",
   production_agents: "Sum of FTE, Ramp, Notice, OJT, Bench, Training, Leave",
   fte_ramp: "Actuals: roster FTE+Ramp. Projected: prev × (1 − attrition) + new-hire production",
   closing_hc: "= FTE + Ramp (editable — override to pin a value)",

@@ -17,6 +17,7 @@ from app.modules.hcplanning.engine.agents import AgentRecord, is_productive
 from app.modules.hcplanning.engine.capacity import (
     build_capacity_table,
     required_hc,
+    whole_hc,
 )
 from app.modules.hcplanning.engine.config import PlanningConfig
 
@@ -53,6 +54,7 @@ def test_matches_ags_health_cp():
     cfg = PlanningConfig(
         ooo_shrinkage=0.04, io_shrinkage=0.04, attrition=0.0125,
         weekly_hours=40, actuals_through=months[4],
+        whole_headcount=False,  # the workbook keeps Required HC fractional
     )
     # New-hire production feeding Ramp, per the New Hire Plotter (20→17, 30→26).
     newhire = {months[6]: 17.0, months[12]: 26.0}
@@ -88,6 +90,60 @@ def test_required_hc_formula():
     assert required_hc(190, 0.04, 0.04) == pytest.approx(206.16, abs=0.01)
     # zero shrinkage ⇒ Required HC == Billable
     assert required_hc(100, 0.0, 0.0) == 100
+
+
+def test_whole_hc_rounds_up_and_ignores_float_noise():
+    assert whole_hc(16.276) == 17
+    assert whole_hc(16.0) == 16
+    assert whole_hc(17.000000000000004) == 17  # float noise must not bump to 18
+    assert whole_hc(0.0) == 0
+
+
+def test_capacity_table_required_hc_is_whole_and_drives_derived_metrics():
+    months = ["2026-01"]
+    billable = {"2026-01": 15.0}  # 15 / (0.96*0.96) = 16.276
+    whole = build_capacity_table([], "L", months, billable, PlanningConfig()).results[0]
+    raw = build_capacity_table([], "L", months, billable, PlanningConfig(whole_headcount=False)).results[0]
+    assert raw.required_hc == pytest.approx(16.276, abs=1e-3)
+    assert whole.required_hc == 17 and float(whole.required_hc).is_integer()
+    assert whole.excess_deficit == whole.closing_hc - 17
+
+
+def test_billable_fte_is_rounded_up_and_required_hc_derives_from_it():
+    months = ["2026-01"]
+    res = build_capacity_table([], "L", months, {"2026-01": 15.3}, PlanningConfig()).results[0]
+    assert res.billable_fte == 16
+    assert res.required_hc == 18  # ceil(16 / 0.9216 = 17.36), not ceil(15.3 / 0.9216 = 16.6) = 17
+
+
+def test_whole_hc_rounds_away_from_zero():
+    assert whole_hc(-4.17) == -5  # Excel ROUNDUP: a deficit never shrinks
+    assert whole_hc(-4.0) == -4
+
+
+def test_projected_months_report_whole_numbers_but_project_from_raw_values():
+    months = ["2026-01", "2026-02", "2026-03"]
+    agents = [
+        AgentRecord(status="FTE", lob="L", location="X", experience="Lateral", dop=date(2020, 1, 1),
+                    inactive=None, move_out=None, move_in=None, name=f"a{i}")
+        for i in range(10)
+    ]
+    billable = dict.fromkeys(months, 9.0)
+    cfg = PlanningConfig(attrition=0.0125, actuals_through="2026-01")
+    res = build_capacity_table(agents, "L", months, billable, cfg).results
+    raw = build_capacity_table(agents, "L", months, billable,
+                               PlanningConfig(attrition=0.0125, actuals_through="2026-01", whole_headcount=False)).results
+    # raw projection: 10 → 9.875 → 9.7515…; reported rounded up
+    assert raw[2].fte == pytest.approx(10 * 0.9875**2)
+    for r in res:
+        for f in ("required_hc", "production_agents", "fte_ramp", "closing_hc", "excess_deficit",
+                  "ot_vto_hours", "fte", "ramp", "notice_period", "ojt", "headcount_vs_billable"):
+            assert float(getattr(r, f)).is_integer(), f
+    assert res[2].fte == 10 and res[2].closing_hc == 10  # ceil(9.7515) — not carried into next month
+    assert res[2].capacity_pct == res[2].closing_hc / res[2].required_hc
+    assert res[2].excess_deficit == res[2].closing_hc - res[2].required_hc
+    # ratios still come from the raw counts
+    assert res[2].overall_utilization == pytest.approx(raw[2].overall_utilization)
 
 
 def test_required_hc_rejects_full_shrinkage():
@@ -149,7 +205,7 @@ def test_newhire_production_feeds_ramp():
 
     months = ["2026-01", "2026-02", "2026-03"]
     agents = [AgentRecord(status="Ramp", lob="X", dop=date(2020, 1, 1))]
-    cfg = PlanningConfig(actuals_through="2026-01")  # project from Feb
+    cfg = PlanningConfig(actuals_through="2026-01", whole_headcount=False)  # project from Feb; raw values
     # hire mid-Jan so production (hire + 30 days) lands in Feb, a projected month
     prod = production_by_month(
         [HiringBatch(hire_date=date(2026, 1, 10), planned_hires=20)],

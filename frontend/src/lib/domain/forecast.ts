@@ -1,8 +1,12 @@
-// Forecasting engine — statistical + ML methods, back-tested with MAPE.
+// Forecasting engine — statistical, ML and deep-learning methods, back-tested with MAPE.
 // Trains on ~3 years of history (see history.ts). The ML models use intraday,
 // weekly AND annual (day-of-year) seasonality features so the long history pays off.
+// The extra ML models live in mlmodels.ts and the deep-learning ones in dlmodels.ts.
 import { addDays, dayOfYear, dowOf } from "./dates"
 import { type ActualRow, historyFor } from "./history"
+import { gruNetwork, neuralNetwork } from "./dlmodels"
+import { gradientBoosting, randomForest, ridgeRegression } from "./mlmodels"
+import { gaussianSolve } from "./modelUtils"
 import type { ForecastMethod, MethodResult } from "./types"
 
 const M = 24
@@ -60,23 +64,6 @@ function holtWinters(days: number[][], dows: number[], targetDow: number): numbe
 }
 
 // ---- ML: linear regression (OLS) ----
-function gaussianSolve(A: number[][], b: number[]): number[] {
-  const n = b.length
-  const m = A.map((row, i) => [...row, b[i]])
-  for (let col = 0; col < n; col++) {
-    let piv = col
-    for (let r = col + 1; r < n; r++) if (Math.abs(m[r][col]) > Math.abs(m[piv][col])) piv = r
-    ;[m[col], m[piv]] = [m[piv], m[col]]
-    const d = m[col][col] || 1e-9
-    for (let r = 0; r < n; r++) {
-      if (r === col) continue
-      const f = m[r][col] / d
-      for (let c = col; c <= n; c++) m[r][c] -= f * m[col][c]
-    }
-  }
-  return m.map((row, i) => row[n] / (m[i][i] || 1e-9))
-}
-
 // Precompute the intraday feature rows once (shared across every fit).
 const IF: number[][] = Array.from({ length: M }, (_, i) => intervalFeatures(i))
 const P = 12 // [1, 4 interval, 2 dow, 4 doy, 1 trend]
@@ -251,6 +238,11 @@ export const METHODS: ForecastMethod[] = [
   { id: "prophet", name: "Prophet", kind: "ML", fn: prophet },
   { id: "linreg", name: "Linear Regression", kind: "ML", fn: linearRegression },
   { id: "knn", name: "k-NN Regression", kind: "ML", fn: knn },
+  { id: "rf", name: "Random Forest", kind: "ML", fn: randomForest },
+  { id: "gbm", name: "Gradient Boosting", kind: "ML", fn: gradientBoosting },
+  { id: "ridge", name: "Ridge Regression", kind: "ML", fn: ridgeRegression },
+  { id: "mlp", name: "Neural Network (MLP)", kind: "DL", fn: neuralNetwork },
+  { id: "gru", name: "GRU Network", kind: "DL", fn: gruNetwork },
 ]
 export const methodById: Record<string, ForecastMethod> = Object.fromEntries(METHODS.map((m) => [m.id, m]))
 

@@ -33,6 +33,10 @@ _KIND_LABELS = {
     "break_move": "Break move",
     "shift_swap": "Shift swap",
     "extra_shift": "Extra shift",
+    "leave_mark": "Leave request",
+    "leave_cancel": "Leave cancellation",
+    "absence_mark": "Absence / sickness",
+    "schedule_request": "Schedule change request",
 }
 
 
@@ -159,6 +163,30 @@ class SlackAdapter:
             return DispatchResult("slack", ok=False, simulated=False,
                                   detail=f"delivery error: {exc}", payload=payload)
 
+    async def reply(self, channel: str, thread_ts: str | None, text: str) -> DispatchResult:
+        """Post a plain-text reply in a channel (threaded, when `thread_ts` is given) —
+        the automation's "revert back on the platform" for an inbound @mention command."""
+        payload = {"channel": channel, "text": text, **({"thread_ts": thread_ts} if thread_ts else {})}
+        if not self.config.slack_bot_token:
+            return DispatchResult("slack", ok=True, simulated=True,
+                                  detail="Slack bot token not configured — simulated reply", payload=payload)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                res = await client.post(
+                    "https://slack.com/api/chat.postMessage", json=payload,
+                    headers={"Authorization": f"Bearer {self.config.slack_bot_token}"},
+                )
+                data = res.json()
+                if not data.get("ok"):
+                    return DispatchResult("slack", ok=False, simulated=False,
+                                          detail=f"Slack API error: {data.get('error')}", payload=payload)
+                return DispatchResult("slack", ok=True, simulated=False, detail="replied",
+                                      ref={"channel": data.get("channel"), "ts": data.get("ts")}, payload=payload)
+        except httpx.HTTPError as exc:
+            log.warning("slack_reply_failed", error=str(exc))
+            return DispatchResult("slack", ok=False, simulated=False,
+                                  detail=f"delivery error: {exc}", payload=payload)
+
 
 # --------------------------------------------------------------------------- #
 # Microsoft Teams
@@ -235,5 +263,51 @@ class TeamsAdapter:
                                       detail=f"webhook status {res.status_code}", payload=payload)
         except httpx.HTTPError as exc:
             log.warning("teams_dispatch_failed", error=str(exc))
+            return DispatchResult("teams", ok=False, simulated=False,
+                                  detail=f"delivery error: {exc}", payload=payload)
+
+    async def _bot_token(self, client: httpx.AsyncClient) -> str | None:
+        """Client-credentials grant against Azure AD for the Bot Framework Connector API."""
+        try:
+            res = await client.post(
+                "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token",
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": self.config.teams_app_id,
+                    "client_secret": self.config.teams_app_password,
+                    "scope": "https://api.botframework.com/.default",
+                },
+            )
+            res.raise_for_status()
+            return res.json().get("access_token")
+        except httpx.HTTPError as exc:
+            log.warning("teams_token_failed", error=str(exc))
+            return None
+
+    async def reply(self, service_url: str, conversation_id: str, activity_id: str | None, text: str) -> DispatchResult:
+        """Reply to an inbound Bot Framework Activity — a real Connector API call when
+        `teams_app_id`/`teams_app_password` (an Azure Bot registration) are configured,
+        else simulated like the rest of this Teams integration when it isn't."""
+        payload = {"type": "message", "text": text}
+        if not (self.config.teams_app_id and self.config.teams_app_password):
+            return DispatchResult("teams", ok=True, simulated=True,
+                                  detail="Teams app credentials not configured — simulated reply", payload=payload)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                token = await self._bot_token(client)
+                if not token:
+                    return DispatchResult("teams", ok=False, simulated=False,
+                                          detail="could not get a Bot Framework token", payload=payload)
+                path = f"v3/conversations/{conversation_id}/activities/{activity_id}" if activity_id \
+                    else f"v3/conversations/{conversation_id}/activities"
+                res = await client.post(
+                    f"{service_url.rstrip('/')}/{path}", json=payload,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                ok = res.status_code < 300
+                return DispatchResult("teams", ok=ok, simulated=False,
+                                      detail=f"connector status {res.status_code}", payload=payload)
+        except httpx.HTTPError as exc:
+            log.warning("teams_reply_failed", error=str(exc))
             return DispatchResult("teams", ok=False, simulated=False,
                                   detail=f"delivery error: {exc}", payload=payload)

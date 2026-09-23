@@ -103,9 +103,10 @@ Bias           = Σ(forecast − actual) ÷ Σactual   (+ = over-forecasting)`}<
 
         <Section title="Forecasting models & selection">
           <p>
-            Five models compete per queue: weighted moving average, exponential smoothing (Holt-Winters style with
-            weekly seasonality), trend + seasonal decomposition, same-weekday regression, and a gradient-boosted-style
-            ensemble. Selection is a rolling back-test:
+            Twelve models compete per queue. Statistical: Seasonal Naïve, Moving Average, Holt-Winters and SARIMA. ML:
+            Prophet-style decomposition, Linear Regression, k-NN, Random Forest, Gradient Boosting and Ridge
+            Regression. Deep learning: a feed-forward Neural Network (MLP) and a recurrent GRU Network, trained in
+            your browser. Selection is a rolling back-test:
           </p>
           <Formula>{`for each model: train on history minus hold-out → predict hold-out → MAPE
 apply the lowest-MAPE model; retrain automatically when actuals import`}</Formula>

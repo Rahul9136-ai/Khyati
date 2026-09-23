@@ -7,9 +7,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { type Lob, listAgents, updateProfile } from "@/lib/hcplanning"
+import { type Lob, listAgents, monthLabel, updateProfile } from "@/lib/hcplanning"
 
-export function MovementTab({ lobId, lobs }: { lobId: string; lobs: Lob[] }) {
+export function MovementTab({
+  lobId, lobs, onGoToCapacity,
+}: { lobId: string; lobs: Lob[]; onGoToCapacity?: () => void }) {
   const qc = useQueryClient()
   const { data: agents = [] } = useQuery({
     queryKey: ["planning-agents", lobId], queryFn: () => listAgents(lobId), enabled: !!lobId,
@@ -23,15 +25,29 @@ export function MovementTab({ lobId, lobs }: { lobId: string; lobs: Lob[] }) {
     onSuccess: refresh,
   })
   const lobName = (id: string | null) => lobs.find((l) => l.id === id)?.name ?? "—"
+  // The month an agent's move actually changes their effective LOB in Capacity —
+  // move-in if set (they land in the target LOB that month), else move-out
+  // (they stop counting toward the home LOB and go into transition).
+  const effectiveMonth = (a: { move_in_date: string | null; move_out_date: string | null }) => {
+    const d = a.move_in_date ?? a.move_out_date
+    return d ? d.slice(0, 7) : null
+  }
 
   return (
     <Card className="glass">
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-sm"><ArrowRightLeft className="h-4 w-4 text-primary" /> Agent Movement</CardTitle>
-        <p className="text-xs text-muted-foreground">
-          Plan move-out / move-in across LOBs. Between move-out and move-in an agent is in transition
-          and counts against no LOB; from move-in it counts toward the target LOB — reflected live in Capacity.
-        </p>
+      <CardHeader className="pb-2 flex-row items-start justify-between space-y-0">
+        <div>
+          <CardTitle className="flex items-center gap-2 text-sm"><ArrowRightLeft className="h-4 w-4 text-primary" /> Agent Movement</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Plan move-out / move-in across LOBs. Between move-out and move-in an agent is in transition
+            and counts against no LOB; from move-in it counts toward the target LOB — reflected live in Capacity.
+          </p>
+        </div>
+        {onGoToCapacity && (
+          <button type="button" onClick={onGoToCapacity} className="shrink-0 text-xs text-primary hover:underline">
+            View in Capacity Planning →
+          </button>
+        )}
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <Table>
@@ -43,6 +59,7 @@ export function MovementTab({ lobId, lobs }: { lobId: string; lobs: Lob[] }) {
               <TableHead>Move-out</TableHead>
               <TableHead>Move-in</TableHead>
               <TableHead>Target LOB</TableHead>
+              <TableHead>Effective in Capacity</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -72,10 +89,21 @@ export function MovementTab({ lobId, lobs }: { lobId: string; lobs: Lob[] }) {
                       options={[{ value: "", label: "—" }, ...lobs.map((l) => ({ value: l.id, label: l.name }))]} />
                   </PermissionGate>
                 </TableCell>
+                <TableCell>
+                  {effectiveMonth(a) ? (
+                    <button type="button" onClick={onGoToCapacity} disabled={!onGoToCapacity} className="disabled:cursor-default">
+                      <Badge variant="secondary" className={onGoToCapacity ? "cursor-pointer hover:bg-muted" : ""}>
+                        {monthLabel(effectiveMonth(a)!)}
+                      </Badge>
+                    </button>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  )}
+                </TableCell>
               </TableRow>
             ))}
             {agents.length === 0 && (
-              <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">No agents in this LOB.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">No agents in this LOB.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>

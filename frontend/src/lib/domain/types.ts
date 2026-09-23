@@ -73,7 +73,7 @@ export interface PlanSummary {
   peakIdx: number
 }
 
-export type ForecastKind = "Statistical" | "ML"
+export type ForecastKind = "Statistical" | "ML" | "DL"
 export type ForecastFn = (
   days: number[][],
   dows: number[],

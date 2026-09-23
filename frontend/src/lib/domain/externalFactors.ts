@@ -5,10 +5,17 @@
 // specific calendar date rather than a repeating pattern.
 import * as XLSX from "xlsx"
 
-import { ymd } from "./dates"
+import { TODAY, ymd } from "./dates"
 import type { Queue } from "./types"
 
-export const FACTOR_CATEGORIES = ["Marketing", "Holiday", "Weather", "Outage", "Other"] as const
+// Marketing/Holiday/Weather/Outage cover the classic cases; the rest are other
+// real drivers a planner logs so the model doesn't have to be surprised by them:
+// a new client ramping in, one lost, a product/feature launch, a predictable
+// seasonal peak (open enrolment, tax season, back-to-school), or press/PR.
+export const FACTOR_CATEGORIES = [
+  "Marketing", "Holiday", "Weather", "Outage",
+  "New Client", "Client Loss", "Product Launch", "Seasonal Peak", "Press/PR", "Other",
+] as const
 export type FactorCategory = (typeof FACTOR_CATEGORIES)[number]
 
 export interface ExternalFactor {
@@ -40,6 +47,25 @@ export function factorMultiplier(factors: ExternalFactor[], queueId: string, dat
 
 export function activeFactorsFor(factors: ExternalFactor[], queueId: string, date: string): ExternalFactor[] {
   return factors.filter((f) => (f.queueId === "all" || f.queueId === queueId) && inRange(date, f.from, f.to))
+}
+
+/** Where a factor sits relative to today — an event log spans both, so the UI can
+ *  tell "here's what actually happened" apart from "here's what's coming". */
+export type FactorStatus = "past" | "active" | "upcoming"
+export function factorStatus(f: Pick<ExternalFactor, "from" | "to">, today = ymd(TODAY)): FactorStatus {
+  if (f.to < today) return "past"
+  if (f.from > today) return "upcoming"
+  return "active"
+}
+
+/** The combined multiplier of a specific set of factors (by id), compounded the
+ *  same way `factorMultiplier` compounds overlapping factors on a calendar date —
+ *  used to seed a scenario's volume % directly from named events rather than a
+ *  guessed number. */
+export function combinedFactorPct(factors: ExternalFactor[], ids: string[]): number {
+  const idSet = new Set(ids)
+  const mult = factors.filter((f) => idSet.has(f.id)).reduce((m, f) => m * (1 + f.impactPct / 100), 1)
+  return (mult - 1) * 100
 }
 
 // ---- import/export ----

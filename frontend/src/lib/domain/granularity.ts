@@ -55,13 +55,14 @@ export function backtestG(queueId: string, gran: GranId, overlay?: ActualRow[]):
     actual.push(sum(days[d]))
     labels.push(DOW_NAME[dows[d]])
   }
-  const perMethod = METHODS.map((m) => {
-    const pred: number[] = []
-    for (let d = start; d < days.length; d++) {
-      pred.push(dayTotal(m, days.slice(0, d), dows.slice(0, d), dows[d], d, doys.slice(0, d), doys[d]))
-    }
-    return { id: m.id, name: m.name, kind: m.kind, mape: mape(pred, actual), pred }
-  })
+  // Build each day's training slice once and share it across methods, so the
+  // identity-keyed fit caches (LR, Prophet, ML and deep-learning fits) hit instead of refitting per method.
+  const preds: number[][] = METHODS.map(() => [])
+  for (let d = start; d < days.length; d++) {
+    const train = days.slice(0, d), tDows = dows.slice(0, d), tDoys = doys.slice(0, d)
+    METHODS.forEach((m, k) => preds[k].push(dayTotal(m, train, tDows, dows[d], d, tDoys, doys[d])))
+  }
+  const perMethod = METHODS.map((m, k) => ({ id: m.id, name: m.name, kind: m.kind, mape: mape(preds[k], actual), pred: preds[k] }))
   const best = perMethod.reduce((a, b) => (b.mape < a.mape ? b : a))
   return { perMethod, best, actual, labels, unit: "contacts / day" }
 }

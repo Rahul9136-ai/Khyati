@@ -25,6 +25,12 @@ class IntegrationConfigIn(BaseModel):
     teams_security_token: str | None = None
     default_approver_id: uuid.UUID | None = None
     auto_apply_on_approve: bool | None = None
+    automation_enabled: bool | None = None
+    auto_apply_min_confidence: Literal["High", "Medium", "Off"] | None = None
+    slack_command_channel: str | None = None
+    teams_command_channel: str | None = None
+    teams_app_id: str | None = None
+    teams_app_password: str | None = None
 
 
 class IntegrationConfigOut(BaseModel):
@@ -43,6 +49,12 @@ class IntegrationConfigOut(BaseModel):
     default_approver_id: uuid.UUID | None
     auto_apply_on_approve: bool
     any_channel_live: bool
+    automation_enabled: bool
+    auto_apply_min_confidence: str
+    slack_command_channel: str
+    teams_command_channel: str
+    teams_app_id_set: bool
+    teams_app_password_set: bool
 
 
 # --------------------------------------------------------------------------- #

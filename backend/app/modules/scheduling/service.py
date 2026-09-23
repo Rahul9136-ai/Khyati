@@ -128,6 +128,25 @@ async def generate_schedule(
     return schedule
 
 
+async def find_shift_for_employee_on_date(
+    db: AsyncSession, org_id: uuid.UUID, employee_id: uuid.UUID, day: date
+) -> ScheduleShift | None:
+    """The employee's shift on a given calendar day — resolves an automated schedule-change
+    command (which names an employee + date, not a `shift_id`) to a concrete row to mutate."""
+    return (
+        await db.execute(
+            select(ScheduleShift)
+            .join(Schedule, Schedule.id == ScheduleShift.schedule_id)
+            .where(
+                Schedule.organization_id == org_id,
+                ScheduleShift.employee_id == employee_id,
+                ScheduleShift.day == day,
+            )
+            .order_by(ScheduleShift.start_ts)
+        )
+    ).scalars().first()
+
+
 async def get_schedule(db: AsyncSession, schedule_id: uuid.UUID) -> Schedule:
     schedule = await db.get(Schedule, schedule_id, options=[selectinload(Schedule.shifts)])
     if schedule is None:

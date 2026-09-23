@@ -20,7 +20,9 @@ from app.modules.forecasting.engine import distribute_to_intervals
 from app.modules.forecasting.models import Forecast, ForecastPoint
 from app.modules.planning.erlang import required_agents
 from app.modules.reporting.service import _daily_actuals, dashboard
+from app.modules.ai import schedule_parser
 from app.modules.workforce.models import Queue
+from app.modules.workforce.service import find_employee_by_code
 
 _MODEL_BLURBS = {
     "seasonal_naive": "repeats the most recent value seen on the same weekday",
@@ -247,3 +249,62 @@ async def chat(
     narrated = await _llm_narrate(message, facts)
     return {"answer": narrated or answer, "grounded": facts,
             "llm_used": narrated is not None}
+
+
+# --------------------------------------------------------------------------- #
+# Schedule-change request parsing (Scheduling + Real-Time tabs)
+# --------------------------------------------------------------------------- #
+async def _llm_parse_schedule_request(message: str, today: date) -> dict | None:
+    """Ask Claude to parse the message with the schedule-request prompt; None if not
+    configured or the answer isn't usable JSON (the caller then falls back to rules)."""
+    if not settings.ANTHROPIC_API_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": settings.ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                },
+                json={
+                    "model": settings.ANTHROPIC_MODEL,
+                    "max_tokens": 500,
+                    "temperature": 0,
+                    "messages": [
+                        {"role": "user", "content": schedule_parser.build_prompt(message, today)}
+                    ],
+                },
+            )
+            response.raise_for_status()
+            return schedule_parser.extract_json(response.json()["content"][0]["text"])
+    except (httpx.HTTPError, KeyError, IndexError, ValueError):
+        return None
+
+
+async def _match_employee(db: AsyncSession, org_id: uuid.UUID, code: str | None) -> dict | None:
+    """The directory employee whose code equals the parsed ID — by ID only, never by name,
+    so a mistyped ID can't silently attach the request to someone else."""
+    if not code:
+        return None
+    row = await find_employee_by_code(db, org_id, code)
+    if row is None:
+        return None
+    return {"id": str(row.id), "employee_code": row.employee_code,
+            "name": f"{row.first_name} {row.last_name}".strip(), "team_id": str(row.team_id) if row.team_id else None}
+
+
+async def parse_schedule_request(
+    db: AsyncSession, org_id: uuid.UUID, message: str, current_date: date | None = None
+) -> dict:
+    today = current_date or date.today()
+    raw = await _llm_parse_schedule_request(message, today)
+    parser = "claude"
+    if raw is None:
+        raw, parser = schedule_parser.parse_with_rules(message, today), "rules"
+    parsed = schedule_parser.normalise(raw, message)
+    return {
+        "parsed": parsed,
+        "parser": parser,
+        "matched_employee": await _match_employee(db, org_id, parsed["employee_id"]),
+    }

@@ -6,6 +6,7 @@ import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
 import { ExportButton } from "@/components/export-button"
 import { PageHeader } from "@/components/page-header"
+import { ScheduleRequestCard } from "@/components/schedule-request-card"
 import { PermissionGate } from "@/components/permission-gate"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -162,6 +163,8 @@ export function Scheduling() {
           </>
         }
       />
+
+      <ScheduleRequestCard source="scheduling" />
 
       {autoResult && (
         <Card className="glass mb-4 border-primary/40">

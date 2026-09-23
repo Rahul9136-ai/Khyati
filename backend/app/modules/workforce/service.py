@@ -135,6 +135,25 @@ async def create_holiday_calendar(
 # ----------------------------------------------------------------- employees
 
 
+async def find_employee_by_code(
+    db: AsyncSession, org_id: uuid.UUID, employee_code: str
+) -> Employee | None:
+    """Case-insensitive lookup by the roster code (e.g. "E1004") — used to resolve a
+    parsed schedule-change message to a real employee, by ID only, never by name."""
+    if not employee_code:
+        return None
+    row = (
+        await db.execute(
+            select(Employee).where(
+                Employee.organization_id == org_id,
+                Employee.deleted_at.is_(None),
+                func.lower(Employee.employee_code) == employee_code.lower(),
+            )
+        )
+    ).scalar_one_or_none()
+    return row
+
+
 async def list_employees(
     db: AsyncSession,
     org_id: uuid.UUID,

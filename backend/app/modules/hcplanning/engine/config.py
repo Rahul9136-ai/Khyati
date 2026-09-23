@@ -69,6 +69,10 @@ class PlanningConfig:
     training_days: int = 21   # hire → nesting
     nesting_days: int = 9     # nesting → production (21 + 9 ≈ one month)
 
+    # Round Required HC up to a whole person (you can't staff 16.3 people). Turn off
+    # to get the raw workbook formula value (the AGS Health CP parity test does).
+    whole_headcount: bool = True
+
     ooo_by_month: dict[str, float] = field(default_factory=dict)
     io_by_month: dict[str, float] = field(default_factory=dict)
     attrition_by_month: dict[str, float] = field(default_factory=dict)

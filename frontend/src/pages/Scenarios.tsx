@@ -1,21 +1,33 @@
 import { useMemo, useState } from "react"
-import { ArrowRight, FlaskConical, Plus, Trash2 } from "lucide-react"
+import { ArrowRight, CalendarClock, FlaskConical, Plus, Sparkles, Trash2 } from "lucide-react"
 
+import { SeriesChart } from "@/components/charts/series-chart"
 import { ExportButton } from "@/components/export-button"
+import { ExternalFactorsPanel } from "@/components/external-factors-panel"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
 import { PermissionGate } from "@/components/permission-gate"
-import { SeriesChart } from "@/components/charts/series-chart"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
+import { addDays, fmtDay, parseYMD, TODAY, ymd } from "@/lib/domain/dates"
+import { eventImpactTimeline } from "@/lib/domain/eventImpact"
+import { combinedFactorPct, factorStatus } from "@/lib/domain/externalFactors"
 import { buildPlan, fmtPct, summarisePlan } from "@/lib/domain/planning"
 import { runScenario, type ScenarioResult } from "@/lib/domain/scenario"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
+
+const IMPACT_PRESETS = [
+  { id: "past30", label: "Past 30d", from: -30, to: 0 },
+  { id: "past90", label: "Past 90d", from: -90, to: 0 },
+  { id: "straddle60", label: "±60d", from: -60, to: 60 },
+  { id: "next30", label: "Next 30d", from: 0, to: 30 },
+  { id: "next90", label: "Next 90d", from: 0, to: 90 },
+] as const
 
 function DeltaChip({ value, suffix = "", goodWhenUp = true }: { value: number; suffix?: string; goodWhenUp?: boolean }) {
   if (Math.abs(value) < 0.05) return <span className="text-xs text-muted-foreground">±0{suffix}</span>
@@ -29,9 +41,34 @@ function DeltaChip({ value, suffix = "", goodWhenUp = true }: { value: number; s
 }
 
 export function Scenarios() {
-  const { queues, forecasts, shrinkage, agents, scenarios, addScenario, removeScenario } = useWfm()
+  const {
+    queues, forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents,
+    scenarios, addScenario, removeScenario,
+  } = useWfm()
+  const inputs = useMemo(
+    () => ({ forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents, queues }),
+    [forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents, queues],
+  )
 
-  // form state
+  // ---- events → volume & requirement impact timeline ----
+  const [impactScope, setImpactScope] = useState("all")
+  const [impactStart, setImpactStart] = useState(ymd(addDays(TODAY, -60)))
+  const [impactEnd, setImpactEnd] = useState(ymd(addDays(TODAY, 60)))
+  const impact = useMemo(
+    () => eventImpactTimeline(inputs, parseYMD(impactStart), parseYMD(impactEnd), impactScope),
+    [inputs, impactStart, impactEnd, impactScope],
+  )
+  const volDeltaPct = impact.totalBaselineVolume ? (impact.totalAdjustedVolume - impact.totalBaselineVolume) / impact.totalBaselineVolume : 0
+  const reqDeltaPct = impact.totalBaselineReqHours ? (impact.totalAdjustedReqHours - impact.totalBaselineReqHours) / impact.totalBaselineReqHours : 0
+  const volChartData = impact.points.map((p) => ({ label: p.label, Baseline: p.baselineVolume, Adjusted: p.adjustedVolume }))
+  const reqChartData = impact.points.map((p) => ({ label: p.label, Baseline: Math.round(p.baselineReqHours), Adjusted: Math.round(p.adjustedReqHours) }))
+
+  const eventsInWindow = useMemo(
+    () => externalFactors.filter((f) => (impactScope === "all" || f.queueId === "all" || f.queueId === impactScope) && f.to >= impactStart && f.from <= impactEnd),
+    [externalFactors, impactScope, impactStart, impactEnd],
+  )
+
+  // ---- scenario form state ----
   const [open, setOpen] = useState(false)
   const [name, setName] = useState("")
   const [scope, setScope] = useState("all")
@@ -39,6 +76,7 @@ export function Scenarios() {
   const [ahtPct, setAhtPct] = useState(0)
   const [shrinkOverride, setShrinkOverride] = useState("") // empty = keep live setting
   const [agentDelta, setAgentDelta] = useState(0)
+  const [selectedEventIds, setSelectedEventIds] = useState<string[]>([])
   const [error, setError] = useState("")
 
   const baseline = useMemo(() => {
@@ -65,6 +103,8 @@ export function Scenarios() {
     [baseline, results],
   )
 
+  const combinedFromSelected = combinedFactorPct(externalFactors, selectedEventIds)
+
   function resetForm() {
     setName("")
     setScope("all")
@@ -72,7 +112,16 @@ export function Scenarios() {
     setAhtPct(0)
     setShrinkOverride("")
     setAgentDelta(0)
+    setSelectedEventIds([])
     setError("")
+  }
+
+  function toggleEvent(id: string) {
+    setSelectedEventIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]))
+  }
+
+  function useComputedVolume() {
+    setVolumePct(Math.round(combinedFromSelected * 10) / 10)
   }
 
   function submit() {
@@ -84,7 +133,10 @@ export function Scenarios() {
     if (shrink != null && (isNaN(shrink) || shrink < 0 || shrink > 60)) {
       return setError("Shrinkage override must be between 0 and 60%.")
     }
-    addScenario({ name: name.trim(), queueId: scope, volumePct, ahtPct, shrinkagePct: shrink, agentDelta })
+    addScenario({
+      name: name.trim(), queueId: scope, volumePct, ahtPct, shrinkagePct: shrink, agentDelta,
+      eventIds: selectedEventIds.length ? selectedEventIds : undefined,
+    })
     resetForm()
     setOpen(false)
   }
@@ -93,7 +145,7 @@ export function Scenarios() {
     <>
       <PageHeader
         title="Scenario Studio"
-        subtitle="What-if simulation — volume, AHT, shrinkage & headcount vs the live plan"
+        subtitle="Events (past & future) → forecast volume → staffing requirement, in one place"
         actions={
           <>
             <ExportButton
@@ -105,6 +157,8 @@ export function Scenarios() {
                     Scenario: r.scenario.name,
                     Scope: r.scenario.queueId === "all" ? "All queues" : queues.find((q) => q.id === r.scenario.queueId)?.name ?? r.scenario.queueId,
                     "Volume %": r.scenario.volumePct,
+                    "Built from events": r.scenario.eventIds?.length
+                      ? externalFactors.filter((f) => r.scenario.eventIds!.includes(f.id)).map((f) => f.name).join("; ") : "",
                     "AHT %": r.scenario.ahtPct,
                     "Shrinkage %": r.scenario.shrinkagePct ?? `${Math.round(shrinkage * 100)} (live)`,
                     "Agent Δ": r.scenario.agentDelta,
@@ -113,6 +167,13 @@ export function Scenarios() {
                     "Required hrs": r.modReqHours.toFixed(0),
                     "Scheduled hrs": r.modSchedHours.toFixed(0),
                     "FTE gap": r.fteGap,
+                  })),
+                },
+                {
+                  name: "Event Impact Timeline",
+                  rows: impact.points.map((p) => ({
+                    Date: p.date, "Baseline volume": p.baselineVolume, "Adjusted volume": p.adjustedVolume,
+                    "Baseline req. hrs": Math.round(p.baselineReqHours), "Adjusted req. hrs": Math.round(p.adjustedReqHours),
                   })),
                 },
               ]}
@@ -133,8 +194,78 @@ export function Scenarios() {
         <KpiCard label="Scenarios" value={scenarios.length} hint="saved simulations" icon={FlaskConical} />
       </div>
 
+      {/* ---- Events → volume & requirement impact ---- */}
+      <Card className="glass mb-4">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0">
+          <div>
+            <CardTitle className="flex items-center gap-2"><CalendarClock className="h-4 w-4" /> Volume & requirement impact</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Every logged event (below), applied to Forecasting's date-range engine and then to the same Erlang
+              requirement math as the live plan — past events show what actually happened; future ones show what
+              to staff for.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={impactScope} onChange={(e) => setImpactScope(e.target.value)}
+              options={[{ value: "all", label: "All queues" }, ...queues.map((q) => ({ value: q.id, label: q.name }))]} />
+            {IMPACT_PRESETS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => { setImpactStart(ymd(addDays(TODAY, p.from))); setImpactEnd(ymd(addDays(TODAY, p.to))) }}
+                className="rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-accent"
+              >
+                {p.label}
+              </button>
+            ))}
+            <Input type="date" value={impactStart} onChange={(e) => e.target.value && setImpactStart(e.target.value)} className="w-auto" />
+            <Input type="date" value={impactEnd} min={impactStart} onChange={(e) => e.target.value && setImpactEnd(e.target.value)} className="w-auto" />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="mb-4 flex flex-wrap items-center gap-6 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+            <span className="text-muted-foreground">{fmtDay(parseYMD(impactStart))} → {fmtDay(parseYMD(impactEnd))}:</span>
+            <span className="tabular-nums">
+              Volume {impact.totalBaselineVolume.toLocaleString()} → <b className="text-foreground">{impact.totalAdjustedVolume.toLocaleString()}</b>{" "}
+              <DeltaChip value={volDeltaPct * 100} suffix="%" goodWhenUp={false} />
+            </span>
+            <span className="tabular-nums">
+              Required hrs {impact.totalBaselineReqHours.toFixed(0)} → <b className="text-foreground">{impact.totalAdjustedReqHours.toFixed(0)}</b>{" "}
+              <DeltaChip value={reqDeltaPct * 100} suffix="%" goodWhenUp={false} />
+            </span>
+            <span className="text-xs text-muted-foreground">{eventsInWindow.length} event(s) active in this window</span>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Volume — contacts/day</p>
+              <SeriesChart
+                data={volChartData}
+                xKey="label"
+                series={[
+                  { key: "Baseline", name: "Baseline (no events)", color: "#94a3b8", dashed: true },
+                  { key: "Adjusted", name: "Adjusted (with events)", color: "#6366f1" },
+                ]}
+              />
+            </div>
+            <div>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Staffing requirement — agent-hrs/day</p>
+              <SeriesChart
+                data={reqChartData}
+                xKey="label"
+                series={[
+                  { key: "Baseline", name: "Baseline (no events)", color: "#94a3b8", dashed: true },
+                  { key: "Adjusted", name: "Adjusted (with events)", color: "#f59e0b" },
+                ]}
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ---- shared events log (also editable from Forecasting) ---- */}
+      <ExternalFactorsPanel />
+
       {results.length > 0 && (
-        <Card className="glass mb-4">
+        <Card className="glass mb-4 mt-4">
           <CardHeader>
             <CardTitle>Projected service level by scenario</CardTitle>
           </CardHeader>
@@ -149,10 +280,11 @@ export function Scenarios() {
       )}
 
       {results.length === 0 && (
-        <Card className="glass">
+        <Card className="glass mt-4">
           <CardContent className="py-12 text-center text-muted-foreground">
             <FlaskConical className="mx-auto mb-3 h-8 w-8 opacity-50" />
-            No scenarios yet. Create one to stress-test the plan — e.g. "Volume +20% in December" or "5 agents resign".
+            No scenarios yet. Build one from the events above, or type a change directly —
+            e.g. "Volume +20% in December" or "5 agents resign".
           </CardContent>
         </Card>
       )}
@@ -161,6 +293,7 @@ export function Scenarios() {
         {results.map((r) => {
           const sc = r.scenario
           const scopeLabel = sc.queueId === "all" ? "All queues" : queues.find((q) => q.id === sc.queueId)?.name ?? sc.queueId
+          const builtFrom = sc.eventIds?.length ? externalFactors.filter((f) => sc.eventIds!.includes(f.id)) : []
           return (
             <Card key={sc.id} className="glass">
               <CardHeader className="flex-row items-start justify-between space-y-0">
@@ -173,6 +306,11 @@ export function Scenarios() {
                     {sc.shrinkagePct != null && <Badge variant="secondary">Shrinkage {sc.shrinkagePct}%</Badge>}
                     {sc.agentDelta !== 0 && <Badge variant="secondary">{sc.agentDelta > 0 ? "+" : ""}{sc.agentDelta} agents</Badge>}
                   </div>
+                  {builtFrom.length > 0 && (
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      Built from: {builtFrom.map((f) => f.name).join(", ")}
+                    </p>
+                  )}
                 </div>
                 <PermissionGate module="scenarios">
                   <Button size="sm" variant="ghost" onClick={() => removeScenario(sc.id)} aria-label={`Delete ${sc.name}`}>
@@ -255,6 +393,37 @@ export function Scenarios() {
               className="w-full"
             />
           </label>
+
+          {externalFactors.length > 0 && (
+            <div className="rounded-lg border p-3">
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <Sparkles className="h-3.5 w-3.5" /> Build volume % from logged events (optional)
+              </p>
+              <div className="max-h-32 space-y-1 overflow-auto">
+                {externalFactors.map((f) => (
+                  <label key={f.id} className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" className="accent-primary" checked={selectedEventIds.includes(f.id)} onChange={() => toggleEvent(f.id)} />
+                    <span>{f.name}</span>
+                    <Badge variant="outline" className="text-[10px]">{factorStatus(f)}</Badge>
+                    <span className={cn("ml-auto tabular-nums", f.impactPct >= 0 ? "text-amber-500" : "text-emerald-500")}>
+                      {f.impactPct >= 0 ? "+" : ""}{f.impactPct}%
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {selectedEventIds.length > 0 && (
+                <div className="mt-2 flex items-center justify-between border-t pt-2 text-sm">
+                  <span className="text-muted-foreground">
+                    Combined (compounded): <b className={combinedFromSelected >= 0 ? "text-amber-500" : "text-emerald-500"}>
+                      {combinedFromSelected >= 0 ? "+" : ""}{combinedFromSelected.toFixed(1)}%
+                    </b>
+                  </span>
+                  <Button size="sm" variant="outline" onClick={useComputedVolume}>Use this for Volume %</Button>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-muted-foreground">Volume change (%)</span>

@@ -6,6 +6,7 @@ from datetime import date
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import ConflictError, NotFoundError
 from app.modules.attendance.models import AttendanceCode, AttendanceRecord
@@ -29,7 +30,7 @@ def _derive_minutes(record: AttendanceRecord) -> None:
 
 
 async def create_record(
-    db: AsyncSession, org_id: uuid.UUID, payload: RecordIn, *, actor: User,
+    db: AsyncSession, org_id: uuid.UUID, payload: RecordIn, *, actor: User | None,
     source: str = "manual",
 ) -> AttendanceRecord:
     code = await db.get(AttendanceCode, payload.code_id)
@@ -89,6 +90,55 @@ async def update_record(
         entity_id=record.id, after={k: str(v) for k, v in changes.items()},
     )
     return record
+
+
+async def find_code_by_category(
+    db: AsyncSession, org_id: uuid.UUID, categories: list[str]
+) -> AttendanceCode | None:
+    """First configured code matching any of `categories`, in preference order —
+    used to resolve "mark leave" / "mark absence" to a real code without the
+    caller having to know this org's exact code list."""
+    for category in categories:
+        row = (
+            await db.execute(
+                select(AttendanceCode).where(
+                    AttendanceCode.organization_id == org_id,
+                    AttendanceCode.category == category,
+                )
+            )
+        ).scalars().first()
+        if row:
+            return row
+    return None
+
+
+async def find_record(
+    db: AsyncSession, org_id: uuid.UUID, employee_id: uuid.UUID, day: date, categories: list[str]
+) -> AttendanceRecord | None:
+    return (
+        await db.execute(
+            select(AttendanceRecord)
+            .join(AttendanceCode, AttendanceCode.id == AttendanceRecord.code_id)
+            .where(
+                AttendanceRecord.organization_id == org_id,
+                AttendanceRecord.employee_id == employee_id,
+                AttendanceRecord.day == day,
+                AttendanceCode.category.in_(categories),
+            )
+            .options(selectinload(AttendanceRecord.code))
+        )
+    ).scalars().first()
+
+
+async def delete_record(db: AsyncSession, record_id: uuid.UUID, *, actor: User | None) -> None:
+    record = await db.get(AttendanceRecord, record_id)
+    if record is None:
+        raise NotFoundError("Attendance record not found")
+    await db.delete(record)
+    await record_audit(
+        db, actor=actor, action="attendance.delete", entity_type="attendance_record",
+        entity_id=record_id, before={"employee": str(record.employee_id), "day": record.day.isoformat()},
+    )
 
 
 async def list_records(
