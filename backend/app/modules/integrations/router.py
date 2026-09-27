@@ -62,6 +62,8 @@ def _config_out(config: IntegrationConfig) -> IntegrationConfigOut:
         teams_command_channel=config.teams_command_channel,
         teams_app_id_set=bool(config.teams_app_id),
         teams_app_password_set=bool(config.teams_app_password),
+        slack_strategic_channel=config.slack_strategic_channel,
+        teams_strategic_webhook_set=bool(config.teams_strategic_webhook_url),
     )
 
 

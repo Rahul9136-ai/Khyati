@@ -89,6 +89,13 @@ class IntegrationConfig(UUIDMixin, TenantMixin, TimestampMixin, Base):
     teams_app_id: Mapped[str] = mapped_column(String(128), default="")
     teams_app_password: Mapped[str] = mapped_column(String(256), default="")
 
+    # --- outbound autonomy advisories (Strategy Agent, root-cause, etc.) ---
+    # Strategic-tier advisories go here when set (e.g. a leadership channel
+    # distinct from day-to-day #wfm-alerts); blank falls back to
+    # slack_channel / teams_webhook_url, same channel as tactical alerts.
+    slack_strategic_channel: Mapped[str] = mapped_column(String(128), default="")
+    teams_strategic_webhook_url: Mapped[str] = mapped_column(String(1024), default="")
+
     @property
     def any_channel_live(self) -> bool:
         return bool(

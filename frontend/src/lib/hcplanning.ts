@@ -22,6 +22,9 @@ export interface PlanningConfig {
   tenure_bands: unknown[]
   monthly_overrides: Record<string, unknown>
   closing_overrides: Record<string, number>
+  // seasonality (see Promotion / SeasonalityMonth below)
+  historical_assumptions: Record<string, Record<string, number>>
+  yoy_growth_pct: number
 }
 
 export interface MonthResult {
@@ -249,4 +252,78 @@ export const FORMULA_NOTES: Partial<Record<keyof MonthResult, string>> = {
   capacity_pct: "Closing HC / Required HC",
   excess_deficit: "Closing HC − Required HC",
   ot_vto_hours: "Excess/Deficit × weekly hours (40)",
+}
+
+// --------------------------------------------------------------------------- //
+// Seasonality & promotions — "assumptions from trend/last-year data, or a
+// fixed time of promotions" instead of typing every month by hand.
+// --------------------------------------------------------------------------- //
+export interface Promotion {
+  id: string
+  lob_id: string | null
+  name: string
+  month_from: string // YYYY-MM — the reference occurrence
+  month_to: string
+  demand_impact_pct: number
+  recurring: boolean
+  note: string
+}
+
+export type PromotionInput = Omit<Promotion, "id">
+
+export async function listPromotions(lobId?: string) {
+  const res = await api.get("/hc-planning/promotions", { params: { lob_id: lobId } })
+  return res.data.data as Promotion[]
+}
+
+export async function createPromotion(body: PromotionInput) {
+  return (await api.post("/hc-planning/promotions", body)).data.data as Promotion
+}
+
+export async function updatePromotion(id: string, body: Partial<PromotionInput>) {
+  return (await api.put(`/hc-planning/promotions/${id}`, body)).data.data as Promotion
+}
+
+export async function deletePromotion(id: string) {
+  await api.delete(`/hc-planning/promotions/${id}`)
+}
+
+export interface DemandSuggestion {
+  suggested: number | null
+  base_month: string
+  base_value: number | null
+  yoy_growth_pct: number | null
+  trended: number | null
+  promotion_multiplier: number
+  matched_promotions: string[]
+  reason: string | null
+}
+
+export interface AssumptionSuggestion {
+  suggested: number | null
+  base_month: string
+}
+
+export interface SeasonalityMonth {
+  month: string
+  current_demand: number | null
+  demand_suggestion: DemandSuggestion
+  assumption_suggestions: Record<"ooo" | "io" | "attrition", AssumptionSuggestion>
+}
+
+export interface Seasonality {
+  months: SeasonalityMonth[]
+  yoy_growth_pct: number
+}
+
+export async function getSeasonality(lobId: string, from?: string, to?: string) {
+  const res = await api.get("/hc-planning/seasonality", { params: { lob_id: lobId, from, to } })
+  return res.data.data as Seasonality
+}
+
+export async function applySeasonality(body: {
+  lob_id: string; months: string[]; apply_demand: boolean; apply_assumptions: boolean
+}) {
+  const res = await api.post("/hc-planning/seasonality/apply", body)
+  return res.data.data as { applied_demand_months: number; applied_assumption_values: number }
 }

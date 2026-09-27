@@ -27,9 +27,17 @@ from app.modules.autonomy.models import (
 from app.modules.autonomy.schemas import AgentInfo, PolicyUpdate
 from app.modules.identity.models import User
 from app.modules.identity.service import record_audit
+from app.modules.integrations.adapters import SlackAdapter, TeamsAdapter
+from app.modules.integrations.service import get_or_create_config
 from app.modules.notifications.service import notify_user
 
 _LEVELS = {"manual", "assisted", "autonomous"}
+
+# Who a proposal is routed to, by tier — a permission code is a proxy for "this
+# is that person's job," so routing follows the real RBAC matrix (rbac.py)
+# rather than a hardcoded role name. Superusers always receive both tiers.
+_TACTICAL_PERMS = {"intraday:write", "request:approve_manager"}
+_STRATEGIC_PERMS = {"planning:write", "admin:settings"}
 
 
 # ------------------------------------------------------------------- policy
@@ -106,7 +114,7 @@ async def update_policy(
 async def run_orchestrator(
     db: AsyncSession,
     org_id: uuid.UUID,
-    actor: User,
+    actor: User | None,
     *,
     dry_run: bool = False,
     only: list[str] | None = None,
@@ -179,6 +187,7 @@ def _build_action(
         rationale=proposal.rationale,
         confidence=proposal.confidence,
         severity=proposal.severity,
+        tier=proposal.tier,
         status=STATUS_PENDING,
         target_type=proposal.target_type,
         target_id=proposal.target_id,
@@ -198,21 +207,26 @@ def _mark_applied(action: AgentAction, actor: User, status: str, note: str) -> N
 
 
 # --------------------------------------------------------------- application
-async def apply_action(db: AsyncSession, action: AgentAction, actor: User) -> str:
-    """Execute the real-world effect of an action; returns a result note."""
+async def apply_action(db: AsyncSession, action: AgentAction, actor: User | None) -> str:
+    """Execute the real-world effect of an action; returns a result note.
+
+    `actor` is the human who approved it, or None for an auto-applied action —
+    including every action a *scheduled* run applies, since that run has no
+    human actor at all (see autonomy/tasks.py).
+    """
     if action.action_type == "retrain_forecast":
         return await _apply_retrain(db, action, actor)
     return await _apply_advisory(db, action, actor)
 
 
-async def _apply_retrain(db: AsyncSession, action: AgentAction, actor: User) -> str:
+async def _apply_retrain(db: AsyncSession, action: AgentAction, actor: User | None) -> str:
     from app.modules.forecasting.schemas import ForecastRequest
     from app.modules.forecasting.service import run_forecast
 
     series_id = action.payload.get("series_id")
     if not series_id:
-        await _notify_leaders(
-            db, action.organization_id,
+        await _notify_stakeholders(
+            db, action.organization_id, tier=action.tier,
             title="Forecast Agent: manual retrain needed",
             body=action.rationale, kind="warning",
         )
@@ -235,41 +249,74 @@ async def _apply_retrain(db: AsyncSession, action: AgentAction, actor: User) -> 
     )
     action.payload = {**action.payload, "new_forecast_id": str(forecast.id),
                       "new_model": forecast.model, "new_mape": forecast.mape}
-    await _notify_leaders(
-        db, action.organization_id,
+    await _notify_stakeholders(
+        db, action.organization_id, tier=action.tier,
         title="Forecast Agent retrained a drifting forecast", body=note, kind="success",
     )
     return note
 
 
-async def _apply_advisory(db: AsyncSession, action: AgentAction, actor: User) -> str:
-    n = await _notify_leaders(
-        db, action.organization_id,
+async def _apply_advisory(db: AsyncSession, action: AgentAction, actor: User | None) -> str:
+    n = await _notify_stakeholders(
+        db, action.organization_id, tier=action.tier,
         title=f"[{action.agent}] {action.title}",
         body=action.rationale,
         kind="warning" if action.severity in ("warning", "critical") else "info",
     )
-    return f"Dispatched to {n} manager(s) for action."
+    return f"Dispatched to {n} stakeholder(s) for action."
 
 
-async def _notify_leaders(
-    db: AsyncSession, org_id: uuid.UUID, *, title: str, body: str, kind: str
+async def _notify_stakeholders(
+    db: AsyncSession, org_id: uuid.UUID, *, tier: str, title: str, body: str, kind: str
 ) -> int:
-    """Notify org superusers/admins. Avoids lazy role traversal on purpose."""
-    users = (
-        await db.execute(
-            select(User).where(
-                User.organization_id == org_id,
-                User.is_superuser.is_(True),
-                User.is_active.is_(True),
+    """Notify the people that tier is actually for — in-app always, plus
+    Slack/Teams when the org has that channel configured — and never leave a
+    proposal unheard: if no one in the org happens to hold the matching
+    permission, every superuser is the fallback audience.
+
+    tactical -> whoever runs the floor (Operations Manager, Real-Time Analyst…
+    i.e. `intraday:write` / `request:approve_manager`). strategic -> whoever
+    owns the plan (WFM Director, Planning Manager… `planning:write` /
+    `admin:settings`). Both come straight from the RBAC matrix (rbac.py), not
+    a hardcoded role name.
+    """
+    perms = _STRATEGIC_PERMS if tier == "strategic" else _TACTICAL_PERMS
+    users = list(
+        (
+            await db.execute(
+                select(User).where(User.organization_id == org_id, User.is_active.is_(True))
             )
-        )
-    ).scalars()
-    count = 0
-    for user in users:
+        ).scalars()
+    )
+    matched = [u for u in users if u.is_superuser or (u.permission_codes & perms)]
+    recipients = matched or [u for u in users if u.is_superuser]  # never leave it unheard
+    for user in recipients:
         await notify_user(db, org_id, user.id, title=title, body=body, kind=kind)
-        count += 1
-    return count
+
+    await _dispatch_external(db, org_id, tier=tier, title=title, body=body)
+    return len(recipients)
+
+
+async def _dispatch_external(
+    db: AsyncSession, org_id: uuid.UUID, *, tier: str, title: str, body: str
+) -> None:
+    """Push the same advisory to Slack/Teams so it reaches people where they
+    already work, not just the in-app bell. Strategic advisories go to the
+    org's dedicated strategic channel when one is configured, else fall back
+    to the same channel tactical alerts use. Simulated (recorded, not sent)
+    when the org hasn't configured that channel — mirrors every other
+    Slack/Teams dispatch in this app, so it's exercisable with zero setup."""
+    config = await get_or_create_config(db, org_id)
+    text = f"*{title}*\n{body}" if tier == "strategic" else f"{title}\n{body}"
+    if config.slack_enabled:
+        channel = (config.slack_strategic_channel if tier == "strategic" else "") \
+            or config.slack_channel or "#wfm-alerts"
+        await SlackAdapter(config).post_message(channel, text)
+    if config.teams_enabled:
+        webhook = (config.teams_strategic_webhook_url if tier == "strategic" else "") \
+            or config.teams_webhook_url
+        if webhook:
+            await TeamsAdapter(config).post_message(text, title=title, webhook_url=webhook)
 
 
 # --------------------------------------------------------------- action queue

@@ -1,5 +1,7 @@
 import { useMemo, useRef, useState } from "react"
-import { CalendarClock, CheckCircle2, FileDown, RotateCcw, Send, Sparkles, Upload, Wand2 } from "lucide-react"
+import {
+  AlertTriangle, CalendarClock, CheckCircle2, FileDown, RotateCcw, Send, Sparkles, Upload, Wand2,
+} from "lucide-react"
 import { Link } from "react-router-dom"
 
 import { AiSummary } from "@/components/ai-summary"
@@ -11,6 +13,7 @@ import { PermissionGate } from "@/components/permission-gate"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { computeAbsenceRisk } from "@/lib/domain/absenceRisk"
 import { agentBreakMarkers, breakAwareCoverage, optimiseBreaks, projectedSLRow } from "@/lib/domain/breaks"
 import { planAutoSchedule, type AutoScheduleResult } from "@/lib/domain/autoschedule"
 import { buildPlan, fmtPct, summarisePlan } from "@/lib/domain/planning"
@@ -60,6 +63,17 @@ export function Scheduling() {
     [plan, onDuty, slRow],
   )
   const optimised = Object.keys(breakOverrides).length > 0
+
+  // AI absence/no-show risk — flags agents statistically likely to be absent
+  // or late for today's shift, from a synthetic-but-deterministic attendance
+  // ledger (see lib/domain/absenceRisk.ts), so buffer can be built in before
+  // it happens rather than reacting on the day.
+  const absenceRisk = useMemo(() => computeAbsenceRisk(visibleAgents), [visibleAgents])
+  const absenceRiskById = useMemo(
+    () => new Map(absenceRisk.map((r) => [r.agentId, r])),
+    [absenceRisk],
+  )
+  const flaggedAgents = absenceRisk.filter((r) => r.level !== "low")
 
   const fileRef = useRef<HTMLInputElement>(null)
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -231,6 +245,40 @@ export function Scheduling() {
         </Card>
       </div>
 
+      <Card className="glass mb-4">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <AlertTriangle className="h-4 w-4 text-primary" /> AI Absence Risk
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Flags agents statistically likely to be absent or late for today's shift, from each
+            agent's own attendance pattern — build in buffer before it happens, not after.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {flaggedAgents.length === 0 ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" /> No agents flagged for today — everyone's recent attendance is clean.
+            </p>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {flaggedAgents.map((r) => (
+                <div key={r.agentId} className={cn(
+                  "rounded-lg border p-2.5",
+                  r.level === "high" ? "border-destructive/50" : "border-amber-500/40",
+                )}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-semibold">{r.name}</span>
+                    <Badge variant={r.level === "high" ? "destructive" : "warning"}>{r.riskPct}% risk</Badge>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{r.reason}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <Card className="glass">
         <CardHeader>
           <CardTitle>Daily shift plan</CardTitle>
@@ -252,9 +300,21 @@ export function Scheduling() {
                   const cov = coveredIdx(a.shift)
                   const skilled = a.skills.includes(queue.id)
                   const markers = agentBreakMarkers(a, shiftPatterns, breakOverrides)
+                  const risk = absenceRiskById.get(a.id)
                   return (
                     <tr key={a.id} className="hover:bg-muted/30">
-                      <td className="sticky left-0 bg-card px-2 py-1 font-medium">{a.name}</td>
+                      <td className="sticky left-0 bg-card px-2 py-1 font-medium">
+                        <span className="flex items-center gap-1">
+                          {a.name}
+                          {risk && risk.level !== "low" && (
+                            <span title={`AI absence risk: ${risk.riskPct}% — ${risk.reason}`}>
+                              <AlertTriangle
+                                className={cn("h-3 w-3 shrink-0", risk.level === "high" ? "text-destructive" : "text-amber-500")}
+                              />
+                            </span>
+                          )}
+                        </span>
+                      </td>
                       <td className="px-2 py-1 tabular-nums text-muted-foreground">{a.shift}</td>
                       {INTERVALS.map((_, i) => {
                         let bg = "transparent"

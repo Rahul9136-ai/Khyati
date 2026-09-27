@@ -367,6 +367,7 @@ async def seed_demo() -> dict:
             AgentPlanningProfile,
             HcDemand,
             HcPlanningConfig,
+            HcPromotion,
             NewHireBatch,
         )
 
@@ -387,11 +388,67 @@ async def seed_demo() -> dict:
         for k, m in enumerate(months):
             db.add(HcDemand(organization_id=org.id, lob_id=lob.id, month=m,
                             billable_fte=round(base + k * 0.3, 2)))
+
+        # ---- Seasonality history + promotions ----------------------------
+        # A year of "actuals" one year behind the live window, shaped by a
+        # believable peak season (Q4 holiday surge, a January dip), so the
+        # seasonality suggestion engine (last year x trend x promotions —
+        # see engine/seasonality.py) has real numbers to project from instead
+        # of showing "not enough history" on a fresh org. `locked=True` marks
+        # these as historical actuals, not editable projections (see
+        # compute_capacity's live-window filter).
+        DEMAND_SEASONAL_MULT = {  # by calendar month, 1-12
+            1: 0.85, 2: 0.88, 3: 0.92, 4: 0.95, 5: 0.97, 6: 1.00,
+            7: 1.02, 8: 1.00, 9: 0.98, 10: 1.05, 11: 1.25, 12: 1.35,
+        }
+        ATTRITION_SEASONAL_MULT = {  # post-holiday/post-bonus churn spikes
+            1: 1.4, 2: 1.1, 3: 1.0, 4: 0.9, 5: 0.9, 6: 0.9,
+            7: 0.9, 8: 0.9, 9: 0.95, 10: 1.0, 11: 1.1, 12: 1.3,
+        }
+        last_year_base = 14.0
+        historical_ooo: dict[str, float] = {}
+        historical_io: dict[str, float] = {}
+        historical_attrition: dict[str, float] = {}
+        month_set = set(months)
+        for m in months:
+            ly_month = add_months(m, -12)
+            mm = int(ly_month[5:7])
+            # the live window is 14 months (> 1 year), so the year-ago of its
+            # last couple of months lands back inside the window itself —
+            # skip inserting a duplicate row there; the suggestion for those
+            # months resolves against that live value instead, which is fine.
+            if ly_month not in month_set:
+                db.add(HcDemand(
+                    organization_id=org.id, lob_id=lob.id, month=ly_month,
+                    billable_fte=round(last_year_base * DEMAND_SEASONAL_MULT[mm], 2),
+                    locked=True,
+                ))
+            historical_ooo[ly_month] = round(0.04 * (1.15 if mm in (11, 12) else 1.0), 4)
+            historical_io[ly_month] = round(0.04 * (1.10 if mm in (11, 12) else 1.0), 4)
+            historical_attrition[ly_month] = round(0.0125 * ATTRITION_SEASONAL_MULT[mm], 4)
+
         db.add(HcPlanningConfig(
             organization_id=org.id, lob_id=lob.id,
             ooo_shrinkage=0.04, io_shrinkage=0.04, attrition=0.0125, weekly_hours=40,
             hiring_throughput=0.90, training_throughput=0.95,
             actuals_through=add_months(start, 4),
+            historical_assumptions={
+                "ooo": historical_ooo, "io": historical_io, "attrition": historical_attrition,
+            },
+            yoy_growth_pct=5.0,
+        ))
+        last_year = int(start[:4]) - 1
+        db.add(HcPromotion(
+            organization_id=org.id, lob_id=lob.id, name="Q4 Holiday Surge",
+            month_from=f"{last_year}-11", month_to=f"{last_year}-12",
+            demand_impact_pct=20.0, recurring=True,
+            note="Seasonal holiday volume spike — recurs every Nov-Dec.",
+        ))
+        db.add(HcPromotion(
+            organization_id=org.id, lob_id=lob.id, name="New Year Reset",
+            month_from=f"{start[:4]}-01", month_to=f"{start[:4]}-01",
+            demand_impact_pct=-8.0, recurring=True,
+            note="Post-holiday demand dip every January.",
         ))
         # a couple of demo hiring batches (feed Ramp ~1 month after hire)
         first_of = date.today().replace(day=1)

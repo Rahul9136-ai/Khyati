@@ -35,6 +35,11 @@ class Proposal:
     rationale: str
     confidence: float
     severity: str  # info | warning | critical
+    # tactical: this week/interval's execution fix (overtime, VTO, retrain…),
+    # routed to the people who run the floor. strategic: "this keeps recurring
+    # under the current plan — the plan itself should change," routed to the
+    # people who own that plan (see autonomy/service._notify_stakeholders).
+    tier: str = "tactical"
     target_type: str | None = None
     target_id: uuid.UUID | None = None
     target_label: str | None = None
@@ -250,10 +255,14 @@ async def planning_agent(ctx: AgentContext) -> list[Proposal]:
     short = abs(week.gap)
     ratio = short / week.required_fte if week.required_fte else 0.0
     if weeks_out <= 3:
-        action_type, remedy = "offer_overtime", "overtime and reprioritised shrinkage"
+        action_type, tier = "offer_overtime", "tactical"
+        remedy = "overtime and reprioritised shrinkage"
         title = f"Near-term shortfall in '{plan_name}' — cover with overtime"
     else:
-        action_type, remedy = "raise_hiring", "an incremental hiring / cross-training plan"
+        # Enough lead time that this isn't "patch this week" — it's a call on the
+        # hiring plan itself, so it goes to whoever owns that plan, not the floor.
+        action_type, tier = "raise_hiring", "strategic"
+        remedy = "an incremental hiring / cross-training plan"
         title = f"Capacity shortfall in '{plan_name}' — raise a hiring plan"
     return [
         Proposal(
@@ -267,6 +276,7 @@ async def planning_agent(ctx: AgentContext) -> list[Proposal]:
             ),
             confidence=_clamp(0.6 + min(0.3, ratio)),
             severity="critical" if ratio >= 0.15 else "warning",
+            tier=tier,
             target_type="plan",
             target_id=week.plan_id,
             target_label=plan_name,
@@ -315,6 +325,7 @@ async def root_cause_agent(ctx: AgentContext) -> list[Proposal]:
             ),
             confidence=_clamp(0.65 + min(0.2, top[1])),
             severity="warning",
+            tier="strategic",  # leadership-level synthesis, not a floor fix
             target_type="org",
             target_id=None,
             target_label="Organization KPIs",
@@ -352,6 +363,125 @@ async def data_quality_agent(ctx: AgentContext) -> list[Proposal]:
                 target_id=queue.id,
                 target_label=queue.name,
                 payload={"anomalies": anomalies, "days_analyzed": result.get("days_analyzed")},
+            )
+        )
+    return out
+
+
+# ------------------------------------------------------------------- strategy
+async def strategy_agent(ctx: AgentContext) -> list[Proposal]:
+    """Looks across weeks/versions, not a single snapshot, for a *persistent*
+    pattern the tactical agents keep re-flagging one interval at a time — and
+    escalates it as a strategy-level call ("I'm anticipating this keeps
+    happening under the current plan, so the plan should change") rather than
+    another one-off fix. Always tier="strategic"; never auto-applies (see
+    AgentSpec.default_auto_apply below) — a plan/strategy change is a human
+    call, however confident the pattern is.
+    """
+    out: list[Proposal] = []
+
+    # 1) Structural staffing shortfall: short most weeks for two months running,
+    #    regardless of overtime patched in week by week — the hiring pace or
+    #    target buffer is wrong, not this week's execution.
+    lookback_start = ctx.today - timedelta(weeks=8)
+    rows = await ctx.db.execute(
+        select(CapacityPlanWeek, CapacityPlan.name)
+        .join(CapacityPlan, CapacityPlanWeek.plan_id == CapacityPlan.id)
+        .where(
+            CapacityPlan.organization_id == ctx.org_id,
+            CapacityPlanWeek.week_start >= lookback_start,
+            CapacityPlanWeek.week_start <= ctx.today,
+        )
+    )
+    by_plan: dict[uuid.UUID, list[CapacityPlanWeek]] = {}
+    plan_names: dict[uuid.UUID, str] = {}
+    for week, name in rows.all():
+        by_plan.setdefault(week.plan_id, []).append(week)
+        plan_names[week.plan_id] = name
+
+    for plan_id, weeks in by_plan.items():
+        if len(weeks) < 4:  # not enough elapsed history to call it a pattern yet
+            continue
+        short_weeks = [
+            w for w in weeks
+            if w.gap < 0 and w.required_fte and abs(w.gap) / w.required_fte >= 0.08
+        ]
+        ratio = len(short_weeks) / len(weeks)
+        if ratio < 0.6:  # occasional shortfalls are normal; this is about persistence
+            continue
+        avg_short = sum(abs(w.gap) for w in short_weeks) / len(short_weeks)
+        out.append(
+            Proposal(
+                agent="strategy",
+                action_type="strategy_change",
+                title=f"'{plan_names[plan_id]}' keeps running short — change the staffing strategy",
+                rationale=(
+                    f"{len(short_weeks)} of the last {len(weeks)} weeks in '{plan_names[plan_id]}' "
+                    f"were understaffed by {avg_short:.1f} FTE on average. Covering each week with "
+                    "overtime treats the symptom — I'm anticipating this keeps recurring under "
+                    "the current hiring pace and target buffer, so the strategy itself (hiring "
+                    "lead time, target buffer %, or shift mix) needs to change, not just this "
+                    "week's fix."
+                ),
+                confidence=_clamp(0.55 + ratio * 0.35),
+                severity="critical" if ratio >= 0.8 else "warning",
+                tier="strategic",
+                target_type="plan",
+                target_id=plan_id,
+                target_label=plan_names[plan_id],
+                payload={
+                    "weeks_examined": len(weeks),
+                    "short_weeks": len(short_weeks),
+                    "shortfall_ratio": round(ratio, 3),
+                    "avg_shortfall_fte": round(avg_short, 2),
+                },
+            )
+        )
+
+    # 2) Forecasting strategy not working: repeated retrains, no real improvement.
+    #    (The Forecast Agent already retrains on drift — this catches the case
+    #    where retraining itself isn't the fix.)
+    rows2 = await ctx.db.execute(
+        select(Forecast)
+        .where(Forecast.organization_id == ctx.org_id, Forecast.queue_id.is_not(None))
+        .order_by(Forecast.queue_id, Forecast.version.desc())
+    )
+    by_queue: dict[uuid.UUID, list[Forecast]] = {}
+    for fc in rows2.scalars():
+        by_queue.setdefault(fc.queue_id, []).append(fc)
+
+    for versions in by_queue.values():
+        recent = sorted(versions, key=lambda f: f.version)[-3:]
+        if len(recent) < 3 or any(v.mape is None for v in recent):
+            continue
+        mapes = [v.mape for v in recent]
+        if mapes[-1] <= 0.15 or mapes[-1] < mapes[0] * 0.9:
+            continue  # either it's fine now, or genuinely trending down — leave it
+        latest = recent[-1]
+        out.append(
+            Proposal(
+                agent="strategy",
+                action_type="strategy_change",
+                title=(
+                    f"Forecast '{latest.name}' keeps missing after {len(recent)} retrains — "
+                    "change the forecasting strategy"
+                ),
+                rationale=(
+                    f"The last {len(recent)} retrains gave MAPE "
+                    + ", ".join(f"{m:.0%}" for m in mapes)
+                    + " — no real improvement version over version. Retraining the same model on "
+                    "the same assumptions won't fix a structural miss; I'm anticipating it keeps "
+                    "missing target, so it's worth trying a different model family or checking "
+                    "whether an unlogged event (see Scenario Studio) is driving the gap, rather "
+                    "than another retrain."
+                ),
+                confidence=_clamp(0.55 + min(0.3, mapes[-1] - 0.15)),
+                severity="warning",
+                tier="strategic",
+                target_type="forecast",
+                target_id=latest.id,
+                target_label=latest.name,
+                payload={"versions": [{"version": v.version, "mape": v.mape} for v in recent]},
             )
         )
     return out
@@ -395,6 +525,14 @@ AGENT_SPECS: list[AgentSpec] = [
         "Scans recent actuals for outliers and schema issues that would bias the next "
         "forecast, flagging them for repair.",
         default_auto_apply=False, fn=data_quality_agent,
+    ),
+    AgentSpec(
+        "strategy", "Strategy Agent",
+        "Looks across weeks/versions for a persistent pattern — a plan running short "
+        "most weeks, or retrains that never improve — and recommends changing the "
+        "strategy itself (hiring pace, buffer, model family), not another one-off fix. "
+        "Always routed to plan owners; never auto-applies.",
+        default_auto_apply=False, fn=strategy_agent,
     ),
 ]
 

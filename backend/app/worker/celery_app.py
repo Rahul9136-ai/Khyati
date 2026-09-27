@@ -23,6 +23,16 @@ celery.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_time_limit=60 * 30,  # hard cap for long ML training jobs
+    beat_schedule={
+        # The autonomy layer senses and acts on its own — no one has to click
+        # "Run now" (see app/modules/autonomy/tasks.py). Requires a `celery
+        # beat` process alongside the worker (docker-compose.yml's `beat`
+        # service); without one, /autonomy/run still works as a manual trigger.
+        "autonomy-sense-and-act": {
+            "task": "autonomy.run_all_orgs",
+            "schedule": float(settings.AUTONOMY_RUN_INTERVAL_SECONDS),
+        },
+    },
 )
 
 # Discover `tasks.py` inside each domain package as modules are built.

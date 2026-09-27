@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  CheckCircle2, ChevronDown, ChevronRight, Clock, MessageSquare,
+  CheckCircle2, ChevronDown, ChevronRight, Clock, ExternalLink, MessageSquare,
   Plus, Send, ShieldCheck, ThumbsDown, ThumbsUp,
 } from "lucide-react"
 import { useEffect, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 
+import { ApprovalTimeline } from "@/components/approval-timeline"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
 import { PermissionGate } from "@/components/permission-gate"
@@ -18,7 +19,7 @@ import { Select } from "@/components/ui/select"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import {
-  type Approval, type ApprovalSource, KINDS_BY_SOURCE,
+  type ApprovalSource, KINDS_BY_SOURCE,
   decideApproval, getConfig, listApprovals, raiseApproval,
 } from "@/lib/integrations"
 import { cn } from "@/lib/utils"
@@ -35,26 +36,6 @@ const STATUS_VARIANT: Record<string, "warning" | "success" | "destructive" | "se
 }
 
 const CHANNEL_ICON: Record<string, string> = { slack: "Slack", teams: "Teams", in_app: "In-app" }
-
-function relTime(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
-}
-
-function Timeline({ approval }: { approval: Approval }) {
-  return (
-    <div className="mt-3 space-y-1.5 border-l-2 border-border pl-3">
-      {(approval.events ?? []).map((e, i) => (
-        <div key={i} className="flex items-start gap-2 text-xs">
-          <span className="mt-0.5 font-mono text-muted-foreground">{relTime(e.at).split(", ")[1] ?? ""}</span>
-          <Badge variant="outline" className="shrink-0">{e.type}</Badge>
-          {e.channel && <span className="shrink-0 text-muted-foreground">via {CHANNEL_ICON[e.channel] ?? e.channel}</span>}
-          <span className="text-muted-foreground">{e.detail}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
 
 export function Approvals() {
   const qc = useQueryClient()
@@ -149,6 +130,10 @@ export function Approvals() {
                     <Badge variant="outline">{a.source}</Badge>
                     <Badge variant="secondary">{a.kind.replace(/_/g, " ")}</Badge>
                     <Badge variant={STATUS_VARIANT[a.status] ?? "secondary"}>{a.status}</Badge>
+                    <Link to={`/approvals/${a.id}`} className="text-muted-foreground hover:text-foreground"
+                      title="Open the full change record">
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </Link>
                   </div>
                 </div>
               </CardHeader>
@@ -177,7 +162,7 @@ export function Approvals() {
                     <span className="text-xs text-emerald-500">✓ {String(a.apply_result.detail)}</span>
                   )}
                 </div>
-                {isOpen && <Timeline approval={a} />}
+                {isOpen && <div className="mt-3"><ApprovalTimeline approval={a} /></div>}
               </CardContent>
             </Card>
           )

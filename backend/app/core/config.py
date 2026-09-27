@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     # --- Redis / Celery ---
     REDIS_URL: str = "redis://localhost:6379/0"
+    # How often the Autonomy orchestrator senses & acts on its own, across every
+    # org, with no one clicking "Run now" (celery beat; see autonomy/tasks.py).
+    AUTONOMY_RUN_INTERVAL_SECONDS: int = 900  # 15 min
 
     # --- AI (optional; deterministic fallbacks are used when unset) ---
     ANTHROPIC_API_KEY: str = ""

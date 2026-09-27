@@ -31,6 +31,7 @@ class ActionOut(BaseModel):
     rationale: str
     confidence: float
     severity: str
+    tier: str
     status: str
     target_type: str | None
     target_id: uuid.UUID | None

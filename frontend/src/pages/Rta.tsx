@@ -9,7 +9,7 @@ import { ScheduleRequestCard } from "@/components/schedule-request-card"
 import { PermissionGate } from "@/components/permission-gate"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { ArrowRight, Activity, ClipboardCheck, PhoneCall, RefreshCw, Siren, UserX, Zap } from "lucide-react"
+import { ArrowRight, Activity, ClipboardCheck, PhoneCall, Radar, RefreshCw, Siren, UserX, Zap } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { buildAgentDay, DAY_START, escalationFor, scoreAgentDay, type EscalationLevel } from "@/lib/domain/adherence"
 import { agentAdherencePct, AUX, AUX_BY_CODE, inAdherence } from "@/lib/domain/seed"
@@ -19,6 +19,10 @@ import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
 
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`
+
+// How far ahead the predictive SL-breach warning looks, in 30-min intervals
+// (see buildPlan's interval: 1800) — 4 × 30 = 2 hours.
+const LOOKAHEAD = 4
 
 export function Rta() {
   const {
@@ -46,6 +50,34 @@ export function Rta() {
   )
   const slAtRisk = surge || underQueues.length > 0
   const pressured = surge ? queues.map((q) => q.id) : underQueues
+
+  // AI predictive SL-breach early warning — looks LOOKAHEAD intervals ahead on
+  // each queue's own forecast (independent of the "simulate surge" demo
+  // toggle above, which only drives the reactive break-recovery card) and
+  // flags a breach before it happens, not once the current interval is
+  // already short.
+  const earlyWarnings = useMemo(() => {
+    const out: {
+      queueId: string; queueName: string; etaMinutes: number; atLabel: string
+      shortBy: number; volumeNow: number; volumeThen: number
+    }[] = []
+    for (const q of queues) {
+      const plan = buildPlan(forecasts[q.id], q.aht, q, shrinkage, agents)
+      const current = plan[nowIdx]
+      if (!current || current.variance < 0) continue // already breached — the reactive card above covers this
+      for (let k = 1; k <= LOOKAHEAD && nowIdx + k < plan.length; k++) {
+        const future = plan[nowIdx + k]
+        if (future.variance < 0) {
+          out.push({
+            queueId: q.id, queueName: q.name, etaMinutes: k * 30, atLabel: future.label,
+            shortBy: Math.abs(future.variance), volumeNow: current.volume, volumeThen: future.volume,
+          })
+          break
+        }
+      }
+    }
+    return out.sort((a, b) => a.etaMinutes - b.etaMinutes)
+  }, [queues, forecasts, shrinkage, agents, nowIdx])
 
   const live = useMemo(
     () =>
@@ -271,6 +303,46 @@ export function Rta() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className={cn("glass mt-4", earlyWarnings.length > 0 && "border-amber-500/40")}>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Radar className="h-4 w-4 text-primary" /> Predictive SL Warning
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Looks {LOOKAHEAD * 30} minutes ahead on every queue's own forecast — flags a breach
+            before it happens, not once the current interval is already short.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {earlyWarnings.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No breach forecast on any queue in the next {LOOKAHEAD * 30} minutes.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {earlyWarnings.map((w) => {
+                const volumeDelta = w.volumeThen - w.volumeNow
+                const volumePct = w.volumeNow > 0 ? Math.round((volumeDelta / w.volumeNow) * 100) : 0
+                return (
+                  <div key={w.queueId} className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/40 p-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold">{w.queueName}</div>
+                      <div className="text-xs text-muted-foreground">
+                        SL likely to breach in ~{w.etaMinutes} min (at {w.atLabel}) — short{" "}
+                        {w.shortBy} agent{w.shortBy === 1 ? "" : "s"}
+                        {volumeDelta > 0 ? `, volume rising ${volumePct}%` : ""}. Act now — overtime
+                        or a pre-emptive break recall avoids the breach.
+                      </div>
+                    </div>
+                    <Badge variant="warning">ETA {w.etaMinutes}m</Badge>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="glass mt-4">
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0">

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
+from app.modules.hcplanning.engine import seasonality
 from app.modules.hcplanning.engine.agents import AgentRecord
 from app.modules.hcplanning.engine.capacity import build_capacity_table
 from app.modules.hcplanning.engine.config import DEFAULT_TENURE_BANDS, PlanningConfig, TenureBand
@@ -21,9 +22,16 @@ from app.modules.hcplanning.models import (
     AgentPlanningProfile,
     HcDemand,
     HcPlanningConfig,
+    HcPromotion,
     NewHireBatch,
 )
-from app.modules.hcplanning.schemas import ConfigIn, DemandIn, ProfileIn
+from app.modules.hcplanning.schemas import (
+    ConfigIn,
+    DemandIn,
+    ProfileIn,
+    PromotionIn,
+    PromotionUpdate,
+)
 from app.modules.workforce.models import Employee, Lob
 
 
@@ -297,11 +305,15 @@ async def compute_capacity(
 
     demand_rows = await list_demand(db, org_id, lob_id)
     demand = {r.month: r.billable_fte for r in demand_rows}
+    # `locked` rows are last year's actuals kept only as the seasonality
+    # suggestion engine's history (see engine/seasonality.py) — they must
+    # never silently extend the live plan's default window.
+    live_months = [r.month for r in demand_rows if not r.locked]
 
     if from_month and to_month:
         months = months_between(from_month, to_month)
-    elif demand:
-        months = months_between(min(demand), max(demand))
+    elif live_months:
+        months = months_between(min(live_months), max(live_months))
     else:
         return {"lob": lob, "months": [], "results": [], "config_row": None, "agents": 0}
 
@@ -393,3 +405,148 @@ async def compute_scenario(
         "config_row": cfg_row, "agents": len(agents),
     }
     return {"baseline": baseline, "scenario": scenario}
+
+
+# --------------------------------------------------------------------------- #
+# Promotions (fixed/recurring business events feeding the demand suggestion)
+# --------------------------------------------------------------------------- #
+async def list_promotions(
+    db: AsyncSession, org_id: uuid.UUID, lob_id: uuid.UUID | None
+) -> list[HcPromotion]:
+    """LOB-specific promotions plus org-wide ones (``lob_id`` NULL) — both apply
+    to that LOB."""
+    rows = await db.execute(
+        select(HcPromotion).where(
+            HcPromotion.organization_id == org_id,
+            (HcPromotion.lob_id == lob_id) | (HcPromotion.lob_id.is_(None)),
+        ).order_by(HcPromotion.month_from)
+    )
+    return list(rows.scalars())
+
+
+async def create_promotion(db: AsyncSession, org_id: uuid.UUID, data: PromotionIn) -> HcPromotion:
+    row = HcPromotion(organization_id=org_id, **data.model_dump(exclude_unset=True))
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def update_promotion(
+    db: AsyncSession, org_id: uuid.UUID, promotion_id: uuid.UUID, data: PromotionUpdate
+) -> HcPromotion:
+    row = await db.get(HcPromotion, promotion_id)
+    if row is None or row.organization_id != org_id:
+        raise NotFoundError("Promotion not found")
+    for k, v in data.model_dump(exclude_unset=True).items():
+        setattr(row, k, v)
+    await db.flush()
+    return row
+
+
+async def delete_promotion(db: AsyncSession, org_id: uuid.UUID, promotion_id: uuid.UUID) -> None:
+    row = await db.get(HcPromotion, promotion_id)
+    if row is None or row.organization_id != org_id:
+        raise NotFoundError("Promotion not found")
+    await db.delete(row)
+
+
+# --------------------------------------------------------------------------- #
+# Seasonality suggestions (last year's actuals + promotions -> next-year plan)
+# --------------------------------------------------------------------------- #
+def _to_promotion_windows(rows: list[HcPromotion]) -> list[seasonality.PromotionWindow]:
+    return [
+        seasonality.PromotionWindow(
+            name=r.name, month_from=r.month_from, month_to=r.month_to,
+            demand_impact_pct=r.demand_impact_pct, recurring=r.recurring,
+        )
+        for r in rows
+    ]
+
+
+async def compute_seasonality(
+    db: AsyncSession, org_id: uuid.UUID, lob_id: uuid.UUID, *,
+    from_month: str | None = None, to_month: str | None = None,
+) -> dict:
+    """Suggested demand + assumptions for each editable month in the window,
+    derived from last year's actuals (``HcDemand``/``historical_assumptions``
+    rows marked historical) and known promotions. Review-only — nothing is
+    written until `apply_seasonality` is called."""
+    demand_rows = await list_demand(db, org_id, lob_id)
+    demand = {r.month: r.billable_fte for r in demand_rows}
+    editable_months = [r.month for r in demand_rows if not r.locked]
+
+    if from_month and to_month:
+        months = months_between(from_month, to_month)
+    elif editable_months:
+        months = months_between(min(editable_months), max(editable_months))
+    else:
+        months = []
+
+    cfg_row = await get_config_row(db, org_id, lob_id)
+    promos = _to_promotion_windows(await list_promotions(db, org_id, lob_id))
+    hist = cfg_row.historical_assumptions or {}
+
+    out = []
+    for month in months:
+        demand_suggestion = seasonality.suggest_demand(
+            demand, month, cfg_row.yoy_growth_pct, promos
+        )
+        assumption_suggestions = {
+            key: seasonality.suggest_assumption(hist.get(key, {}), month)
+            for key in ("ooo", "io", "attrition")
+        }
+        out.append({
+            "month": month,
+            "current_demand": demand.get(month),
+            "demand_suggestion": demand_suggestion,
+            "assumption_suggestions": assumption_suggestions,
+        })
+    return {"months": out, "yoy_growth_pct": cfg_row.yoy_growth_pct}
+
+
+async def apply_seasonality(
+    db: AsyncSession, org_id: uuid.UUID, lob_id: uuid.UUID, *,
+    months: list[str], apply_demand: bool, apply_assumptions: bool,
+) -> dict:
+    """Write the accepted suggestions through the same paths a human edit
+    would use — ``upsert_demand`` for demand, ``monthly_overrides`` for
+    assumptions — so nothing downstream needs to know these came from the
+    seasonality engine rather than a planner typing them in."""
+    if not months:
+        return {"applied_demand_months": 0, "applied_assumption_values": 0}
+    result = await compute_seasonality(
+        db, org_id, lob_id, from_month=min(months), to_month=max(months)
+    )
+    by_month = {m["month"]: m for m in result["months"] if m["month"] in months}
+
+    applied_demand = 0
+    if apply_demand:
+        items = [
+            DemandIn(lob_id=lob_id, month=month,
+                     billable_fte=round(m["demand_suggestion"]["suggested"]))
+            for month, m in by_month.items()
+            if m["demand_suggestion"]["suggested"] is not None
+        ]
+        if items:
+            await upsert_demand(db, org_id, lob_id, items)
+            applied_demand = len(items)
+
+    applied_assumptions = 0
+    if apply_assumptions:
+        cfg_row = await get_config_row(db, org_id, lob_id)
+        overrides = {k: dict(v) for k, v in (cfg_row.monthly_overrides or {}).items()}
+        for key in ("ooo", "io", "attrition"):
+            overrides.setdefault(key, {})
+        for month, m in by_month.items():
+            for key in ("ooo", "io", "attrition"):
+                suggested = m["assumption_suggestions"][key]["suggested"]
+                if suggested is not None:
+                    overrides[key][month] = suggested
+                    applied_assumptions += 1
+        cfg_row.monthly_overrides = overrides
+        await db.flush()
+
+    return {
+        "applied_demand_months": applied_demand,
+        "applied_assumption_values": applied_assumptions,
+    }

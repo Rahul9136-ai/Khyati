@@ -57,7 +57,9 @@ class DispatchResult:
 
 
 def _web_link(approval_id: str) -> str:
-    return f"{settings.APP_WEB_URL.rstrip('/')}/approvals?focus={approval_id}"
+    """The dedicated, shareable record page for one approval — before/after,
+    who/what/when, rationale, timeline — not the filtered list."""
+    return f"{settings.APP_WEB_URL.rstrip('/')}/approvals/{approval_id}"
 
 
 def _callback_url(platform: str) -> str:
@@ -163,6 +165,28 @@ class SlackAdapter:
             return DispatchResult("slack", ok=False, simulated=False,
                                   detail=f"delivery error: {exc}", payload=payload)
 
+    async def post_message(self, channel: str, text: str) -> DispatchResult:
+        """Post a standalone advisory (not a reply, not an approval card) —
+        used for proactive autonomy notifications. Bot token first, webhook
+        fallback, matching .send()'s dual path; `channel` is ignored on the
+        webhook path since a webhook already targets one fixed channel."""
+        if self.config.slack_bot_token:
+            return await self.reply(channel, None, text)
+        payload = {"text": text}
+        if not self.live:
+            return DispatchResult("slack", ok=True, simulated=True,
+                                  detail="Slack not configured — simulated", payload=payload)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                res = await client.post(self.config.slack_webhook_url, json=payload)
+                ok = res.status_code < 300
+                return DispatchResult("slack", ok=ok, simulated=False,
+                                      detail=f"webhook status {res.status_code}", payload=payload)
+        except httpx.HTTPError as exc:
+            log.warning("slack_advisory_failed", error=str(exc))
+            return DispatchResult("slack", ok=False, simulated=False,
+                                  detail=f"delivery error: {exc}", payload=payload)
+
     async def reply(self, channel: str, thread_ts: str | None, text: str) -> DispatchResult:
         """Post a plain-text reply in a channel (threaded, when `thread_ts` is given) —
         the automation's "revert back on the platform" for an inbound @mention command."""
@@ -263,6 +287,44 @@ class TeamsAdapter:
                                       detail=f"webhook status {res.status_code}", payload=payload)
         except httpx.HTTPError as exc:
             log.warning("teams_dispatch_failed", error=str(exc))
+            return DispatchResult("teams", ok=False, simulated=False,
+                                  detail=f"delivery error: {exc}", payload=payload)
+
+    async def post_message(
+        self, text: str, *, title: str | None = None, webhook_url: str | None = None
+    ) -> DispatchResult:
+        """Post a standalone advisory to an Incoming Webhook channel — no
+        approval buttons, no conversation reference needed (unlike .reply(),
+        which replies to an inbound Bot Framework activity). `webhook_url`
+        lets a caller target a different channel than the org's default
+        (e.g. a dedicated strategic-alerts channel); defaults to it."""
+        url = webhook_url or self.config.teams_webhook_url
+        payload = {
+            "type": "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard", "version": "1.4",
+                    "body": [
+                        *([{"type": "TextBlock", "size": "Medium", "weight": "Bolder", "text": title}]
+                          if title else []),
+                        {"type": "TextBlock", "text": text, "wrap": True},
+                    ],
+                },
+            }],
+        }
+        if not (self.config.teams_enabled and url):
+            return DispatchResult("teams", ok=True, simulated=True,
+                                  detail="Teams not configured — simulated", payload=payload)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                res = await client.post(url, json=payload)
+                ok = res.status_code < 300
+                return DispatchResult("teams", ok=ok, simulated=False,
+                                      detail=f"webhook status {res.status_code}", payload=payload)
+        except httpx.HTTPError as exc:
+            log.warning("teams_advisory_failed", error=str(exc))
             return DispatchResult("teams", ok=False, simulated=False,
                                   detail=f"delivery error: {exc}", payload=payload)
 

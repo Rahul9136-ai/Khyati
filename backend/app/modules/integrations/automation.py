@@ -87,7 +87,9 @@ def _title_and_summary(parsed: dict, parser: str, source: str) -> tuple[str, str
 
 
 def _approval_link(approval_id: uuid.UUID) -> str:
-    return f"{settings.APP_WEB_URL.rstrip('/')}/approvals?focus={approval_id}"
+    """The dedicated, shareable record page for this one request — the
+    "artifact" the reply points back to: before/after, rationale, timeline."""
+    return f"{settings.APP_WEB_URL.rstrip('/')}/approvals/{approval_id}"
 
 
 def _reply_text(approval: ApprovalRequest, parsed: dict, attempted_auto: bool) -> str:

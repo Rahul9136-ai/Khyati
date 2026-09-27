@@ -81,6 +81,13 @@ class HcPlanningConfig(UUIDMixin, TenantMixin, TimestampMixin, Base):
     monthly_overrides: Mapped[dict] = mapped_column(JSON, default=dict)
     # editable Closing HC overrides: {"YYYY-MM": value}
     closing_overrides: Mapped[dict] = mapped_column(JSON, default=dict)
+    # last year's actual per-month assumptions — the seasonality suggestion
+    # engine's history (engine/seasonality.py). Same shape as monthly_overrides
+    # but never read by build_capacity_table; purely a suggestion input.
+    historical_assumptions: Mapped[dict] = mapped_column(JSON, default=dict)
+    # planner's expected YoY demand growth (%) on top of last year's seasonal
+    # shape, e.g. 5.0 = "assume 5% more volume than the same month last year".
+    yoy_growth_pct: Mapped[float] = mapped_column(Float, default=0.0)
 
 
 class HcDemand(UUIDMixin, TenantMixin, TimestampMixin, Base):
@@ -95,6 +102,27 @@ class HcDemand(UUIDMixin, TenantMixin, TimestampMixin, Base):
     month: Mapped[str] = mapped_column(String(7), index=True)  # YYYY-MM
     billable_fte: Mapped[float] = mapped_column(Float, default=0.0)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class HcPromotion(UUIDMixin, TenantMixin, TimestampMixin, Base):
+    """A fixed/recurring business event (a sale, a tax season, an annual
+    promotion…) that predictably moves demand — the "fixed time of
+    promotions" input to the seasonality demand suggestion (see
+    engine/seasonality.py). A NULL ``lob_id`` applies to every LOB."""
+
+    __tablename__ = "hc_promotions"
+
+    lob_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("lobs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(128))
+    month_from: Mapped[str] = mapped_column(String(7))  # YYYY-MM — the reference occurrence
+    month_to: Mapped[str] = mapped_column(String(7))
+    demand_impact_pct: Mapped[float] = mapped_column(Float)  # +20 = +20% demand
+    # Reapply every year over this calendar month range (e.g. Nov-Dec, every
+    # year) rather than only the one YYYY it was entered for.
+    recurring: Mapped[bool] = mapped_column(Boolean, default=True)
+    note: Mapped[str] = mapped_column(String(255), default="")
 
 
 class NewHireBatch(UUIDMixin, TenantMixin, TimestampMixin, Base):

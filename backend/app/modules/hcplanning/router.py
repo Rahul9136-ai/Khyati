@@ -10,6 +10,8 @@ from app.api.deps import DbSession, require_permission
 from app.modules.hcplanning import service
 from app.modules.hcplanning.schemas import (
     AgentRowOut,
+    ApplySeasonalityIn,
+    ApplySeasonalityOut,
     BatchIn,
     BatchOut,
     BatchUpdate,
@@ -22,8 +24,12 @@ from app.modules.hcplanning.schemas import (
     PipelineStageOut,
     ProfileIn,
     ProfileOut,
+    PromotionIn,
+    PromotionOut,
+    PromotionUpdate,
     ScenarioIn,
     ScenarioOut,
+    SeasonalityOut,
 )
 from app.modules.identity.models import User
 from app.modules.workforce.service import org_scope
@@ -150,3 +156,57 @@ async def get_capacity(
         ),
         agent_count=out["agents"],
     ))
+
+
+# --------------------------------------------------------------------------- #
+# Promotions
+# --------------------------------------------------------------------------- #
+@router.get("/promotions", response_model=ApiResponse[list[PromotionOut]])
+async def list_promotions(db: DbSession, user: Reader, lob_id: uuid.UUID | None = None):
+    rows = await service.list_promotions(db, org_scope(user), lob_id)
+    return ApiResponse(data=[PromotionOut.model_validate(r) for r in rows])
+
+
+@router.post("/promotions", response_model=ApiResponse[PromotionOut], status_code=201)
+async def create_promotion(body: PromotionIn, db: DbSession, actor: Writer):
+    row = await service.create_promotion(db, org_scope(actor), body)
+    return ApiResponse(data=PromotionOut.model_validate(row))
+
+
+@router.put("/promotions/{promotion_id}", response_model=ApiResponse[PromotionOut])
+async def update_promotion(
+    promotion_id: uuid.UUID, body: PromotionUpdate, db: DbSession, actor: Writer
+):
+    row = await service.update_promotion(db, org_scope(actor), promotion_id, body)
+    return ApiResponse(data=PromotionOut.model_validate(row))
+
+
+@router.delete("/promotions/{promotion_id}", status_code=204)
+async def delete_promotion(promotion_id: uuid.UUID, db: DbSession, actor: Writer):
+    await service.delete_promotion(db, org_scope(actor), promotion_id)
+
+
+# --------------------------------------------------------------------------- #
+# Seasonality — trend/last-year + promotions -> suggested demand & assumptions
+# --------------------------------------------------------------------------- #
+@router.get("/seasonality", response_model=ApiResponse[SeasonalityOut])
+async def get_seasonality(
+    db: DbSession,
+    user: Reader,
+    lob_id: uuid.UUID,
+    from_month: Annotated[str | None, Query(alias="from", pattern=r"^\d{4}-\d{2}$")] = None,
+    to_month: Annotated[str | None, Query(alias="to", pattern=r"^\d{4}-\d{2}$")] = None,
+):
+    out = await service.compute_seasonality(
+        db, org_scope(user), lob_id, from_month=from_month, to_month=to_month
+    )
+    return ApiResponse(data=SeasonalityOut(**out))
+
+
+@router.post("/seasonality/apply", response_model=ApiResponse[ApplySeasonalityOut])
+async def apply_seasonality(body: ApplySeasonalityIn, db: DbSession, actor: Writer):
+    out = await service.apply_seasonality(
+        db, org_scope(actor), body.lob_id, months=body.months,
+        apply_demand=body.apply_demand, apply_assumptions=body.apply_assumptions,
+    )
+    return ApiResponse(data=ApplySeasonalityOut(**out))

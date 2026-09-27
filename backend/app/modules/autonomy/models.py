@@ -35,6 +35,9 @@ class AgentAction(UUIDMixin, TenantMixin, TimestampMixin, Base):
     rationale: Mapped[str] = mapped_column(String(1200))
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     severity: Mapped[str] = mapped_column(String(16), default="info")  # info|warning|critical
+    # tactical -> operations managers/floor; strategic -> plan owners (see
+    # autonomy/service._notify_stakeholders and agents.Proposal.tier).
+    tier: Mapped[str] = mapped_column(String(16), default="tactical", index=True)
     status: Mapped[str] = mapped_column(String(24), default=STATUS_PENDING, index=True)
 
     target_type: Mapped[str | None] = mapped_column(String(24), nullable=True)

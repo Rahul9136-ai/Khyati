@@ -64,6 +64,25 @@ services:
       redis: { condition: service_healthy }
       db: { condition: service_healthy }
 
+  # Fires the autonomy layer's scheduled sense-and-act run (default: every 15
+  # min, AUTONOMY_RUN_INTERVAL_SECONDS) — without this, /autonomy/run still
+  # works, just as a manual "Run now" from the Autonomous Agents page.
+  beat:
+    build: ./backend
+    command: celery -A app.worker.celery_app.celery beat --loglevel=info
+    environment:
+      DB_BACKEND: postgres
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: wfm
+      POSTGRES_PASSWORD: wfm
+      POSTGRES_DB: wfm
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-dev-only-change-me-in-production-32-bytes}
+    depends_on:
+      redis: { condition: service_healthy }
+      db: { condition: service_healthy }
+
   frontend:
     build: ./frontend                # bakes VITE_API_BASE_URL=/api/v1 (same-origin)
     ports: ["8080:80"]

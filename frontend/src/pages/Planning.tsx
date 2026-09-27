@@ -13,6 +13,7 @@ import {
 import { KpiCard } from "@/components/kpi-card"
 import { MovementTab } from "@/pages/planning/MovementTab"
 import { NewHireTab } from "@/pages/planning/NewHireTab"
+import { SeasonalityTab } from "@/pages/planning/SeasonalityTab"
 import { PageHeader } from "@/components/page-header"
 import { PermissionGate } from "@/components/permission-gate"
 import { Button } from "@/components/ui/button"
@@ -134,6 +135,7 @@ export function Planning() {
           <TabsTrigger value="capacity">Capacity Planning</TabsTrigger>
           <TabsTrigger value="newhire">New Hire Planning</TabsTrigger>
           <TabsTrigger value="movement">Agent Movement</TabsTrigger>
+          <TabsTrigger value="seasonality">Seasonality</TabsTrigger>
           <TabsTrigger value="summary">Summary</TabsTrigger>
         </TabsList>
 
@@ -227,6 +229,7 @@ export function Planning() {
           {lobId && <NewHireTab lobId={lobId} onGoToCapacity={() => goTo("capacity")} requiredHc={cur?.required_hc} />}
         </TabsContent>
         <TabsContent value="movement">{lobId && <MovementTab lobId={lobId} lobs={lobs} onGoToCapacity={() => goTo("capacity")} />}</TabsContent>
+        <TabsContent value="seasonality">{lobId && <SeasonalityTab lobId={lobId} />}</TabsContent>
 
         <TabsContent value="summary">
           <div className="grid gap-4 lg:grid-cols-2">

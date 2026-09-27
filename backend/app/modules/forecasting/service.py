@@ -107,8 +107,11 @@ async def _holiday_days(db: AsyncSession, calendar_id: uuid.UUID | None) -> set:
 
 
 async def run_forecast(
-    db: AsyncSession, org_id: uuid.UUID, payload: ForecastRequest, *, actor: User
+    db: AsyncSession, org_id: uuid.UUID, payload: ForecastRequest, *, actor: User | None
 ) -> Forecast:
+    """`actor` is None for a system-triggered retrain (the Forecast Agent on a
+    scheduled autonomy run — see autonomy/tasks.py); `created_by` stays null
+    and the audit entry records "system", same convention as record_audit."""
     series = await db.get(
         HistoricalSeries, payload.series_id, options=[selectinload(HistoricalSeries.points)]
     )
@@ -140,7 +143,7 @@ async def run_forecast(
         mape=result.mape,
         backtest=result.backtest,
         params={"requested_model": payload.model},
-        created_by=actor.id,
+        created_by=actor.id if actor else None,
         points=[
             ForecastPoint(day=d, volume=v, lower=lo, upper=up, aht=a)
             for d, v, lo, up, a in zip(

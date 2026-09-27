@@ -31,6 +31,8 @@ class IntegrationConfigIn(BaseModel):
     teams_command_channel: str | None = None
     teams_app_id: str | None = None
     teams_app_password: str | None = None
+    slack_strategic_channel: str | None = None
+    teams_strategic_webhook_url: str | None = None
 
 
 class IntegrationConfigOut(BaseModel):
@@ -55,6 +57,8 @@ class IntegrationConfigOut(BaseModel):
     teams_command_channel: str
     teams_app_id_set: bool
     teams_app_password_set: bool
+    slack_strategic_channel: str
+    teams_strategic_webhook_set: bool
 
 
 # --------------------------------------------------------------------------- #

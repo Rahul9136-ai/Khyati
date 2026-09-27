@@ -27,6 +27,8 @@ class ConfigIn(BaseModel):
     tenure_bands: list[TenureBandDTO] | None = None
     monthly_overrides: dict | None = None
     closing_overrides: dict[str, float] | None = None
+    historical_assumptions: dict | None = None
+    yoy_growth_pct: float | None = None
 
 
 class ConfigOut(BaseModel):
@@ -45,6 +47,8 @@ class ConfigOut(BaseModel):
     tenure_bands: list
     monthly_overrides: dict
     closing_overrides: dict
+    historical_assumptions: dict = {}
+    yoy_growth_pct: float = 0.0
 
 
 class DemandIn(BaseModel):
@@ -204,3 +208,75 @@ class PipelineStageOut(BaseModel):
     successful_hires: float
     entering_training: float
     production: float
+
+
+class PromotionIn(BaseModel):
+    lob_id: uuid.UUID | None = None
+    name: str = Field(min_length=1, max_length=128)
+    month_from: str = Field(pattern=r"^\d{4}-\d{2}$")
+    month_to: str = Field(pattern=r"^\d{4}-\d{2}$")
+    demand_impact_pct: float
+    recurring: bool = True
+    note: str = ""
+
+
+class PromotionUpdate(BaseModel):
+    lob_id: uuid.UUID | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    month_from: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
+    month_to: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
+    demand_impact_pct: float | None = None
+    recurring: bool | None = None
+    note: str | None = None
+
+
+class PromotionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    lob_id: uuid.UUID | None
+    name: str
+    month_from: str
+    month_to: str
+    demand_impact_pct: float
+    recurring: bool
+    note: str
+
+
+class DemandSuggestionOut(BaseModel):
+    suggested: float | None
+    base_month: str
+    base_value: float | None = None
+    yoy_growth_pct: float | None = None
+    trended: float | None = None
+    promotion_multiplier: float = 1.0
+    matched_promotions: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class AssumptionSuggestionOut(BaseModel):
+    suggested: float | None
+    base_month: str
+
+
+class SeasonalityMonthOut(BaseModel):
+    month: str
+    current_demand: float | None
+    demand_suggestion: DemandSuggestionOut
+    assumption_suggestions: dict[str, AssumptionSuggestionOut]
+
+
+class SeasonalityOut(BaseModel):
+    months: list[SeasonalityMonthOut]
+    yoy_growth_pct: float
+
+
+class ApplySeasonalityIn(BaseModel):
+    lob_id: uuid.UUID
+    months: list[str] = Field(min_length=1)
+    apply_demand: bool = True
+    apply_assumptions: bool = True
+
+
+class ApplySeasonalityOut(BaseModel):
+    applied_demand_months: int
+    applied_assumption_values: int
