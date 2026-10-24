@@ -1,12 +1,14 @@
 import { useMemo, useRef, useState } from "react"
 import {
-  AlertTriangle, CalendarClock, CheckCircle2, FileDown, RotateCcw, Send, Sparkles, Upload, Wand2,
+  AlertTriangle, CalendarClock, CheckCircle2, FileDown, RotateCcw, Scale, Send, Sparkles, Upload, Users, Wand2,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 
 import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
+import { ContinuousSchedule } from "@/components/continuous-schedule"
 import { ExportButton } from "@/components/export-button"
+import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
 import { ScheduleRequestCard } from "@/components/schedule-request-card"
 import { PermissionGate } from "@/components/permission-gate"
@@ -14,39 +16,56 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { computeAbsenceRisk } from "@/lib/domain/absenceRisk"
-import { agentBreakMarkers, breakAwareCoverage, optimiseBreaks, projectedSLRow } from "@/lib/domain/breaks"
+import { breakAwareCoverage, optimiseBreaks, projectedSLRow } from "@/lib/domain/breaks"
+import { activityCoverageLoss, overtimeAgents } from "@/lib/domain/channels"
 import { planAutoSchedule, type AutoScheduleResult } from "@/lib/domain/autoschedule"
+import { occupancy } from "@/lib/domain/erlang"
 import { buildPlan, fmtPct, summarisePlan } from "@/lib/domain/planning"
-import { AUX_BY_CODE, INTERVALS } from "@/lib/domain/seed"
 import { downloadTemplate, parseScheduleFile } from "@/lib/schedule"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
 
-function coveredIdx(shift: string): boolean[] {
-  const [s, e] = shift.split("–").map((t) => {
-    const [h, m] = t.split(":").map(Number)
-    return h * 60 + m
-  })
-  return INTERVALS.map(({ label }) => {
-    const [h, m] = label.split(":").map(Number)
-    const mins = h * 60 + m
-    return mins >= s && mins < e
-  })
+/** Contracted hours in the operating day — used to turn agent-hours into FTE. */
+const HOURS_PER_FTE = 8
+
+type MetricKey = "Forecast" | "AHT" | "Occupancy %" | "SL %" | "Required HC" | "Actual HC" | "O/U"
+
+/** Interval metrics the user can plot. Percentages go on the right axis so they stay readable next to counts. */
+const METRICS: { key: MetricKey; label: string; color: string; type?: "bar"; axis?: "right"; dashed?: boolean }[] = [
+  { key: "Forecast", label: "Forecast (contacts)", color: "#3b82f6", type: "bar" },
+  { key: "AHT", label: "AHT (s)", color: "#a855f7" },
+  { key: "Occupancy %", label: "Occupancy %", color: "#06b6d4", axis: "right" },
+  { key: "SL %", label: "SL %", color: "#22c55e", axis: "right" },
+  { key: "Required HC", label: "Required HC", color: "#f59e0b", type: "bar" },
+  { key: "Actual HC", label: "Actual HC", color: "#6366f1" },
+  { key: "O/U", label: "O/U", color: "#ef4444", dashed: true },
+]
+
+/** Occupancy of on-duty heads net of shrinkage; nobody available with work waiting counts as 100%. */
+function occupancyOnDuty(heads: number, intensity: number, shrinkage: number): number {
+  const net = Math.round(heads * (1 - shrinkage))
+  if (net <= 0) return intensity > 0 ? 1 : 0
+  return occupancy(net, intensity)
 }
 
 export function Scheduling() {
-  const { queueId, forecasts, shrinkage, agents, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule, currentRole, currentAgentId } = useWfm()
+  const { queueId, forecasts, shrinkage, agents, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule, currentRole, currentAgentId, overtimePlan, activityPlan } = useWfm()
+  const canEditSchedule = useWfm((s) => s.can("scheduling", "edit"))
   const queue = queues.find((q) => q.id === queueId)!
   // Agents only ever see their own row — everyone else sees the full roster.
   const visibleAgents = currentRole === "Agent" ? agents.filter((a) => a.id === currentAgentId) : agents
-  const plan = useMemo(() => buildPlan(forecasts[queue.id], queue.aht, queue, shrinkage, agents), [forecasts, queue, shrinkage, agents])
+  // Roster plus every OT block as an extra head, so overtime counts toward coverage & SL.
+  const staffed = useMemo(() => [...agents, ...overtimeAgents(agents, overtimePlan)], [agents, overtimePlan])
+  const plan = useMemo(() => buildPlan(forecasts[queue.id], queue.aht, queue, shrinkage, staffed), [forecasts, queue, shrinkage, staffed])
   const sum = useMemo(() => summarisePlan(plan), [plan])
 
-  // Break-aware view: heads actually on the phones + Erlang SL per interval.
-  const onDuty = useMemo(
-    () => breakAwareCoverage(queue.id, agents, shiftPatterns, breakOverrides),
-    [queue.id, agents, shiftPatterns, breakOverrides],
-  )
+  // Break- and activity-aware view: heads actually on the phones (not on
+  // break/lunch, not in a meeting / training / LOA / absence) + Erlang SL per interval.
+  const onDuty = useMemo(() => {
+    const base = breakAwareCoverage(queue.id, staffed, shiftPatterns, breakOverrides)
+    const lost = activityCoverageLoss(queue.id, agents, shiftPatterns, breakOverrides, activityPlan)
+    return base.map((c, i) => Math.max(0, c - lost[i]))
+  }, [queue.id, staffed, agents, shiftPatterns, breakOverrides, activityPlan])
   const slRow = useMemo(
     () => projectedSLRow(forecasts[queue.id] ?? [], onDuty, queue, shrinkage),
     [forecasts, queue, onDuty, shrinkage],
@@ -55,13 +74,26 @@ export function Scheduling() {
     () =>
       plan.map((p, i) => ({
         label: p.label,
-        Volume: p.volume,
-        Required: p.requiredGross,
-        "On duty": onDuty[i],
-        "Proj SL %": +(slRow[i] * 100).toFixed(1),
+        "Required FTE": p.requiredGross,
+        "Actual FTE": p.scheduled,
+        "Over/Under": p.variance,
+        Forecast: p.volume,
+        AHT: queue.aht,
+        // Occupancy of the heads actually on the phones (after breaks & shrinkage).
+        "Occupancy %": +(occupancyOnDuty(onDuty[i], p.intensity, shrinkage) * 100).toFixed(1),
+        "SL %": +(slRow[i] * 100).toFixed(1),
+        "Required HC": p.requiredGross,
+        "Actual HC": p.scheduled,
+        "O/U": p.variance,
       })),
-    [plan, onDuty, slRow],
+    [plan, onDuty, slRow, queue.aht, shrinkage],
   )
+  const [chartMetrics, setChartMetrics] = useState<MetricKey[]>(["Forecast", "SL %"])
+  const toggleMetric = (k: MetricKey) =>
+    setChartMetrics((cur) => (cur.includes(k) ? cur.filter((m) => m !== k) : [...cur, k]))
+  const requiredFte = sum.reqHours / HOURS_PER_FTE
+  const actualFte = sum.schedHours / HOURS_PER_FTE
+  const overUnderFte = actualFte - requiredFte
   const optimised = Object.keys(breakOverrides).length > 0
 
   // AI absence/no-show risk — flags agents statistically likely to be absent
@@ -171,7 +203,7 @@ export function Scheduling() {
               filename={`schedule-${queue.id}`}
               sheets={() => [
                 { name: "Roster", rows: agents.map((a) => ({ Name: a.name, Team: a.team, "Team Lead": a.tl, Shift: a.shift, Skills: a.skills.map((s) => queues.find((q) => q.id === s)?.name ?? s).join(", ") })) },
-                { name: "Coverage", rows: plan.map((p) => ({ Interval: p.label, Scheduled: p.scheduled, Required: p.requiredGross, Variance: p.variance })) },
+                { name: "Coverage", rows: intervalDetail.map((d) => ({ Interval: d.label, Forecast: d.Forecast, "AHT (s)": d.AHT, "Occupancy %": d["Occupancy %"], "SL %": d["SL %"], "Required HC": d["Required HC"], "Actual HC": d["Actual HC"], "O/U": d["O/U"] })) },
               ]}
             />
           </>
@@ -179,6 +211,51 @@ export function Scheduling() {
       />
 
       <ScheduleRequestCard source="scheduling" />
+
+      <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <KpiCard
+          label="Required FTE"
+          value={requiredFte.toFixed(1)}
+          hint={`${sum.reqHours.toFixed(0)} agent-hrs ÷ ${HOURS_PER_FTE}h (incl. shrinkage)`}
+          icon={Users}
+        />
+        <KpiCard
+          label="Actual FTE"
+          value={actualFte.toFixed(1)}
+          hint={`${sum.schedHours.toFixed(0)} scheduled agent-hrs · skilled for ${queue.name}`}
+          icon={Users}
+          tone={overUnderFte >= 0 ? "good" : "warn"}
+        />
+        <KpiCard
+          label="Over/Under"
+          value={`${overUnderFte >= 0 ? "+" : ""}${overUnderFte.toFixed(1)}`}
+          hint={overUnderFte >= 0 ? "Actual − Required · surplus" : `${sum.underIntervals} interval(s) short`}
+          icon={Scale}
+          tone={overUnderFte >= 0 ? "good" : overUnderFte > -1 ? "warn" : "bad"}
+        />
+      </div>
+
+      <Card className="glass mb-4">
+        <CardHeader>
+          <CardTitle>FTE — required vs actual ({queue.name})</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SeriesChart
+            data={intervalDetail}
+            xKey="label"
+            yLabel="FTE"
+            series={[
+              { key: "Required FTE", name: "Required FTE", color: "#f59e0b", type: "bar" },
+              { key: "Actual FTE", name: "Actual FTE", color: queue.color },
+              { key: "Over/Under", name: "Over/Under", color: overUnderFte >= 0 ? "#22c55e" : "#ef4444", dashed: true },
+            ]}
+          />
+          <p className="mt-2 text-xs text-muted-foreground">
+            Interval FTE is heads on the phones (30-min slots). Day FTE above is agent-hours ÷ {HOURS_PER_FTE} contracted hours.
+            Over/Under = Actual − Required.
+          </p>
+        </CardContent>
+      </Card>
 
       {autoResult && (
         <Card className="glass mb-4 border-primary/40">
@@ -229,20 +306,8 @@ export function Scheduling() {
         </div>
       )}
 
-      <div className="mb-4 grid gap-4 lg:grid-cols-3">
+      <div className="mb-4">
         <AiSummary insight={insight} title="AI Scheduling Summary" />
-        <Card className="glass lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Legend</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-            <span className="flex items-center gap-2"><i className="h-3 w-4 rounded" style={{ background: queue.color }} /> on queue ({queue.name})</span>
-            <span className="flex items-center gap-2"><i className="h-3 w-4 rounded bg-slate-500" /> on shift, other skill</span>
-            <span className="flex items-center gap-2"><i className="h-3 w-4 rounded" style={{ background: AUX_BY_CODE.AUX2.color }} /> lunch</span>
-            <span className="flex items-center gap-2"><i className="h-3 w-4 rounded" style={{ background: AUX_BY_CODE.AUX1.color }} /> break</span>
-            <span className="ml-auto text-xs">Break/lunch layout comes from each agent's <Link to="/shift-patterns" className="text-primary hover:underline">shift pattern</Link>.</span>
-          </CardContent>
-        </Card>
       </div>
 
       <Card className="glass mb-4">
@@ -280,106 +345,73 @@ export function Scheduling() {
       </Card>
 
       <Card className="glass">
-        <CardHeader>
-          <CardTitle>Daily shift plan</CardTitle>
+        <CardHeader className="flex-row items-center justify-between space-y-0">
+          <CardTitle>Daily shift plan — omni-channel</CardTitle>
+          <span className="text-xs text-muted-foreground">
+            Break/lunch layout comes from each agent's <Link to="/shift-patterns" className="text-primary hover:underline">shift pattern</Link>.
+          </span>
         </CardHeader>
         <CardContent>
-          <div className="overflow-auto">
-            <table className="w-full min-w-[900px] border-collapse text-xs">
-              <thead>
-                <tr className="text-muted-foreground">
-                  <th className="sticky left-0 bg-card px-2 py-1 text-left">Agent</th>
-                  <th className="px-2 py-1 text-left">Shift</th>
-                  {INTERVALS.map((iv, i) => (
-                    <th key={i} className="px-0.5 py-1 text-[9px] font-normal">{i % 2 === 0 ? iv.label.slice(0, 5) : ""}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visibleAgents.map((a) => {
-                  const cov = coveredIdx(a.shift)
-                  const skilled = a.skills.includes(queue.id)
-                  const markers = agentBreakMarkers(a, shiftPatterns, breakOverrides)
-                  const risk = absenceRiskById.get(a.id)
-                  return (
-                    <tr key={a.id} className="hover:bg-muted/30">
-                      <td className="sticky left-0 bg-card px-2 py-1 font-medium">
-                        <span className="flex items-center gap-1">
-                          {a.name}
-                          {risk && risk.level !== "low" && (
-                            <span title={`AI absence risk: ${risk.riskPct}% — ${risk.reason}`}>
-                              <AlertTriangle
-                                className={cn("h-3 w-3 shrink-0", risk.level === "high" ? "text-destructive" : "text-amber-500")}
-                              />
-                            </span>
-                          )}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1 tabular-nums text-muted-foreground">{a.shift}</td>
-                      {INTERVALS.map((_, i) => {
-                        let bg = "transparent"
-                        if (cov[i]) {
-                          const mk = markers.get(i)
-                          if (mk === "lunch") bg = AUX_BY_CODE.AUX2.color
-                          else if (mk === "break") bg = AUX_BY_CODE.AUX1.color
-                          else bg = skilled ? queue.color : "#64748b"
-                        }
-                        return (
-                          <td key={i} className="p-[1px]">
-                            <div className="h-4 rounded-sm" style={{ background: bg }} />
-                          </td>
-                        )
-                      })}
-                    </tr>
-                  )
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="font-semibold">
-                  <td className="sticky left-0 bg-card px-2 py-1">Scheduled</td>
-                  <td />
-                  {plan.map((p, i) => (
-                    <td key={i} className="px-0.5 text-center tabular-nums">{p.scheduled}</td>
-                  ))}
-                </tr>
-                <tr className="font-semibold">
-                  <td className="sticky left-0 bg-card px-2 py-1">On duty</td>
-                  <td />
-                  {onDuty.map((c, i) => (
-                    <td key={i} className={`px-0.5 text-center tabular-nums ${c < plan[i].requiredGross ? "text-amber-500" : "text-muted-foreground"}`}>
-                      {c}
-                    </td>
-                  ))}
-                </tr>
-                <tr className="font-semibold">
-                  <td className="sticky left-0 bg-card px-2 py-1">Required</td>
-                  <td />
-                  {plan.map((p, i) => (
-                    <td key={i} className={`px-0.5 text-center tabular-nums ${p.variance < 0 ? "text-destructive" : "text-emerald-500"}`}>
-                      {p.requiredGross}
-                    </td>
-                  ))}
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+          <ContinuousSchedule
+            agents={visibleAgents}
+            queue={queue}
+            plan={plan}
+            onDuty={onDuty}
+            canEdit={canEditSchedule}
+            riskById={absenceRiskById}
+          />
         </CardContent>
       </Card>
 
       <Card className="glass mt-4">
         <CardHeader className="flex-row items-center justify-between space-y-0">
-          <CardTitle>Interval detail — volume & service level ({queue.name})</CardTitle>
+          <CardTitle>Interval detail — all metrics ({queue.name})</CardTitle>
           <Badge variant="secondary">breaks {optimised ? "optimised" : "from patterns"}</Badge>
         </CardHeader>
         <CardContent>
-          <SeriesChart
-            data={intervalDetail}
-            xKey="label"
-            series={[
-              { key: "Volume", name: "Volume (contacts)", color: queue.color, type: "bar" },
-              { key: "Proj SL %", name: "Projected SL (%)", color: "#22c55e" },
-            ]}
-          />
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">Show on graph:</span>
+            {METRICS.map((m) => {
+              const on = chartMetrics.includes(m.key)
+              const color = m.key === "Forecast" ? queue.color : m.color
+              return (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => toggleMetric(m.key)}
+                  aria-pressed={on}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
+                    on ? "border-primary/60 bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted/40",
+                  )}
+                >
+                  <i className="h-2 w-2 rounded-full" style={{ background: on ? color : "hsl(var(--muted-foreground))" }} />
+                  {m.label}
+                </button>
+              )
+            })}
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setChartMetrics(METRICS.map((m) => m.key))}>All</Button>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setChartMetrics([])}>None</Button>
+          </div>
+          {chartMetrics.length ? (
+            <SeriesChart
+              data={intervalDetail}
+              xKey="label"
+              yRightLabel="%"
+              series={METRICS.filter((m) => chartMetrics.includes(m.key)).map((m) => ({
+                key: m.key,
+                name: m.label,
+                color: m.key === "Forecast" ? queue.color : m.color,
+                type: m.type,
+                axis: m.axis,
+                dashed: m.dashed,
+              }))}
+            />
+          ) : (
+            <div className="flex h-[260px] items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+              Select one or more metrics above to plot them.
+            </div>
+          )}
           <div className="mt-4 overflow-auto">
             <table className="w-full min-w-[900px] text-xs">
               <tbody>
@@ -390,28 +422,65 @@ export function Scheduling() {
                   ))}
                 </tr>
                 <tr className="border-b">
-                  <td className="sticky left-0 bg-card px-2 py-1 font-semibold">Volume</td>
+                  <td className="sticky left-0 bg-card px-2 py-1 font-semibold">Forecast</td>
                   {intervalDetail.map((d) => (
-                    <td key={d.label} className="px-1 py-1 text-center tabular-nums">{d.Volume}</td>
+                    <td key={d.label} className="px-1 py-1 text-center tabular-nums">{d.Forecast}</td>
                   ))}
                 </tr>
                 <tr className="border-b">
-                  <td className="sticky left-0 bg-card px-2 py-1 font-semibold">On duty</td>
+                  <td className="sticky left-0 bg-card px-2 py-1 font-semibold">AHT</td>
                   {intervalDetail.map((d) => (
-                    <td key={d.label} className="px-1 py-1 text-center tabular-nums text-muted-foreground">{d["On duty"]}</td>
+                    <td key={d.label} className="px-1 py-1 text-center tabular-nums text-muted-foreground">{d.AHT}s</td>
                   ))}
                 </tr>
-                <tr>
-                  <td className="sticky left-0 bg-card px-2 py-1 font-semibold">Proj SL</td>
+                <tr className="border-b">
+                  <td className="sticky left-0 bg-card px-2 py-1 font-semibold">Occupancy</td>
+                  {intervalDetail.map((d) => (
+                    <td
+                      key={d.label}
+                      className={cn("px-1 py-1 text-center tabular-nums", d["Occupancy %"] > 95 ? "text-destructive" : d["Occupancy %"] > 85 ? "text-amber-500" : "")}
+                    >
+                      {d["Occupancy %"].toFixed(0)}%
+                    </td>
+                  ))}
+                </tr>
+                <tr className="border-b">
+                  <td className="sticky left-0 bg-card px-2 py-1 font-semibold">SL %</td>
                   {intervalDetail.map((d) => (
                     <td
                       key={d.label}
                       className={cn(
                         "px-1 py-1 text-center font-semibold tabular-nums",
-                        d["Proj SL %"] >= queue.slTarget * 100 ? "text-emerald-500" : "text-destructive",
+                        d["SL %"] >= queue.slTarget * 100 ? "text-emerald-500" : "text-destructive",
                       )}
                     >
-                      {d["Proj SL %"].toFixed(0)}%
+                      {d["SL %"].toFixed(0)}%
+                    </td>
+                  ))}
+                </tr>
+                <tr className="border-b">
+                  <td className="sticky left-0 bg-card px-2 py-1 font-semibold">Required HC</td>
+                  {intervalDetail.map((d) => (
+                    <td key={d.label} className="px-1 py-1 text-center tabular-nums">{d["Required HC"]}</td>
+                  ))}
+                </tr>
+                <tr className="border-b">
+                  <td className="sticky left-0 bg-card px-2 py-1 font-semibold">Actual HC</td>
+                  {intervalDetail.map((d) => (
+                    <td key={d.label} className="px-1 py-1 text-center tabular-nums">{d["Actual HC"]}</td>
+                  ))}
+                </tr>
+                <tr>
+                  <td className="sticky left-0 bg-card px-2 py-1 font-semibold">O/U</td>
+                  {intervalDetail.map((d) => (
+                    <td
+                      key={d.label}
+                      className={cn(
+                        "px-1 py-1 text-center font-semibold tabular-nums",
+                        d["O/U"] < 0 ? "text-destructive" : d["O/U"] > 0 ? "text-emerald-500" : "text-muted-foreground",
+                      )}
+                    >
+                      {d["O/U"] > 0 ? `+${d["O/U"]}` : d["O/U"]}
                     </td>
                   ))}
                 </tr>
@@ -419,7 +488,9 @@ export function Scheduling() {
             </table>
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            On duty = agents on shift minus those on break/lunch. SL is Erlang C per interval at {fmtPct(queue.slTarget)}/{queue.targetTime}s target with {Math.round(shrinkage * 100)}% shrinkage.
+            Required HC includes {Math.round(shrinkage * 100)}% shrinkage; Actual HC = agents scheduled & skilled for {queue.name}; O/U = Actual − Required.
+            SL % and Occupancy are Erlang C on heads actually on the phones (on shift, not on break/lunch or in a meeting / training / LOA / absence, net of shrinkage) at a {fmtPct(queue.slTarget)}/{queue.targetTime}s target.
+            AHT is the queue's planning AHT.
           </p>
         </CardContent>
       </Card>

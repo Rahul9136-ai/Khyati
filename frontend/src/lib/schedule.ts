@@ -20,7 +20,7 @@ function normaliseSkills(cell: unknown, queues: Queue[]): string[] {
 }
 
 // Normalise a time cell to "HH:MM" (Excel may hand back a day-fraction number).
-function hhmm(v: unknown): string | null {
+export function hhmm(v: unknown): string | null {
   if (v == null || v === "") return null
   if (typeof v === "number") {
     const mins = Math.round(v * 24 * 60)
@@ -31,7 +31,7 @@ function hhmm(v: unknown): string | null {
 }
 
 // Tolerant column lookup (case/spacing/punctuation-insensitive).
-function pick(row: Record<string, unknown>, keys: string[]): unknown {
+export function pick(row: Record<string, unknown>, keys: string[]): unknown {
   for (const k of Object.keys(row)) {
     const norm = k.toLowerCase().replace(/[^a-z]/g, "")
     if (keys.includes(norm)) return row[k]
