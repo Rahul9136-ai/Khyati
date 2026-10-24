@@ -166,6 +166,34 @@ export interface AgentDayPatch {
   overtime: ChannelSegment[]
   activities: ActivitySegment[]
 }
+
+/** The schedule slices after writing many agents' days — shared by local edits
+ *  (updateAgentDays) and server sync (applyServerDays). */
+function dayPatchSlices(
+  s: Pick<WfmState, "agents" | "breakOverrides" | "channelPlan" | "overtimePlan" | "activityPlan">,
+  items: { agentId: string; patch: AgentDayPatch }[],
+) {
+  const byId = new Map(items.map((i) => [i.agentId, i.patch]))
+  const breakOverrides = { ...s.breakOverrides }
+  const channelPlan = { ...s.channelPlan }
+  const overtimePlan = { ...s.overtimePlan }
+  const activityPlan = { ...s.activityPlan }
+  for (const [agentId, patch] of byId) {
+    breakOverrides[agentId] = patch.breaks
+    channelPlan[agentId] = patch.channels
+    if (patch.overtime.length) overtimePlan[agentId] = patch.overtime
+    else delete overtimePlan[agentId]
+    if (patch.activities.length) activityPlan[agentId] = patch.activities
+    else delete activityPlan[agentId]
+  }
+  return {
+    agents: s.agents.map((a) => (byId.has(a.id) ? { ...a, shift: byId.get(a.id)!.shift } : a)),
+    breakOverrides,
+    channelPlan,
+    overtimePlan,
+    activityPlan,
+  }
+}
 const entry = (user: string, category: AuditCategory, action: string, detail: string): AuditEntry => ({
   id: uid(),
   ts: Date.now(),
@@ -307,6 +335,9 @@ interface WfmState {
   updateAgentDay: (agentId: string, patch: AgentDayPatch, detail: string) => void
   /** Same as updateAgentDay for many agents at once (bulk edits) — one audit entry. */
   updateAgentDays: (items: { agentId: string; patch: AgentDayPatch }[], detail: string) => void
+  /** Apply schedules loaded from the backend (server sync) — no local audit
+   *  entry, since the change originated on the server. Unknown agents are ignored. */
+  applyServerDays: (items: { agentId: string; patch: AgentDayPatch }[]) => void
 
   // Omni-channel continuous schedules: per-agent in-shift channel blocks
   // (absent = default alignment) and overtime blocks outside the shift.
@@ -791,32 +822,21 @@ export const useWfm = create<WfmState>()(
         const name = get().agents.find((a) => a.id === agentId)?.name ?? agentId
         get().updateAgentDays([{ agentId, patch }], `${name} · ${detail}`)
       },
+      applyServerDays: (items) =>
+        set((s) => {
+          const known = new Set(s.agents.map((a) => a.id))
+          const patches = items.filter((i) => known.has(i.agentId))
+          if (!patches.length) return s
+          return { ...dayPatchSlices(s, patches) }
+        }),
       updateAgentDays: (items, detail) =>
         set((s) => {
           if (!items.length) return s
-          const byId = new Map(items.map((i) => [i.agentId, i.patch]))
-          const breakOverrides = { ...s.breakOverrides }
-          const channelPlan = { ...s.channelPlan }
-          const overtimePlan = { ...s.overtimePlan }
-          const activityPlan = { ...s.activityPlan }
-          for (const [agentId, patch] of byId) {
-            breakOverrides[agentId] = patch.breaks
-            channelPlan[agentId] = patch.channels
-            if (patch.overtime.length) overtimePlan[agentId] = patch.overtime
-            else delete overtimePlan[agentId]
-            if (patch.activities.length) activityPlan[agentId] = patch.activities
-            else delete activityPlan[agentId]
-          }
           return {
-            agents: s.agents.map((a) => (byId.has(a.id) ? { ...a, shift: byId.get(a.id)!.shift } : a)),
-            breakOverrides,
-            channelPlan,
-            overtimePlan,
-            activityPlan,
+            ...dayPatchSlices(s, items),
             auditLog: [entry(s.currentUser, "Schedule", items.length > 1 ? "Bulk-edited schedules" : "Edited schedule on timeline", detail), ...s.auditLog],
           }
         }),
-
       channelPlan: {},
       overtimePlan: {},
       setAgentSchedule: (agentId, channels, overtime) =>

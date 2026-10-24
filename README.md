@@ -16,7 +16,8 @@ The repo is a monorepo with two independently runnable halves:
 - **`backend/`** — a real FastAPI service (JWT auth, RBAC, Postgres/SQLite) with its own
   domain modules and demo data, plus an autonomous-agents subsystem that observes the backend's
   own data and proposes/auto-applies actions. The frontend's `Login`, `Settings → Bulk import`,
-  and `Autonomous Agents` pages talk to this backend when it's running.
+  and `Autonomous Agents` pages talk to this backend when it's running, and the **Scheduling
+  timeline syncs to it** (see *Schedule sync* below) — while still working offline.
 
 ## What's built
 
@@ -40,8 +41,28 @@ The repo is a monorepo with two independently runnable halves:
   before/after and an FTE-gap verdict.
 
 ### Scheduling
-- Daily shift-plan grid with global, reusable **shift patterns** (start/end + break/lunch
-  segments).
+- **Omni-channel continuous schedules** — a minute-precision timeline per agent aligned to
+  Phone / Chat / Email, with breaks/lunch cut in, channel filter, grouping and sorting (name
+  A→Z / Z→A, start time). Drag to move breaks, lunch and activities; drag any edge to resize a
+  block, a channel boundary, OT, or the shift itself.
+- **Overtime per channel** (drawn as grid lines in the channel colour) and an **activity
+  overlay** (Meeting, Training, Coaching, LOA, Absence, Other) in the upper band that takes the
+  agent off the channel for On duty / SL. Add in bulk by filters, staggered waves or Excel/CSV.
+- **Bulk editing** — Ctrl/⌘+click, Shift+click or select-all; Ctrl+←/→ moves selected
+  schedules; dragging in one selected row applies to all; right-click marks any AUX on all
+  selected. Interval detail shows Forecast, AHT, Occupancy, SL %, Required/Actual HC and O/U.
+- **Schedule sync** — the timeline is stored server-side as one *day plan* per agent per date
+  (`/api/v1/scheduling/day-plans/{date}`, table `day_schedule_plans`). The backend enforces the
+  same rules as the UI (`backend/app/modules/scheduling/dayplan.py` mirrors
+  `frontend/src/lib/domain/channels.ts`) and offers the same operations for API callers: bulk
+  save with optimistic versioning (409 on stale edits), move/resize (`/edit`, with followers for
+  bulk drags), `/move`, `/resize-shift`, `/mark-aux` (incl. staggered waves), `/unmark`,
+  `/overtime`, `/coverage` and `/export` (JSON or CSV, same five sheets as the UI). Every change
+  is audited. The frontend loads the server copy on sign-in, saves changed agents as you edit,
+  polls for other users' changes, keeps working offline and pushes offline edits when the
+  backend is back; a badge in the timeline shows Synced / Saving / Offline / Updated from server.
+- Global, reusable **shift patterns** (start/end + break/lunch segments) that seed each
+  agent's breaks on the timeline.
 - Bulk schedule import from Excel with a downloadable template.
 - **Break optimiser** — re-staggers every agent's breaks (not just uniform +2h/+4h offsets) to
   minimise volume-weighted SL shortfall across all queues, with a before/after report.

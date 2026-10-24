@@ -9,8 +9,10 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Time,
+    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -74,3 +76,36 @@ class ScheduleShift(UUIDMixin, Base):
     activities: Mapped[list] = mapped_column(JSON, default=list)
 
     schedule: Mapped[Schedule] = relationship(back_populates="shifts")
+
+
+class DaySchedulePlan(UUIDMixin, TenantMixin, TimestampMixin, Base):
+    """One agent's omni-channel day plan — the server copy of what the
+    Scheduling timeline edits (see `dayplan.py`). Times are minutes from
+    midnight; block lists are JSON arrays of {id, start, end, ...}.
+
+    `agent_key` is the roster id the frontend uses; when it matches an
+    employee's `employee_code` the row is also linked via `employee_id`.
+    `version` increments on every write for optimistic concurrency.
+    """
+
+    __tablename__ = "day_schedule_plans"
+    __table_args__ = (UniqueConstraint("organization_id", "plan_date", "agent_key"),)
+
+    plan_date: Mapped[date] = mapped_column(Date, index=True)
+    agent_key: Mapped[str] = mapped_column(String(64), index=True)
+    employee_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    agent_name: Mapped[str] = mapped_column(String(255), default="")
+    team: Mapped[str] = mapped_column(String(128), default="")
+    shift_start: Mapped[int] = mapped_column(Integer)
+    shift_end: Mapped[int] = mapped_column(Integer)
+    # [{"id","type":"break|lunch","label","start","end"}]
+    breaks: Mapped[list] = mapped_column(JSON, default=list)
+    # [{"id","channel":"phone|chat|email","start","end"}]
+    channels: Mapped[list] = mapped_column(JSON, default=list)
+    overtime: Mapped[list] = mapped_column(JSON, default=list)
+    # [{"id","type":"meeting|training|coaching|loa|absence|other","start","end","note"?}]
+    activities: Mapped[list] = mapped_column(JSON, default=list)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)

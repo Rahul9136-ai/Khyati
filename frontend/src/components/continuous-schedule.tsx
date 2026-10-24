@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Clock, Pencil, Plus, Ro
 import { ActivitySwatch, AddActivityDialog, EditActivityDialog, type AddActivityPreset } from "@/components/activity-dialogs"
 import { AddOvertimeDialog, type AddOvertimePreset } from "@/components/add-overtime-dialog"
 import { AuxContextMenu, type AuxMenuChoice } from "@/components/aux-context-menu"
+import { ScheduleSyncBadge } from "@/components/schedule-sync-badge"
 import { ExportButton } from "@/components/export-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -510,6 +511,7 @@ export function ContinuousSchedule({
           options={SCHEDULE_SORTS.map((s) => ({ value: s.id, label: `Sort: ${s.label}` }))}
         />
         <div className="ml-auto flex items-center gap-2">
+          <ScheduleSyncBadge />
           {totalOtHrs > 0 && <Badge variant="secondary"><Clock className="mr-1 h-3 w-3" />{totalOtHrs.toFixed(1)}h OT</Badge>}
           {canEdit && (
             <>

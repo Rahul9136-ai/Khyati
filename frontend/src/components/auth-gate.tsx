@@ -1,17 +1,28 @@
 import { Loader2 } from "lucide-react"
 import { useEffect } from "react"
 
+import { startScheduleSync, stopScheduleSync } from "@/lib/scheduleSync"
 import { Login } from "@/pages/Login"
 import { useAuth } from "@/store/auth"
 
 /** Blocks the app behind a real backend session. */
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const status = useAuth((s) => s.status)
+  const user = useAuth((s) => s.user)
   const bootstrap = useAuth((s) => s.bootstrap)
 
   useEffect(() => {
     void bootstrap()
   }, [bootstrap])
+
+  // Keep the Scheduling timeline in sync with the backend while signed in.
+  // Write access follows the server's own permission, not the UI role matrix.
+  const canWrite = !!user && (user.is_superuser || user.permission_codes.includes("schedule:write"))
+  useEffect(() => {
+    if (status !== "authenticated") return
+    void startScheduleSync({ canWrite })
+    return () => stopScheduleSync()
+  }, [status, canWrite])
 
   if (status === "booting") {
     return (
