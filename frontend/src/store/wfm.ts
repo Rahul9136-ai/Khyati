@@ -27,11 +27,21 @@ import {
   type Thresholds,
 } from "@/lib/domain/automation"
 import { effectiveSegments, optimiseBreaks, type BreakOverrides } from "@/lib/domain/breaks"
+import {
+  ACTIVITY_BY_ID,
+  fmtHM,
+  withOvertimeAdded,
+  type ActivityPlan,
+  type ActivitySegment,
+  type ChannelPlan,
+  type ChannelSegment,
+  type OvertimePlan,
+} from "@/lib/domain/channels"
 import { buildPlan, summarisePlan } from "@/lib/domain/planning"
 import type { Scenario } from "@/lib/domain/scenario"
 import { AGENTS, forecastFor, inAdherence, makeRTA, QUEUES, SHRINKAGE, TEAMS } from "@/lib/domain/seed"
 import { recommendSkillChanges } from "@/lib/domain/skillRecommend"
-import { DEFAULT_SHIFT_PATTERNS, shiftStringFor, type ShiftPattern } from "@/lib/domain/shiftPatterns"
+import { DEFAULT_SHIFT_PATTERNS, shiftStringFor, type BreakSegment, type ShiftPattern } from "@/lib/domain/shiftPatterns"
 import type { Agent, Queue, RtaEntry } from "@/lib/domain/types"
 
 export interface NewAgent {
@@ -147,6 +157,15 @@ export interface AuditEntry {
 }
 
 const uid = () => Math.random().toString(36).slice(2, 9)
+
+/** Store-ready form of one agent's edited day (see dayToPatch in lib/domain/channels). */
+export interface AgentDayPatch {
+  shift: string
+  breaks: BreakSegment[]
+  channels: ChannelSegment[]
+  overtime: ChannelSegment[]
+  activities: ActivitySegment[]
+}
 const entry = (user: string, category: AuditCategory, action: string, detail: string): AuditEntry => ({
   id: uid(),
   ts: Date.now(),
@@ -283,6 +302,26 @@ interface WfmState {
   breakOverrides: BreakOverrides
   applyBreakOverrides: (overrides: BreakOverrides, detail: string) => void
   resetBreakOverrides: () => void
+  /** Commit a direct-manipulation edit (move/resize on the timeline) to one
+   *  agent's day: shift times, AUX placement, channel blocks and OT together. */
+  updateAgentDay: (agentId: string, patch: AgentDayPatch, detail: string) => void
+  /** Same as updateAgentDay for many agents at once (bulk edits) — one audit entry. */
+  updateAgentDays: (items: { agentId: string; patch: AgentDayPatch }[], detail: string) => void
+
+  // Omni-channel continuous schedules: per-agent in-shift channel blocks
+  // (absent = default alignment) and overtime blocks outside the shift.
+  channelPlan: ChannelPlan
+  overtimePlan: OvertimePlan
+  setAgentSchedule: (agentId: string, channels: ChannelSegment[], overtime: ChannelSegment[]) => void
+  resetAgentSchedule: (agentId: string) => void
+  /** Add OT blocks (one per agent) in a single step, e.g. from the Add OT dialog. */
+  addOvertime: (items: { agentId: string; segment: ChannelSegment }[], detail: string) => void
+
+  // Off-phone activities overlaid on the schedule (meeting, training, LOA, absence…).
+  activityPlan: ActivityPlan
+  addActivities: (items: { agentId: string; segment: ActivitySegment }[], detail: string) => void
+  updateActivity: (agentId: string, segment: ActivitySegment) => void
+  removeActivity: (agentId: string, activityId: string) => void
 
   // Automation layer: configurable thresholds + rules-engine toggles.
   thresholds: Thresholds
@@ -748,6 +787,124 @@ export const useWfm = create<WfmState>()(
           auditLog: [entry(s.currentUser, "Schedule", "Reset break plan", "Reverted to shift-pattern break placements"), ...s.auditLog],
         })),
 
+      updateAgentDay: (agentId, patch, detail) => {
+        const name = get().agents.find((a) => a.id === agentId)?.name ?? agentId
+        get().updateAgentDays([{ agentId, patch }], `${name} · ${detail}`)
+      },
+      updateAgentDays: (items, detail) =>
+        set((s) => {
+          if (!items.length) return s
+          const byId = new Map(items.map((i) => [i.agentId, i.patch]))
+          const breakOverrides = { ...s.breakOverrides }
+          const channelPlan = { ...s.channelPlan }
+          const overtimePlan = { ...s.overtimePlan }
+          const activityPlan = { ...s.activityPlan }
+          for (const [agentId, patch] of byId) {
+            breakOverrides[agentId] = patch.breaks
+            channelPlan[agentId] = patch.channels
+            if (patch.overtime.length) overtimePlan[agentId] = patch.overtime
+            else delete overtimePlan[agentId]
+            if (patch.activities.length) activityPlan[agentId] = patch.activities
+            else delete activityPlan[agentId]
+          }
+          return {
+            agents: s.agents.map((a) => (byId.has(a.id) ? { ...a, shift: byId.get(a.id)!.shift } : a)),
+            breakOverrides,
+            channelPlan,
+            overtimePlan,
+            activityPlan,
+            auditLog: [entry(s.currentUser, "Schedule", items.length > 1 ? "Bulk-edited schedules" : "Edited schedule on timeline", detail), ...s.auditLog],
+          }
+        }),
+
+      channelPlan: {},
+      overtimePlan: {},
+      setAgentSchedule: (agentId, channels, overtime) =>
+        set((s) => {
+          const name = s.agents.find((a) => a.id === agentId)?.name ?? agentId
+          const otMins = overtime.reduce((t, o) => t + o.end - o.start, 0)
+          const overtimePlan = { ...s.overtimePlan }
+          if (overtime.length) overtimePlan[agentId] = overtime
+          else delete overtimePlan[agentId]
+          return {
+            channelPlan: { ...s.channelPlan, [agentId]: channels },
+            overtimePlan,
+            auditLog: [
+              entry(s.currentUser, "Schedule", "Updated channel schedule", `${name} · ${channels.length} channel block(s)${otMins ? ` · ${(otMins / 60).toFixed(2)}h OT` : ""}`),
+              ...s.auditLog,
+            ],
+          }
+        }),
+      addOvertime: (items, detail) =>
+        set((s) => {
+          if (!items.length) return s
+          const overtimePlan = { ...s.overtimePlan }
+          for (const { agentId, segment } of items) {
+            overtimePlan[agentId] = withOvertimeAdded(overtimePlan[agentId] ?? [], segment)
+          }
+          return {
+            overtimePlan,
+            auditLog: [entry(s.currentUser, "Schedule", "Added OT", detail), ...s.auditLog],
+          }
+        }),
+      activityPlan: {},
+      addActivities: (items, detail) =>
+        set((s) => {
+          if (!items.length) return s
+          const activityPlan = { ...s.activityPlan }
+          for (const { agentId, segment } of items) {
+            activityPlan[agentId] = [...(activityPlan[agentId] ?? []), segment].sort((a, b) => a.start - b.start)
+          }
+          return { activityPlan, auditLog: [entry(s.currentUser, "Schedule", "Added activity", detail), ...s.auditLog] }
+        }),
+      updateActivity: (agentId, segment) =>
+        set((s) => {
+          const name = s.agents.find((a) => a.id === agentId)?.name ?? agentId
+          const list = (s.activityPlan[agentId] ?? []).map((x) => (x.id === segment.id ? segment : x)).sort((a, b) => a.start - b.start)
+          return {
+            activityPlan: { ...s.activityPlan, [agentId]: list },
+            auditLog: [
+              entry(s.currentUser, "Schedule", "Updated activity", `${name} · ${ACTIVITY_BY_ID[segment.type].label} ${fmtHM(segment.start)}–${fmtHM(segment.end)}`),
+              ...s.auditLog,
+            ],
+          }
+        }),
+      removeActivity: (agentId, activityId) =>
+        set((s) => {
+          const name = s.agents.find((a) => a.id === agentId)?.name ?? agentId
+          const gone = s.activityPlan[agentId]?.find((x) => x.id === activityId)
+          const activityPlan = { ...s.activityPlan }
+          const rest = (activityPlan[agentId] ?? []).filter((x) => x.id !== activityId)
+          if (rest.length) activityPlan[agentId] = rest
+          else delete activityPlan[agentId]
+          return {
+            activityPlan,
+            auditLog: [
+              entry(
+                s.currentUser,
+                "Schedule",
+                "Removed activity",
+                gone ? `${name} · ${ACTIVITY_BY_ID[gone.type].label} ${fmtHM(gone.start)}–${fmtHM(gone.end)}` : `${name} · ${activityId}`,
+              ),
+              ...s.auditLog,
+            ],
+          }
+        }),
+
+      resetAgentSchedule: (agentId) =>
+        set((s) => {
+          const channelPlan = { ...s.channelPlan }
+          const overtimePlan = { ...s.overtimePlan }
+          delete channelPlan[agentId]
+          delete overtimePlan[agentId]
+          const name = s.agents.find((a) => a.id === agentId)?.name ?? agentId
+          return {
+            channelPlan,
+            overtimePlan,
+            auditLog: [entry(s.currentUser, "Schedule", "Reset channel schedule", `${name} · default alignment, OT removed`), ...s.auditLog],
+          }
+        }),
+
       thresholds: DEFAULT_THRESHOLDS,
       setThreshold: (key, value) =>
         set((s) => {
@@ -1130,6 +1287,9 @@ export const useWfm = create<WfmState>()(
         scenarios: s.scenarios,
         swaps: s.swaps,
         breakOverrides: s.breakOverrides,
+        channelPlan: s.channelPlan,
+        overtimePlan: s.overtimePlan,
+        activityPlan: s.activityPlan,
         thresholds: s.thresholds,
         ruleState: s.ruleState,
         exceptions: s.exceptions,
