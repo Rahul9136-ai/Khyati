@@ -24,14 +24,20 @@ const put = vi.mocked(api.put)
 
 /** In-memory stand-in for /scheduling/day-plans with the backend's versioning + 409. */
 let server: Map<string, ServerDayPlan & { version: number }>
+let policy: { country_code: string | null; overrides: object; version: number }
 let offline = false
 function fakeBackend() {
-  get.mockImplementation(async () => {
+  get.mockImplementation(async (url: string) => {
     if (offline) throw { code: "network_error", message: "down" }
+    if (url === "/scheduling/labour-law") return { data: { data: structuredClone(policy) } }
     return { data: { data: [...server.values()].map((r) => structuredClone(r)) } }
   })
-  put.mockImplementation(async (_url: string, body: unknown) => {
+  put.mockImplementation(async (url: string, body: unknown) => {
     if (offline) throw { code: "network_error", message: "down" }
+    if (url === "/scheduling/labour-law") {
+      policy = { ...(body as { country_code: string | null; overrides: object }), version: policy.version + 1 }
+      return { data: { data: structuredClone(policy) } }
+    }
     const { items } = body as { items: (ServerDayPlan & { base_version?: number })[] }
     const stale = items.filter((i) => i.base_version !== undefined && server.get(i.agent_key) && server.get(i.agent_key)!.version !== i.base_version)
     if (stale.length) throw { status: 409, code: "conflict", message: "stale" }
@@ -61,11 +67,12 @@ beforeEach(() => {
   vi.useFakeTimers()
   localStorage.clear()
   server = new Map()
+  policy = { country_code: null, overrides: {}, version: 0 }
   offline = false
   get.mockReset()
   put.mockReset()
   fakeBackend()
-  useWfm.setState({ agents: AGENTS, breakOverrides: {}, channelPlan: {}, overtimePlan: {}, activityPlan: {} })
+  useWfm.setState({ agents: AGENTS, breakOverrides: {}, channelPlan: {}, overtimePlan: {}, activityPlan: {}, labourLaw: { country: null, overrides: {} } })
 })
 afterEach(() => {
   stopScheduleSync()
@@ -176,6 +183,34 @@ describe("schedule sync", () => {
     await startScheduleSync({ canWrite: true, date: DATE })
     expect(useWfm.getState().activityPlan[a01]).toBeUndefined()
     expect(useScheduleSync.getState()).toMatchObject({ status: "conflict", message: expect.stringMatching(/1 schedule\(s\) edited offline/) })
+  })
+
+  it("labour law: the organisation's saved policy is applied on sign-in", async () => {
+    policy = { country_code: "DE", overrides: { maxDailyHours: 9 }, version: 3 }
+    useWfm.setState({ labourLaw: { country: "GB", overrides: {} } })
+    await startScheduleSync({ canWrite: true, date: DATE })
+    expect(useWfm.getState().labourLaw).toEqual({ country: "DE", overrides: { maxDailyHours: 9 } })
+    expect(put.mock.calls.some(([url]) => url === "/scheduling/labour-law")).toBe(false)
+  })
+
+  it("labour law: a local choice is uploaded when none is saved, and changes are pushed", async () => {
+    useWfm.setState({ labourLaw: { country: "IN", overrides: {} } })
+    await startScheduleSync({ canWrite: true, date: DATE })
+    expect(policy).toMatchObject({ country_code: "IN", version: 1 })
+
+    useWfm.getState().setLabourLawCountry("PH")
+    await vi.advanceTimersByTimeAsync(0)
+    expect(policy).toMatchObject({ country_code: "PH", overrides: {}, version: 2 })
+    useWfm.getState().setLabourLawOverrides({ maxDailyHours: 10 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(policy).toMatchObject({ country_code: "PH", overrides: { maxDailyHours: 10 }, version: 3 })
+  })
+
+  it("labour law: picks up another user's change while idle", async () => {
+    await startScheduleSync({ canWrite: true, date: DATE })
+    policy = { country_code: "BR", overrides: {}, version: 5 }
+    await pull()
+    expect(useWfm.getState().labourLaw.country).toBe("BR")
   })
 
   it("never writes for view-only users", async () => {

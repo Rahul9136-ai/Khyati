@@ -23,7 +23,8 @@ from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.modules.identity.models import User
 from app.modules.identity.service import record_audit
 from app.modules.scheduling import dayplan as dp
-from app.modules.scheduling.models import DaySchedulePlan
+from app.modules.scheduling import labour_law
+from app.modules.scheduling.models import DaySchedulePlan, SchedulingPolicy
 from app.modules.scheduling.schemas import (
     DayAddOvertimeIn,
     DayApplyEditIn,
@@ -33,6 +34,7 @@ from app.modules.scheduling.schemas import (
     DayPlanIn,
     DayResizeShiftIn,
     DayUnmarkIn,
+    LabourLawPolicyIn,
 )
 from app.modules.workforce.models import Employee
 
@@ -423,14 +425,19 @@ def coverage(rows: list[DaySchedulePlan]) -> list[dict]:
     return dp.coverage([dp.day_timeline(d) for d in days], dp.timeline_window(days))
 
 
-def export_sheets(rows: list[DaySchedulePlan]) -> dict[str, list[dict]]:
-    return dp.export_sheets(_export_agents(rows))
+def export_sheets(rows: list[DaySchedulePlan], law: dict | None = None) -> dict[str, list[dict]]:
+    """The five schedule sheets, plus compliance + rules sheets when a labour law applies."""
+    agents = _export_agents(rows)
+    sheets = dp.export_sheets(agents)
+    if law:
+        sheets.update(labour_law.compliance_sheets(agents, law))
+    return sheets
 
 
-def export_csv(rows: list[DaySchedulePlan]) -> str:
+def export_csv(rows: list[DaySchedulePlan], law: dict | None = None) -> str:
     """All sheets in one CSV, sectioned like the frontend's CSV export."""
     out = io.StringIO()
-    for name, sheet in export_sheets(rows).items():
+    for name, sheet in export_sheets(rows, law).items():
         if not sheet:
             continue
         out.write(f"=== {name} ===\n")
@@ -440,3 +447,80 @@ def export_csv(rows: list[DaySchedulePlan]) -> str:
         writer.writerows(sheet)
         out.write("\n")
     return out.getvalue()
+
+
+# ------------------------------------------------------ country labour law
+
+
+async def get_policy(db: AsyncSession, org_id: uuid.UUID) -> SchedulingPolicy | None:
+    return (
+        await db.execute(select(SchedulingPolicy).where(SchedulingPolicy.organization_id == org_id))
+    ).scalar_one_or_none()
+
+
+def policy_out(policy: SchedulingPolicy | None) -> dict:
+    code = policy.country_code if policy else None
+    overrides = dict(policy.overrides or {}) if policy else {}
+    return {
+        "country_code": code,
+        "overrides": overrides,
+        "version": policy.version if policy else 0,
+        "effective": labour_law.effective_law(code, overrides),
+        "disclaimer": labour_law.disclaimer(),
+    }
+
+
+async def set_policy(
+    db: AsyncSession, org_id: uuid.UUID, body: LabourLawPolicyIn, *, actor: User
+) -> SchedulingPolicy:
+    if body.country_code is not None and labour_law.preset(body.country_code) is None:
+        raise ValidationError(
+            f"Unknown country '{body.country_code}'",
+            details={"known": [law["code"] for law in labour_law.presets()]},
+        )
+    policy = await get_policy(db, org_id)
+    before = policy_out(policy)
+    if policy is None:
+        policy = SchedulingPolicy(organization_id=org_id, version=0)
+        db.add(policy)
+    policy.country_code = body.country_code
+    # Overrides only make sense against a country's statute.
+    policy.overrides = body.overrides.model_dump(exclude_unset=True) if body.country_code else {}
+    policy.version = (policy.version or 0) + 1
+    policy.updated_by = actor.id
+    await db.flush()
+    await db.refresh(policy, ["updated_at"])
+    await record_audit(
+        db, actor=actor, action="scheduling_policy.labour_law", entity_type="scheduling_policy",
+        entity_id=policy.id,
+        before={"country_code": before["country_code"], "overrides": before["overrides"]},
+        after={"country_code": policy.country_code, "overrides": policy.overrides},
+    )
+    return policy
+
+
+async def org_law(db: AsyncSession, org_id: uuid.UUID, country: str | None = None) -> dict | None:
+    """The law to check against: an explicit `country` preset, else the org policy."""
+    if country:
+        law = labour_law.effective_law(country)
+        if law is None:
+            raise ValidationError(f"Unknown country '{country}'")
+        return law
+    policy = await get_policy(db, org_id)
+    return labour_law.effective_law(policy.country_code, policy.overrides) if policy else None
+
+
+def compliance(rows: list[DaySchedulePlan], law: dict | None) -> dict:
+    agents = []
+    for r in rows:
+        day = _row_to_day(r)
+        issues = labour_law.check_compliance(day, law) if law else []
+        agents.append({
+            "agent_key": r.agent_key, "agent_name": r.agent_name or r.agent_key,
+            "worked_minutes": labour_law.worked_minutes(day),
+            "compliant": not issues, "issues": issues,
+        })
+    return {
+        "country_code": law["code"] if law else None, "law": law,
+        "disclaimer": labour_law.disclaimer(), "agents": agents,
+    }

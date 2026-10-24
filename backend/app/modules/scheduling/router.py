@@ -10,11 +10,12 @@ from fastapi.responses import Response
 
 from app.api.deps import DbSession, require_permission
 from app.modules.identity.models import User
-from app.modules.scheduling import dayplan_service, service
+from app.modules.scheduling import dayplan_service, labour_law, service
 from app.modules.scheduling.models import ShiftTemplate
 from app.modules.scheduling.schemas import (
     DayAddOvertimeIn,
     DayApplyEditIn,
+    DayComplianceOut,
     DayCoverageSlot,
     DayMarkAuxIn,
     DayMoveIn,
@@ -25,6 +26,8 @@ from app.modules.scheduling.schemas import (
     DaySkipped,
     DayUnmarkIn,
     GenerateScheduleRequest,
+    LabourLawPolicyIn,
+    LabourLawPolicyOut,
     ScheduleDetailOut,
     ScheduleOut,
     ShiftIn,
@@ -230,11 +233,51 @@ async def export_day_plans(
 ):
     """Same five sheets as the UI export (segments, agent summary, 15-min grid,
     channel coverage, legend) as JSON or a sectioned CSV."""
-    rows = await dayplan_service.list_day_plans(db, org_scope(user), plan_date, agent_keys)
+    org = org_scope(user)
+    rows = await dayplan_service.list_day_plans(db, org, plan_date, agent_keys)
+    # Labour-law compliance sheets are included when the organisation has a country set.
+    law = await dayplan_service.org_law(db, org)
     if format == "csv":
         filename = f"schedules-{plan_date.isoformat()}.csv"
         return Response(
-            dayplan_service.export_csv(rows), media_type="text/csv; charset=utf-8",
+            dayplan_service.export_csv(rows, law), media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
-    return ApiResponse(data=dayplan_service.export_sheets(rows))
+    return ApiResponse(data=dayplan_service.export_sheets(rows, law))
+
+
+@router.get(
+    "/day-plans/{plan_date}/compliance", response_model=ApiResponse[DayComplianceOut]
+)
+async def day_plan_compliance(
+    plan_date: date, db: DbSession, user: Reader, country: str | None = None
+):
+    """Check every agent's day against the organisation's labour law (or a
+    `country` preset). Daily rules only; warnings, nothing is blocked."""
+    org = org_scope(user)
+    law = await dayplan_service.org_law(db, org, country)
+    rows = await dayplan_service.list_day_plans(db, org, plan_date)
+    return ApiResponse(data=DayComplianceOut(**dayplan_service.compliance(rows, law)))
+
+
+# ------------------------------------------------------------ country labour law
+
+
+@router.get("/labour-laws", response_model=ApiResponse[dict])
+async def list_labour_laws(user: Reader):
+    """Country presets (simplified statutory baselines — see `disclaimer`)."""
+    return ApiResponse(data={"disclaimer": labour_law.disclaimer(), "laws": labour_law.presets()})
+
+
+@router.get("/labour-law", response_model=ApiResponse[LabourLawPolicyOut])
+async def get_labour_law(db: DbSession, user: Reader):
+    policy = await dayplan_service.get_policy(db, org_scope(user))
+    return ApiResponse(data=LabourLawPolicyOut(**dayplan_service.policy_out(policy)))
+
+
+@router.put("/labour-law", response_model=ApiResponse[LabourLawPolicyOut])
+async def set_labour_law(body: LabourLawPolicyIn, db: DbSession, actor: Writer):
+    """Select the organisation's country (its preset applies automatically) and
+    optionally override individual values."""
+    policy = await dayplan_service.set_policy(db, org_scope(actor), body, actor=actor)
+    return ApiResponse(data=LabourLawPolicyOut(**dayplan_service.policy_out(policy)))

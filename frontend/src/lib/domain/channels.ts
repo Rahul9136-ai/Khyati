@@ -6,6 +6,7 @@
 import type { Sheet } from "@/lib/export"
 
 import { effectiveSegments, type BreakOverrides } from "./breaks"
+import { checkCompliance, fmtDuration, LABOUR_LAW_DISCLAIMER, workedMinutes, type LabourLaw } from "./labourLaw"
 import { INTERVALS } from "./seed"
 import type { BreakSegment, ShiftPattern } from "./shiftPatterns"
 import type { Agent, Queue } from "./types"
@@ -706,6 +707,7 @@ export function scheduleExportSheets(
   channelPlan: ChannelPlan,
   otPlan: OvertimePlan,
   activityPlan: ActivityPlan = {},
+  law: LabourLaw | null = null,
 ): Sheet[] {
   const window = timelineWindow(agents, otPlan)
   const timelines = agents.map((a) => ({ a, segs: agentTimeline(a, patterns, overrides, channelPlan, otPlan, activityPlan) }))
@@ -796,6 +798,52 @@ export function scheduleExportSheets(
         { Code: "LUN", Meaning: "Lunch" },
         ...ACTIVITIES.map((t) => ({ Code: t.short, Meaning: `${t.label} — overlay activity, agent off the channel` })),
         { Code: "—", Meaning: "On shift, no channel assigned" },
+      ],
+    },
+    ...(law ? labourLawSheets(agents, law, (a) => agentDay(a, patterns, overrides, channelPlan, otPlan, activityPlan)) : []),
+  ]
+}
+
+/** "Labour-law compliance" (one row per agent) + "Labour-law rules" (what was applied). */
+function labourLawSheets(agents: Agent[], law: LabourLaw, dayOf: (a: Agent) => AgentDay): Sheet[] {
+  const hrs = (h: number | null) => (h == null ? "—" : fmtDuration(h * 60))
+  return [
+    {
+      name: "Labour-law compliance",
+      rows: agents.map((a) => {
+        const day = dayOf(a)
+        const issues = checkCompliance(day, law)
+        return {
+          Agent: a.name,
+          "Agent ID": a.id,
+          Team: a.team,
+          Shift: `${fmtHM(day.shift[0])}–${fmtHM(day.shift[1])}`,
+          Worked: fmtDuration(workedMinutes(day)),
+          Status: issues.length ? "Issues" : "Compliant",
+          Issues: issues.map((i) => i.message).join("; "),
+        }
+      }),
+    },
+    {
+      name: "Labour-law rules",
+      rows: [
+        { Rule: "Country", Value: law.name },
+        { Rule: "Source", Value: law.source },
+        { Rule: "Standard hours / day (OT after)", Value: hrs(law.standardDailyHours) },
+        { Rule: "Max hours / day incl. OT", Value: hrs(law.maxDailyHours) },
+        { Rule: "Max OT / day", Value: hrs(law.maxDailyOtHours) },
+        { Rule: "Max spread of the working day", Value: hrs(law.maxSpreadHours) },
+        { Rule: "Max work without a break", Value: hrs(law.maxContinuousWorkHours) },
+        { Rule: "Breaks shorter than this don't count", Value: law.minBreakBlockMinutes == null ? "—" : `${law.minBreakBlockMinutes} min` },
+        ...law.breakRules.map((r) => ({
+          Rule: `Break after ${hrs(r.afterHours)} worked`,
+          Value: `${r.minBreakMinutes} min${r.continuous ? " (one uninterrupted break)" : " (total)"}`,
+        })),
+        { Rule: "Standard hours / week (reference)", Value: hrs(law.standardWeeklyHours) },
+        { Rule: "Max hours / week (reference)", Value: hrs(law.maxWeeklyHours) },
+        { Rule: "Min daily rest between shifts (reference)", Value: hrs(law.minDailyRestHours) },
+        { Rule: "Notes", Value: law.notes },
+        { Rule: "Disclaimer", Value: LABOUR_LAW_DISCLAIMER },
       ],
     },
   ]

@@ -37,6 +37,7 @@ import {
   type ChannelSegment,
   type OvertimePlan,
 } from "@/lib/domain/channels"
+import { LABOUR_LAW_BY_CODE, type LawOverrides } from "@/lib/domain/labourLaw"
 import { buildPlan, summarisePlan } from "@/lib/domain/planning"
 import type { Scenario } from "@/lib/domain/scenario"
 import { AGENTS, forecastFor, inAdherence, makeRTA, QUEUES, SHRINKAGE, TEAMS } from "@/lib/domain/seed"
@@ -347,6 +348,13 @@ interface WfmState {
   resetAgentSchedule: (agentId: string) => void
   /** Add OT blocks (one per agent) in a single step, e.g. from the Add OT dialog. */
   addOvertime: (items: { agentId: string; segment: ChannelSegment }[], detail: string) => void
+
+  // Labour law the schedules are checked against: a country preset + local overrides.
+  labourLaw: { country: string | null; overrides: LawOverrides }
+  setLabourLawCountry: (country: string | null) => void
+  setLabourLawOverrides: (overrides: LawOverrides) => void
+  /** From the backend (org policy) — no local audit entry. */
+  applyServerLabourLaw: (law: { country: string | null; overrides: LawOverrides }) => void
 
   // Off-phone activities overlaid on the schedule (meeting, training, LOA, absence…).
   activityPlan: ActivityPlan
@@ -867,6 +875,31 @@ export const useWfm = create<WfmState>()(
             auditLog: [entry(s.currentUser, "Schedule", "Added OT", detail), ...s.auditLog],
           }
         }),
+      labourLaw: { country: null, overrides: {} },
+      setLabourLawCountry: (country) =>
+        set((s) => ({
+          // A new country starts from its statute; overrides belong to the old one.
+          labourLaw: { country, overrides: {} },
+          auditLog: [
+            entry(s.currentUser, "Schedule", "Set labour law", country ? `${LABOUR_LAW_BY_CODE[country]?.name ?? country}` : "None"),
+            ...s.auditLog,
+          ],
+        })),
+      setLabourLawOverrides: (overrides) =>
+        set((s) => ({
+          labourLaw: { ...s.labourLaw, overrides },
+          auditLog: [
+            entry(
+              s.currentUser,
+              "Schedule",
+              "Adjusted labour-law rules",
+              Object.keys(overrides).length ? Object.entries(overrides).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ") : "Reset to statute",
+            ),
+            ...s.auditLog,
+          ],
+        })),
+      applyServerLabourLaw: (law) => set({ labourLaw: law }),
+
       activityPlan: {},
       addActivities: (items, detail) =>
         set((s) => {
@@ -1310,6 +1343,7 @@ export const useWfm = create<WfmState>()(
         channelPlan: s.channelPlan,
         overtimePlan: s.overtimePlan,
         activityPlan: s.activityPlan,
+        labourLaw: s.labourLaw,
         thresholds: s.thresholds,
         ruleState: s.ruleState,
         exceptions: s.exceptions,

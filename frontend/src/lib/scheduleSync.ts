@@ -15,6 +15,7 @@ import { create } from "zustand"
 
 import { api, type ApiError } from "@/lib/api"
 import { agentDay, dayToPatch, type AgentDay } from "@/lib/domain/channels"
+import type { LawOverrides } from "@/lib/domain/labourLaw"
 import type { Agent } from "@/lib/domain/types"
 import { useWfm, type AgentDayPatch } from "@/store/wfm"
 
@@ -123,6 +124,9 @@ let running: {
   saving: Promise<void> | null
   applyingRemote: boolean
   auditMark: string | null
+  /** Labour-law policy last in sync with the server (version 0 = none saved there). */
+  lawVersion: number
+  lawSynced: string | null
 } | null = null
 
 const isNetwork = (e: unknown) => (e as ApiError)?.code === "network_error" || (e as ApiError)?.status === undefined
@@ -130,6 +134,50 @@ const isNetwork = (e: unknown) => (e as ApiError)?.code === "network_error" || (
 async function fetchPlans(date: string): Promise<ServerDayPlan[]> {
   const res = await api.get(`/scheduling/day-plans/${date}`)
   return res.data.data as ServerDayPlan[]
+}
+
+// ---- labour-law policy (one per organisation) ----
+
+interface ServerLabourLaw {
+  country_code: string | null
+  overrides: LawOverrides
+  version: number
+}
+const lawKey = (l: { country: string | null; overrides: LawOverrides }) => JSON.stringify([l.country, l.overrides])
+
+async function fetchLabourLaw(): Promise<ServerLabourLaw> {
+  const res = await api.get("/scheduling/labour-law")
+  return res.data.data as ServerLabourLaw
+}
+
+function applyRemoteLaw(pol: ServerLabourLaw) {
+  if (!running) return
+  const r = running
+  r.applyingRemote = true
+  try {
+    useWfm.getState().applyServerLabourLaw({ country: pol.country_code, overrides: pol.overrides ?? {} })
+  } finally {
+    r.applyingRemote = false
+  }
+  r.lawVersion = pol.version
+  r.lawSynced = lawKey(useWfm.getState().labourLaw)
+}
+
+async function pushLabourLaw() {
+  if (!running || !running.canWrite) return
+  const r = running
+  const law = useWfm.getState().labourLaw
+  if (lawKey(law) === r.lawSynced) return
+  try {
+    const res = await api.put("/scheduling/labour-law", { country_code: law.country, overrides: law.overrides })
+    if (running !== r) return
+    r.lawVersion = (res.data.data as ServerLabourLaw).version
+    r.lawSynced = lawKey(law)
+    setSync({ status: "synced", lastSyncedAt: Date.now() })
+  } catch (e) {
+    if (running !== r) return
+    setSync({ status: "offline", message: isNetwork(e) ? "Backend unreachable — labour-law choice kept locally." : (e as ApiError).message })
+  }
 }
 
 /** Load server rows into the store (server wins) and mark them in sync. */
@@ -224,6 +272,10 @@ export async function pull(): Promise<void> {
     const rows = await fetchPlans(r.date)
     const newer = rows.filter((row) => (row.version ?? 0) !== r.snap.versions[row.agent_key])
     if (newer.length) applyRemote(newer)
+    if (lawKey(useWfm.getState().labourLaw) === r.lawSynced || r.lawSynced === null) {
+      const pol = await fetchLabourLaw().catch(() => null)
+      if (pol && pol.version > 0 && pol.version !== r.lawVersion) applyRemoteLaw(pol)
+    }
     setSync({ status: r.canWrite ? "synced" : "readonly", message: null, lastSyncedAt: Date.now() })
   } catch (e) {
     if (isNetwork(e)) setSync({ status: "offline", message: "Backend unreachable — showing local schedules." })
@@ -244,6 +296,8 @@ export async function startScheduleSync(opts: { canWrite: boolean; date?: string
     saving: null,
     applyingRemote: false,
     auditMark: useWfm.getState().auditLog[0]?.id ?? null,
+    lawVersion: 0,
+    lawSynced: null,
   }
   const r = running
   setSync({ status: "loading", message: null, planDate: date })
@@ -282,8 +336,20 @@ export async function startScheduleSync(opts: { canWrite: boolean; date?: string
   }
   applyRemote(toApply)
 
+  // Labour law: the organisation's saved policy wins; if none is saved yet, upload ours.
+  let pushLaw = false
+  try {
+    const pol = await fetchLabourLaw()
+    if (running !== r) return
+    if (pol.version > 0) applyRemoteLaw(pol)
+    else pushLaw = useWfm.getState().labourLaw.country !== null
+  } catch {
+    /* older backend without the endpoint, or offline — keep the local choice */
+  }
+
   r.unsubscribe = useWfm.subscribe((s, p) => {
     if (r.applyingRemote || running !== r) return
+    if (s.labourLaw !== p.labourLaw && r.canWrite) void pushLabourLaw()
     if (
       s.agents === p.agents && s.breakOverrides === p.breakOverrides && s.channelPlan === p.channelPlan &&
       s.overtimePlan === p.overtimePlan && s.activityPlan === p.activityPlan && s.shiftPatterns === p.shiftPatterns
@@ -297,6 +363,7 @@ export async function startScheduleSync(opts: { canWrite: boolean; date?: string
     if (typeof document === "undefined" || document.visibilityState === "visible") void pull()
   }, POLL_MS)
 
+  if (pushLaw && r.canWrite) await pushLabourLaw()
   if (r.canWrite && toPush.length) {
     await push(toPush, rows.length ? "Uploaded schedules missing on the server" : "Initial upload of the day's schedules")
   } else {

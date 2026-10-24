@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Clock, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Clock, Pencil, Plus, RotateCcw, Scale, Trash2 } from "lucide-react"
 
 import { ActivitySwatch, AddActivityDialog, EditActivityDialog, type AddActivityPreset } from "@/components/activity-dialogs"
 import { AddOvertimeDialog, type AddOvertimePreset } from "@/components/add-overtime-dialog"
 import { AuxContextMenu, type AuxMenuChoice } from "@/components/aux-context-menu"
+import { LabourLawDialog } from "@/components/labour-law-dialog"
 import { ScheduleSyncBadge } from "@/components/schedule-sync-badge"
 import { ExportButton } from "@/components/export-button"
 import { Badge } from "@/components/ui/badge"
@@ -12,6 +13,7 @@ import { Dialog } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import type { AbsenceRisk } from "@/lib/domain/absenceRisk"
+import { checkCompliance, effectiveLaw, LABOUR_LAWS } from "@/lib/domain/labourLaw"
 import {
   ACTIVITIES,
   ACTIVITY_BY_ID,
@@ -171,7 +173,11 @@ export function ContinuousSchedule({
   /** AI absence-risk flags, shown beside the agent's name. */
   riskById?: Map<string, AbsenceRisk>
 }) {
-  const { shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, queues, updateAgentDay, updateAgentDays } = useWfm()
+  const { shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, queues, updateAgentDay, updateAgentDays, labourLaw, setLabourLawCountry } = useWfm()
+  // Country labour law the schedules are checked against (preset + local overrides).
+  const law = useMemo(() => effectiveLaw(labourLaw.country, labourLaw.overrides), [labourLaw])
+  const [lawOpen, setLawOpen] = useState(false)
+  const [onlyIssues, setOnlyIssues] = useState(false)
   const [filter, setFilter] = useState<Channel | "all">("all")
   const [grouped, setGrouped] = useState(true)
   const [sort, setSort] = useState<ScheduleSort>("roster")
@@ -451,17 +457,25 @@ export function ContinuousSchedule({
         sort,
         // Sort on the saved schedule, not a live drag preview, so rows don't jump mid-drag.
         (a) => ({ name: a.name, start: days.get(a.id)!.shift[0] }),
-      ).map((a) => {
-        const day = previewDays.get(a.id) ?? days.get(a.id)!
-        return {
-          agent: a,
-          day,
-          primary: primaryChannel(a, channelPlan),
-          segs: dayTimeline(day),
-          otMins: day.ot.reduce((t, o) => t + o.end - o.start, 0),
-        }
-      }),
-    [agents, filter, sort, channelPlan, overtimePlan, days, previewDays],
+      )
+        .map((a) => {
+          const day = previewDays.get(a.id) ?? days.get(a.id)!
+          return {
+            agent: a,
+            day,
+            primary: primaryChannel(a, channelPlan),
+            segs: dayTimeline(day),
+            otMins: day.ot.reduce((t, o) => t + o.end - o.start, 0),
+            // Re-checked live, so a drag shows compliance as you go.
+            issues: law ? checkCompliance(day, law) : [],
+          }
+        })
+        .filter((r) => !onlyIssues || r.issues.length > 0),
+    [agents, filter, sort, channelPlan, overtimePlan, days, previewDays, law, onlyIssues],
+  )
+  const issueCount = useMemo(
+    () => (law ? agents.filter((a) => checkCompliance(days.get(a.id)!, law).length > 0).length : 0),
+    [agents, days, law],
   )
   const groups = grouped
     ? CHANNELS.map((c) => ({ channel: c, rows: rows.filter((r) => r.primary === c.id) })).filter((g) => g.rows.length)
@@ -503,6 +517,33 @@ export function ContinuousSchedule({
           <input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} className="accent-primary" />
           Group by primary channel
         </label>
+        <span className="ml-1 flex items-center gap-1">
+          <Scale className="h-3.5 w-3.5 text-muted-foreground" />
+          <Select
+            aria-label="Labour law country"
+            className="h-8 text-xs"
+            disabled={!canEdit}
+            value={labourLaw.country ?? ""}
+            onChange={(e) => setLabourLawCountry(e.target.value || null)}
+            options={[{ value: "", label: "Labour law: none" }, ...LABOUR_LAWS.map((l) => ({ value: l.code, label: `Labour law: ${l.name}` }))]}
+          />
+          <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setLawOpen(true)}>Rules</Button>
+          {law && (
+            <button
+              type="button"
+              aria-pressed={onlyIssues}
+              onClick={() => setOnlyIssues((v) => !v)}
+              title={onlyIssues ? "Show all schedules" : "Show only schedules that break the labour law"}
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-xs",
+                issueCount ? "border-destructive/50 text-destructive" : "border-emerald-500/50 text-emerald-600 dark:text-emerald-400",
+                onlyIssues && "bg-destructive/10",
+              )}
+            >
+              {issueCount ? `⚖ ${issueCount} with issues` : "⚖ All compliant"}
+            </button>
+          )}
+        </span>
         <Select
           aria-label="Sort schedules"
           className="h-8 text-xs"
@@ -526,7 +567,7 @@ export function ContinuousSchedule({
           <ExportButton
             label="Export schedules"
             filename="schedules-all"
-            sheets={() => scheduleExportSheets(agents, queues, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan)}
+            sheets={() => scheduleExportSheets(agents, queues, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, law)}
           />
         </div>
       </div>
@@ -587,7 +628,7 @@ export function ContinuousSchedule({
             label="Export selected"
             variant="ghost"
             filename="schedules-selected"
-            sheets={() => scheduleExportSheets(selectedAgents, queues, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan)}
+            sheets={() => scheduleExportSheets(selectedAgents, queues, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, law)}
           />
           {selected.size < rowOrder.length && (
             <Button size="sm" variant="ghost" className="ml-auto h-7 text-xs" onClick={() => setSelected(new Set(rowOrder))}>
@@ -672,7 +713,7 @@ export function ContinuousSchedule({
                   <div />
                 </div>
               )}
-              {g.rows.map(({ agent: a, day, segs, otMins }) => {
+              {g.rows.map(({ agent: a, day, segs, otMins, issues }) => {
                 const skilled = a.skills.includes(queue.id)
                 const risk = riskById?.get(a.id)
                 const myDrag = drag?.agent.id === a.id ? drag : null
@@ -716,6 +757,15 @@ export function ContinuousSchedule({
                           {risk && risk.level !== "low" && (
                             <span title={`AI absence risk: ${risk.riskPct}% — ${risk.reason}`}>
                               <AlertTriangle className={cn("h-3 w-3 shrink-0", risk.level === "high" ? "text-destructive" : "text-amber-500")} />
+                            </span>
+                          )}
+                          {issues.length > 0 && law && (
+                            <span
+                              role="img"
+                              aria-label={`${law.name} labour law: ${issues.map((i) => i.message).join("; ")}`}
+                              title={`${law.name} labour law:\n• ${issues.map((i) => i.message).join("\n• ")}`}
+                            >
+                              <Scale className="h-3 w-3 shrink-0 text-destructive" />
                             </span>
                           )}
                         </div>
@@ -971,6 +1021,7 @@ export function ContinuousSchedule({
           onClose={closeMenu}
         />
       )}
+      {lawOpen && <LabourLawDialog canEdit={canEdit} onClose={() => setLawOpen(false)} />}
       {otPreset && <AddOvertimeDialog agents={agents} preset={otPreset} onClose={() => setOtPreset(null)} />}
       {activityPreset && <AddActivityDialog agents={agents} preset={activityPreset} onClose={() => setActivityPreset(null)} />}
       {editingActivity && (

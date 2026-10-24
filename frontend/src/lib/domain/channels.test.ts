@@ -31,6 +31,7 @@ import {
   type EditOp,
   type OtRequest,
 } from "./channels"
+import { effectiveLaw } from "./labourLaw"
 import { buildPlan } from "./planning"
 import { AGENTS, QUEUES, forecastFor } from "./seed"
 import { DEFAULT_SHIFT_PATTERNS } from "./shiftPatterns"
@@ -229,6 +230,16 @@ describe("markAux (right-click menu)", () => {
   it("unmarkActivitiesAt clears only what's under the cursor", () => {
     const d = { ...day(), activities: [{ id: "a", type: "meeting" as const, start: toMins("10:00"), end: toMins("10:30") }, { id: "b", type: "training" as const, start: toMins("12:00"), end: toMins("13:00") }] }
     expect(unmarkActivitiesAt(d, toMins("10:15")).activities.map((x) => x.id)).toEqual(["b"])
+  })
+})
+
+describe("labour-law export sheets", () => {
+  it("adds compliance + rules sheets when a law is selected", () => {
+    const sheets = scheduleExportSheets([agent], QUEUES, DEFAULT_SHIFT_PATTERNS, {}, {}, {}, {}, effectiveLaw("PH"))
+    expect(sheets.map((s) => s.name).slice(-2)).toEqual(["Labour-law compliance", "Labour-law rules"])
+    expect(sheets.at(-2)!.rows[0]).toMatchObject({ Worked: "7h30", Status: "Issues", Issues: expect.stringMatching(/Needs one break of ≥60 min/) })
+    expect(sheets.at(-1)!.rows[0]).toEqual({ Rule: "Country", Value: "Philippines" })
+    expect(scheduleExportSheets([agent], QUEUES, DEFAULT_SHIFT_PATTERNS, {}, {}, {}).map((s) => s.name)).not.toContain("Labour-law rules")
   })
 })
 

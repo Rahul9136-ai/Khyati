@@ -404,6 +404,53 @@ describe("sorting schedules", () => {
   })
 })
 
+describe("country labour law", () => {
+  const renderAll = () =>
+    render(<ContinuousSchedule agents={useWfm.getState().agents} queue={queue} plan={plan} onDuty={plan.map((p) => p.scheduled)} canEdit />)
+
+  beforeEach(() => useWfm.setState({ labourLaw: { country: null, overrides: {} }, channelPlan: {}, breakOverrides: {} }))
+
+  it("selecting a country applies its rules and flags schedules that break them", () => {
+    renderAll()
+    fireEvent.change(screen.getByLabelText("Labour law country"), { target: { value: "DE" } })
+    expect(useWfm.getState().labourLaw.country).toBe("DE")
+    expect(screen.getByRole("button", { name: "⚖ All compliant" })).toBeInTheDocument()
+
+    // Philippines requires one 60-min meal break; the demo shifts have a 30-min lunch.
+    fireEvent.change(screen.getByLabelText("Labour law country"), { target: { value: "PH" } })
+    expect(screen.getByRole("button", { name: `⚖ ${AGENTS.length} with issues` })).toBeInTheDocument()
+    expect(screen.getAllByRole("img", { name: /^Philippines labour law: Needs one break of ≥60 min/ })).toHaveLength(AGENTS.length)
+    expect(useWfm.getState().auditLog[0]).toMatchObject({ action: "Set labour law", detail: "Philippines" })
+  })
+
+  it("'with issues' filters to non-compliant schedules only", () => {
+    // Give one agent 3h OT so only they break Germany's 10h limit.
+    useWfm.setState({ labourLaw: { country: "DE", overrides: {} }, overtimePlan: { [agent.id]: [{ id: "o", channel: "phone", start: toMins("15:30"), end: toMins("18:30") }] } })
+    renderAll()
+    fireEvent.click(screen.getByRole("button", { name: "⚖ 1 with issues" }))
+    expect(document.querySelectorAll("[data-agent-row]")).toHaveLength(1)
+    expect(screen.getByRole("img", { name: /Works 10h30 — max 10h a day/ })).toBeInTheDocument()
+  })
+
+  it("rules can be adjusted from the statute and reset", () => {
+    useWfm.setState({ labourLaw: { country: "DE", overrides: {} } })
+    renderAll()
+    fireEvent.click(screen.getByRole("button", { name: "Rules" }))
+    expect(screen.getByText(/Arbeitszeitgesetz/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText("Max hours a day incl. overtime"), { target: { value: "7" } })
+    expect(screen.getByText("(statute 10)")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }))
+    expect(useWfm.getState().labourLaw.overrides).toEqual({ maxDailyHours: 7 })
+    // 7h30 worked > 7h → everyone flagged
+    expect(screen.getByRole("button", { name: `⚖ ${AGENTS.length} with issues` })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Rules" }))
+    fireEvent.click(screen.getByRole("button", { name: /Reset to statute/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }))
+    expect(useWfm.getState().labourLaw.overrides).toEqual({})
+  })
+})
+
 describe("adding OT for a channel", () => {
   const renderTwo = () => {
     const two = useWfm.getState().agents.slice(0, 2) // both 07:00–15:30

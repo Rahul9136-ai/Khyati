@@ -61,6 +61,16 @@ The repo is a monorepo with two independently runnable halves:
   is audited. The frontend loads the server copy on sign-in, saves changed agents as you edit,
   polls for other users' changes, keeps working offline and pushes offline edits when the
   backend is back; a badge in the timeline shows Synced / Saving / Offline / Updated from server.
+- **Country labour law** — pick a country (India, US federal, US–California, UK, Germany,
+  France, Spain, Philippines, Canada federal, Australia, Singapore, UAE, Brazil, Mexico, South
+  Africa) and its scheduling rules apply automatically: daily/overtime limits, required breaks
+  (total or one uninterrupted break), max work without a break and max spread of the day. Every
+  schedule is checked live (⚖ markers, issue count, "only non-compliant" filter, compliance +
+  rules sheets in exports); values can be adjusted for local agreements and reset to statute.
+  The choice is one organisation-wide policy (`GET/PUT /api/v1/scheduling/labour-law`,
+  presets at `/scheduling/labour-laws`, check at `/day-plans/{date}/compliance`). Presets are
+  simplified statutory baselines, **not legal advice** — verify locally. Only daily rules are
+  checked; weekly limits and rest between days are shown for reference.
 - Global, reusable **shift patterns** (start/end + break/lunch segments) that seed each
   agent's breaks on the timeline.
 - Bulk schedule import from Excel with a downloadable template.

@@ -109,3 +109,18 @@ class DaySchedulePlan(UUIDMixin, TenantMixin, TimestampMixin, Base):
     activities: Mapped[list] = mapped_column(JSON, default=list)
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+
+
+class SchedulingPolicy(UUIDMixin, TenantMixin, TimestampMixin, Base):
+    """Organisation-wide scheduling policy: the country labour-law preset the
+    day plans are checked against (see `labour_law.py`) plus local overrides
+    (state rules, awards, collective agreements). One row per organisation.
+    """
+
+    __tablename__ = "scheduling_policies"
+    __table_args__ = (UniqueConstraint("organization_id"),)
+
+    country_code: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    overrides: Mapped[dict] = mapped_column(JSON, default=dict)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)

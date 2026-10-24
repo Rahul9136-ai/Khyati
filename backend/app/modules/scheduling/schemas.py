@@ -244,3 +244,58 @@ class DayCoverageSlot(BaseModel):
     email: float
     ot: float
     activity: float
+
+
+# ------------------------------------------------- country labour law
+
+class LabourBreakRule(BaseModel):
+    afterHours: float = Field(gt=0, le=24)
+    minBreakMinutes: int = Field(gt=0, le=24 * 60)
+    continuous: bool = False
+
+
+class LabourLawOverrides(BaseModel):
+    """Values that replace the country preset (state rules, awards, agreements).
+    Unset = use the statute; explicit null = "no limit"."""
+
+    model_config = ConfigDict(extra="forbid")
+    standardDailyHours: float | None = Field(None, ge=0, le=24)
+    maxDailyHours: float | None = Field(None, ge=0, le=24)
+    maxDailyOtHours: float | None = Field(None, ge=0, le=24)
+    maxSpreadHours: float | None = Field(None, ge=0, le=24)
+    maxContinuousWorkHours: float | None = Field(None, ge=0, le=24)
+    minBreakBlockMinutes: int | None = Field(None, ge=0, le=24 * 60)
+    breakRules: list[LabourBreakRule] | None = None
+    standardWeeklyHours: float | None = Field(None, ge=0, le=168)
+    maxWeeklyHours: float | None = Field(None, ge=0, le=168)
+    minDailyRestHours: float | None = Field(None, ge=0, le=24)
+
+
+class LabourLawPolicyIn(BaseModel):
+    country_code: str | None = Field(None, max_length=8)
+    overrides: LabourLawOverrides = LabourLawOverrides()
+
+
+class LabourLawPolicyOut(BaseModel):
+    country_code: str | None
+    overrides: dict
+    #: 0 = nothing saved for this organisation yet.
+    version: int
+    #: Preset with overrides applied (null when no country is selected).
+    effective: dict | None
+    disclaimer: str
+
+
+class AgentComplianceOut(BaseModel):
+    agent_key: str
+    agent_name: str
+    worked_minutes: int
+    compliant: bool
+    issues: list[dict]
+
+
+class DayComplianceOut(BaseModel):
+    country_code: str | None
+    law: dict | None
+    disclaimer: str
+    agents: list[AgentComplianceOut]
