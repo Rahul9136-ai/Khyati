@@ -13,6 +13,7 @@ interface Notification {
   kind: string
   title: string
   body: string
+  link?: string | null
   read_at: string | null
   created_at: string
 }
@@ -102,7 +103,13 @@ export function NotificationsBell() {
               {items.slice(0, 12).map((n) => (
                 <button
                   key={n.id}
-                  onClick={() => void markRead(n.id)}
+                  onClick={() => {
+                    void markRead(n.id)
+                    if (n.link) {
+                      navigate(n.link)
+                      setOpen(false)
+                    }
+                  }}
                   className={cn(
                     "block w-full border-b px-4 py-2.5 text-left text-xs transition-colors last:border-0 hover:bg-accent",
                     !n.read_at && "bg-primary/5",
@@ -112,7 +119,7 @@ export function NotificationsBell() {
                     {!n.read_at && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />}
                     {n.title}
                   </span>
-                  {n.body && <span className="mt-0.5 block text-muted-foreground">{n.body}</span>}
+                  {n.body && <span className="mt-0.5 block whitespace-pre-line text-muted-foreground">{n.body}</span>}
                 </button>
               ))}
             </div>

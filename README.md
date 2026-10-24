@@ -71,6 +71,20 @@ The repo is a monorepo with two independently runnable halves:
   presets at `/scheduling/labour-laws`, check at `/day-plans/{date}/compliance`). Presets are
   simplified statutory baselines, **not legal advice** — verify locally. Only daily rules are
   checked; weekly limits and rest between days are shown for reference.
+- **3-month schedules & publishing** — a date bar walks the next 3 months (today − 14 days to
+  today + 3 months) and a "Schedules — next 3 months" grid shows every agent's shift per day
+  (published vs draft, activities, OT); click a day to edit it on the timeline. **Publish**
+  (this day / week / 4 weeks / all 3 months / custom) creates any days nobody opened from
+  shift patterns (`POST /scheduling/day-plans/fill`) and publishes them
+  (`POST /scheduling/day-plans/publish`, needs `schedule:publish`). Until published, days are
+  drafts that agents and team leaders can't see; agents see only their own days ("My schedule",
+  `GET /scheduling/my-schedule`). Publishing and every later change to a published day notify the
+  agent (via their employee record — roster id = employee code) and their team leaders (team
+  leader / manager on the employee record, or a Team Leader login named as the roster's TL) with
+  a pop-up on whatever page they're on; rapid edits update one unread notification instead of
+  piling up. Dev logins for the demo roster: `ava.mendez@`, `liam.carter@`, `zara.khan@`,
+  `leah.webb@` (agents) and `marcus.webb@`, `elena.faro@`, `sam.okoye@` (TLs) `flowforce.dev`,
+  password `Demo@12345` (`python -m app.db.seed` adds them).
 - Global, reusable **shift patterns** (start/end + break/lunch segments) that seed each
   agent's breaks on the timeline.
 - Bulk schedule import from Excel with a downloadable template.

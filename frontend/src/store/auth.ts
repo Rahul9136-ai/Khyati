@@ -1,8 +1,9 @@
 import { create } from "zustand"
 
-import { setSessionExpiredHandler, tokenStore } from "@/lib/api"
+import { api, setSessionExpiredHandler, tokenStore } from "@/lib/api"
 import type { SessionUser } from "@/lib/auth"
 import { apiLogin, apiLogout, designationFor, fetchMe } from "@/lib/auth"
+import { localISODate } from "@/lib/domain/horizon"
 import { useWfm } from "@/store/wfm"
 
 type AuthStatus = "booting" | "anonymous" | "authenticated"
@@ -19,7 +20,24 @@ interface AuthState {
 /** Push the server identity into the WFM store so RoleGuards/PermissionGates
  * across the app enforce the real designation. */
 function applyIdentity(user: SessionUser) {
-  useWfm.getState().setCurrentRole(designationFor(user))
+  const role = designationFor(user)
+  useWfm.getState().setCurrentRole(role)
+  if (role === "Agent" && !user.is_superuser) void linkRosterAgent()
+}
+
+/** A signed-in agent's self-service view follows the roster row linked to
+ *  their employee record (roster id = employee code) rather than a preview pick. */
+async function linkRosterAgent() {
+  try {
+    const today = localISODate()
+    const res = await api.get("/scheduling/my-schedule", { params: { start: today, end: today } })
+    const keys = (res.data.data as { agent_keys: string[] }).agent_keys
+    const wfm = useWfm.getState()
+    const match = keys.find((k) => wfm.agents.some((a) => a.id === k))
+    if (match) wfm.setCurrentAgentId(match)
+  } catch {
+    /* offline / older backend — keep the current pick */
+  }
 }
 
 export const useAuth = create<AuthState>((set) => ({

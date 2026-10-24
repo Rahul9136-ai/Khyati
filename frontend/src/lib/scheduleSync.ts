@@ -11,13 +11,18 @@
 //   else saved first → reload the server copy.
 // * Polls for other users' changes while idle. Works offline: the app keeps
 //   running on local state and retries.
+// * Follows the selected date: switchScheduleDate saves the current day,
+//   then loads the next one.
 import { create } from "zustand"
 
 import { api, type ApiError } from "@/lib/api"
 import { agentDay, dayToPatch, type AgentDay } from "@/lib/domain/channels"
+import { localISODate } from "@/lib/domain/horizon"
 import type { LawOverrides } from "@/lib/domain/labourLaw"
 import type { Agent } from "@/lib/domain/types"
 import { useWfm, type AgentDayPatch } from "@/store/wfm"
+
+export { localISODate }
 
 export type SyncStatus = "idle" | "loading" | "saving" | "synced" | "offline" | "conflict" | "readonly"
 
@@ -26,10 +31,25 @@ interface SyncState {
   message: string | null
   lastSyncedAt: number | null
   planDate: string | null
+  /** Whether this session saves to the server (the server's schedule:write). */
+  canWrite: boolean
+  /** Agents the server has a day for on `planDate`, and whether it's published.
+   *  null until loaded. For view-only users these are the published days only. */
+  serverAgents: Record<string, { published: boolean }> | null
 }
 
-export const useScheduleSync = create<SyncState>(() => ({ status: "idle", message: null, lastSyncedAt: null, planDate: null }))
+export const useScheduleSync = create<SyncState>(() => ({
+  status: "idle", message: null, lastSyncedAt: null, planDate: null, canWrite: false, serverAgents: null,
+}))
 const setSync = (patch: Partial<SyncState>) => useScheduleSync.setState(patch)
+
+/** Record which agents the server has (and has published) for the day. */
+function noteServerRows(rows: ServerDayPlan[], replace: boolean) {
+  const prev = replace ? {} : (useScheduleSync.getState().serverAgents ?? {})
+  setSync({
+    serverAgents: { ...prev, ...Object.fromEntries(rows.map((r) => [r.agent_key, { published: !!r.published_at }])) },
+  })
+}
 
 // ---- wire format (matches backend DayPlanIn / DayPlanOut) ----
 
@@ -43,7 +63,10 @@ export interface ServerDayPlan {
   channels: { id: string; channel: "phone" | "chat" | "email"; start: number; end: number }[]
   overtime: { id: string; channel: "phone" | "chat" | "email"; start: number; end: number }[]
   activities: { id: string; type: AgentDay["activities"][number]["type"]; start: number; end: number; note?: string | null }[]
+  /** The roster's team leader — the backend notifies them of changes once published. */
+  team_lead?: string
   version?: number
+  published_at?: string | null
 }
 
 /** An agent's current day as the backend stores it (deterministic key order,
@@ -54,6 +77,7 @@ export function toServerPlan(agent: Agent, day: AgentDay): ServerDayPlan {
     agent_key: agent.id,
     agent_name: agent.name,
     team: agent.team,
+    team_lead: agent.tl ?? "",
     shift_start: day.shift[0],
     shift_end: day.shift[1],
     breaks: byStart(day.breaks).map((b) => ({ id: b.id, type: b.type, label: b.label, start: b.start, end: b.end })),
@@ -80,7 +104,7 @@ function currentPlans(): Map<string, ServerDayPlan> {
     s.agents.map((a) => [a.id, toServerPlan(a, agentDay(a, s.shiftPatterns, s.breakOverrides, s.channelPlan, s.overtimePlan, s.activityPlan))]),
   )
 }
-const fingerprint = (p: ServerDayPlan) => JSON.stringify({ ...p, version: undefined })
+const fingerprint = (p: ServerDayPlan) => JSON.stringify({ ...p, version: undefined, published_at: undefined })
 
 // ---- per-date snapshot (what was last in sync), persisted for offline edits ----
 
@@ -104,9 +128,6 @@ function saveSnapshot(d: string, s: Snapshot) {
     /* storage full / disabled — sync still works for this session */
   }
 }
-
-export const localISODate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
 
 // ---- engine ----
 
@@ -224,6 +245,7 @@ async function push(plans: ServerDayPlan[], detail: string) {
     })
     if (running !== r) return
     for (const row of res.data.data as ServerDayPlan[]) r.snap.versions[row.agent_key] = row.version ?? 0
+    noteServerRows(res.data.data as ServerDayPlan[], false)
     for (const p of plans) r.snap.synced[p.agent_key] = fingerprint(p)
     saveSnapshot(r.date, r.snap)
     setSync({ status: "synced", message: null, lastSyncedAt: Date.now() })
@@ -270,6 +292,8 @@ export async function pull(): Promise<void> {
   if (dirty || r.saving) return
   try {
     const rows = await fetchPlans(r.date)
+    if (running !== r) return
+    noteServerRows(rows, true)
     const newer = rows.filter((row) => (row.version ?? 0) !== r.snap.versions[row.agent_key])
     if (newer.length) applyRemote(newer)
     if (lawKey(useWfm.getState().labourLaw) === r.lawSynced || r.lawSynced === null) {
@@ -284,7 +308,7 @@ export async function pull(): Promise<void> {
 
 export async function startScheduleSync(opts: { canWrite: boolean; date?: string }): Promise<void> {
   stopScheduleSync()
-  const date = opts.date ?? localISODate()
+  const date = opts.date ?? useWfm.getState().scheduleDate
   const prev = loadSnapshot(date)
   running = {
     date,
@@ -300,7 +324,7 @@ export async function startScheduleSync(opts: { canWrite: boolean; date?: string
     lawSynced: null,
   }
   const r = running
-  setSync({ status: "loading", message: null, planDate: date })
+  setSync({ status: "loading", message: null, planDate: date, canWrite: opts.canWrite, serverAgents: null })
 
   let rows: ServerDayPlan[]
   try {
@@ -308,10 +332,11 @@ export async function startScheduleSync(opts: { canWrite: boolean; date?: string
   } catch (e) {
     if (running !== r) return
     setSync({ status: "offline", message: isNetwork(e) ? "Backend unreachable — working locally." : (e as ApiError).message })
-    r.timer = setTimeout(() => void startScheduleSync(opts), RETRY_MS)
+    r.timer = setTimeout(() => void startScheduleSync({ ...opts, date }), RETRY_MS)
     return
   }
   if (running !== r) return
+  noteServerRows(rows, true)
 
   // Reconcile: server wins, except offline edits on rows the server hasn't touched since.
   const server = new Map(rows.map((row) => [row.agent_key, row]))
@@ -380,5 +405,22 @@ export function stopScheduleSync() {
   if (running.timer) clearTimeout(running.timer)
   if (running.poll) clearInterval(running.poll)
   running = null
-  setSync({ status: "idle", message: null, planDate: null })
+  setSync({ status: "idle", message: null, planDate: null, serverAgents: null })
 }
+
+/** Show another date on the Scheduling timeline: saves what's pending for the
+ *  current date, swaps the store over, then syncs the new date. */
+export async function switchScheduleDate(date: string): Promise<void> {
+  const r = running
+  if (useWfm.getState().scheduleDate === date && (!r || r.date === date)) return
+  if (r) {
+    await flush()
+    if (running !== r) return // another switch / sign-out won the race
+    stopScheduleSync()
+  }
+  useWfm.getState().setScheduleDate(date)
+  if (r) await startScheduleSync({ canWrite: r.canWrite, date })
+}
+
+/** Whether a server sync session is running (signed in). */
+export const isSyncRunning = () => running !== null

@@ -1,15 +1,18 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle, CalendarClock, CheckCircle2, FileDown, RotateCcw, Scale, Send, Sparkles, Upload, Users, Wand2,
 } from "lucide-react"
-import { Link } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 
 import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
 import { ContinuousSchedule } from "@/components/continuous-schedule"
 import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
+import { MySchedule } from "@/components/my-schedule"
 import { PageHeader } from "@/components/page-header"
+import { ScheduleDateBar } from "@/components/schedule-date-bar"
+import { ScheduleOverview } from "@/components/schedule-overview"
 import { ScheduleRequestCard } from "@/components/schedule-request-card"
 import { PermissionGate } from "@/components/permission-gate"
 import { Badge } from "@/components/ui/badge"
@@ -21,8 +24,11 @@ import { activityCoverageLoss, overtimeAgents } from "@/lib/domain/channels"
 import { planAutoSchedule, type AutoScheduleResult } from "@/lib/domain/autoschedule"
 import { occupancy } from "@/lib/domain/erlang"
 import { buildPlan, fmtPct, summarisePlan } from "@/lib/domain/planning"
+import { fmtDayLong, isISODate, localISODate } from "@/lib/domain/horizon"
 import { downloadTemplate, parseScheduleFile } from "@/lib/schedule"
+import { switchScheduleDate, useScheduleSync } from "@/lib/scheduleSync"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/store/auth"
 import { useWfm } from "@/store/wfm"
 
 /** Contracted hours in the operating day — used to turn agent-hours into FTE. */
@@ -49,9 +55,40 @@ function occupancyOnDuty(heads: number, intensity: number, shrinkage: number): n
 }
 
 export function Scheduling() {
-  const { queueId, forecasts, shrinkage, agents, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule, currentRole, currentAgentId, overtimePlan, activityPlan } = useWfm()
+  const { queueId, forecasts, shrinkage, agents: roster, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule, currentRole, currentAgentId, overtimePlan, activityPlan, scheduleDate } = useWfm()
   const canEditSchedule = useWfm((s) => s.can("scheduling", "edit"))
+  const user = useAuth((s) => s.user)
+  const canPublish = !!user && (user.is_superuser || user.permission_codes.includes("schedule:publish"))
   const queue = queues.find((q) => q.id === queueId)!
+
+  // The page shows one day at a time within the next 3 months: ?date= (from a
+  // schedule notification) opens that day; leaving the page returns to today,
+  // which every other page shows.
+  const [params, setParams] = useSearchParams()
+  const linkedDate = params.get("date")
+  useEffect(() => {
+    if (!isISODate(linkedDate)) return
+    void switchScheduleDate(linkedDate)
+    setParams((p) => {
+      p.delete("date")
+      return p
+    }, { replace: true })
+  }, [linkedDate, setParams])
+  useEffect(() => () => void switchScheduleDate(localISODate()), [])
+  const timelineRef = useRef<HTMLDivElement>(null)
+  const openDate = (d: string) => {
+    void switchScheduleDate(d)
+    timelineRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
+
+  // View-only users (team leaders, agents) only see what's been published:
+  // once the server has answered, unpublished agents drop off their roster.
+  const { canWrite: syncCanWrite, serverAgents } = useScheduleSync()
+  const publishedOnly = !syncCanWrite && serverAgents !== null
+  const agents = useMemo(
+    () => (publishedOnly ? roster.filter((a) => serverAgents![a.id]?.published) : roster),
+    [roster, publishedOnly, serverAgents],
+  )
   // Agents only ever see their own row — everyone else sees the full roster.
   const visibleAgents = currentRole === "Agent" ? agents.filter((a) => a.id === currentAgentId) : agents
   // Roster plus every OT block as an extra head, so overtime counts toward coverage & SL.
@@ -165,7 +202,7 @@ export function Scheduling() {
     <>
       <PageHeader
         title="Scheduling"
-        subtitle={`Daily roster · ${agents.length} agents · 07:00–19:00`}
+        subtitle={`${fmtDayLong(scheduleDate)} · ${agents.length} agents · 07:00–19:00`}
         actions={
           <>
             <Badge variant="secondary" className="hidden lg:inline-flex">skilled for {queue.name}</Badge>
@@ -209,6 +246,13 @@ export function Scheduling() {
           </>
         }
       />
+
+      <ScheduleDateBar canPublish={canPublish} />
+      {currentRole === "Agent" ? (
+        <MySchedule agentId={currentAgentId} onOpenDate={openDate} />
+      ) : (
+        <ScheduleOverview agents={agents} onOpenDate={openDate} />
+      )}
 
       <ScheduleRequestCard source="scheduling" />
 
@@ -344,22 +388,28 @@ export function Scheduling() {
         </CardContent>
       </Card>
 
-      <Card className="glass">
+      <Card className="glass scroll-mt-20" ref={timelineRef}>
         <CardHeader className="flex-row items-center justify-between space-y-0">
-          <CardTitle>Daily shift plan — omni-channel</CardTitle>
+          <CardTitle>Daily shift plan — {fmtDayLong(scheduleDate)}</CardTitle>
           <span className="text-xs text-muted-foreground">
             Break/lunch layout comes from each agent's <Link to="/shift-patterns" className="text-primary hover:underline">shift pattern</Link>.
           </span>
         </CardHeader>
         <CardContent>
-          <ContinuousSchedule
-            agents={visibleAgents}
-            queue={queue}
-            plan={plan}
-            onDuty={onDuty}
-            canEdit={canEditSchedule}
-            riskById={absenceRiskById}
-          />
+          {publishedOnly && visibleAgents.length === 0 ? (
+            <p className="rounded-lg border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+              {currentRole === "Agent" ? "Your schedule" : "The schedules"} for {fmtDayLong(scheduleDate)} {currentRole === "Agent" ? "hasn't" : "haven't"} been published yet.
+            </p>
+          ) : (
+            <ContinuousSchedule
+              agents={visibleAgents}
+              queue={queue}
+              plan={plan}
+              onDuty={onDuty}
+              canEdit={canEditSchedule}
+              riskById={absenceRiskById}
+            />
+          )}
         </CardContent>
       </Card>
 

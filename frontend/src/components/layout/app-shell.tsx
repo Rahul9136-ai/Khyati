@@ -4,6 +4,7 @@ import { NavLink } from "react-router-dom"
 import { MessagePopup } from "@/components/layout/message-popup"
 import { NotificationsBell } from "@/components/layout/notifications-bell"
 import { QueuePicker } from "@/components/layout/queue-picker"
+import { SchedulePopup } from "@/components/layout/schedule-popup"
 import { SendMessageButton } from "@/components/layout/send-message-button"
 import { PurviLogo } from "@/components/purvi-logo"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -140,6 +141,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <MessagePopup />
+      <SchedulePopup />
     </div>
   )
 }

@@ -5,6 +5,9 @@ in bulk (`save_day_plans`). The operation endpoints (`apply_edit`, `mark_aux`,
 `add_overtime`, `move`, `resize_shift`, `unmark`) perform the same edits on the
 server with identical rules (`dayplan.py`) for API / integration callers.
 Every write bumps the row's `version` and records an audit entry.
+
+Rows are drafts until published (`publish`); agents and team leaders only see
+published rows, and any change to a published row notifies them.
 """
 
 from __future__ import annotations
@@ -14,29 +17,61 @@ import io
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core.exceptions import (
+    ConflictError,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
 from app.modules.identity.models import User
 from app.modules.identity.service import record_audit
 from app.modules.scheduling import dayplan as dp
-from app.modules.scheduling import labour_law
+from app.modules.scheduling import labour_law, schedule_notify
 from app.modules.scheduling.models import DaySchedulePlan, SchedulingPolicy
 from app.modules.scheduling.schemas import (
     DayAddOvertimeIn,
     DayApplyEditIn,
+    DayFillIn,
     DayMarkAuxIn,
     DayMoveIn,
     DayPlanBulkIn,
     DayPlanIn,
+    DayPublishIn,
     DayResizeShiftIn,
     DayUnmarkIn,
     LabourLawPolicyIn,
 )
 from app.modules.workforce.models import Employee
+
+#: Longest range one overview / publish call covers (a little over 6 months).
+MAX_RANGE_DAYS = 190
+
+# ---------------------------------------------------------------- visibility
+
+
+def sees_drafts(user: User) -> bool:
+    """Schedulers see (and edit) unpublished schedules; everyone else sees published only."""
+    perms = user.permission_codes
+    return user.is_superuser or bool({"schedule:write", "schedule:publish"} & perms)
+
+
+def sees_everyone(user: User) -> bool:
+    """Staff (TLs, managers, analysts) see every agent; agents only themselves."""
+    return sees_drafts(user) or "employee:read" in user.permission_codes
+
+
+def visible(rows: list[DaySchedulePlan], user: User) -> list[DaySchedulePlan]:
+    if sees_drafts(user):
+        return rows
+    rows = [r for r in rows if r.published_at is not None]
+    if sees_everyone(user):
+        return rows
+    return [r for r in rows if user.employee_id and r.employee_id == user.employee_id]
 
 # ------------------------------------------------------------- row <-> domain
 
@@ -172,25 +207,29 @@ async def save_day_plans(
             details={"stale": stale},
         )
 
-    employee_ids = await _employee_ids_by_code(db, org_id, [k for k in keys if k not in existing])
+    unlinked = [k for k in keys if k not in existing or existing[k].employee_id is None]
+    employee_ids = await _employee_ids_by_code(db, org_id, unlinked)
     saved: list[DaySchedulePlan] = []
+    changes: list[tuple[DaySchedulePlan, str]] = []
     for item in payload.items:
         row = existing.get(item.agent_key)
         if row is None:
-            row = DaySchedulePlan(
-                organization_id=org_id,
-                plan_date=plan_date,
-                agent_key=item.agent_key,
-                employee_id=employee_ids.get(item.agent_key),
-                version=0,
-            )
+            row = DaySchedulePlan(organization_id=org_id, plan_date=plan_date,
+                                  agent_key=item.agent_key, version=0)
             db.add(row)
+        elif row.published_at is not None:
+            before = _row_to_day(row)
+            if before != days[item.agent_key]:
+                changes.append((row, schedule_notify.describe_change(before, days[item.agent_key])))
+        row.employee_id = row.employee_id or employee_ids.get(item.agent_key)
         row.agent_name = item.agent_name or row.agent_name
         row.team = item.team or row.team
+        row.team_lead = item.team_lead or row.team_lead or ""
         _write_day(row, days[item.agent_key], actor)
         saved.append(row)
     await db.flush()
     await _refresh(db, saved)
+    await schedule_notify.notify_changes(db, org_id, plan_date, changes, actor=actor)
     await record_audit(
         db,
         actor=actor,
@@ -207,7 +246,11 @@ async def reset_day_plan(
     db: AsyncSession, org_id: uuid.UUID, plan_date: date, agent_key: str, *, actor: User
 ) -> None:
     rows = await _rows_by_key(db, org_id, plan_date, [agent_key], require_all=True)
-    await db.delete(rows[agent_key])
+    row = rows[agent_key]
+    if row.published_at is not None:
+        text = schedule_notify.describe_change(_row_to_day(row), None)
+        await schedule_notify.notify_changes(db, org_id, plan_date, [(row, text)], actor=actor)
+    await db.delete(row)
     await record_audit(
         db,
         actor=actor,
@@ -232,19 +275,24 @@ async def _apply_each(
     skips that agent with a reason; otherwise the new day is validated + saved."""
     rows = await _rows_by_key(db, org_id, plan_date, keys, require_all=True)
     saved, skipped = [], []
+    changes: list[tuple[DaySchedulePlan, str]] = []
     for i, key in enumerate(dict.fromkeys(keys)):  # de-duplicate, keep order
         row = rows[key]
-        result = fn(i, key, _row_to_day(row))
+        before = _row_to_day(row)
+        result = fn(i, key, before)
         if isinstance(result, str):
             skipped.append({"agent_key": key, "reason": result})
             continue
         if errs := dp.validate_day(result):
             skipped.append({"agent_key": key, "reason": "; ".join(errs)})
             continue
+        if row.published_at is not None and before != result.sorted():
+            changes.append((row, schedule_notify.describe_change(before, result.sorted())))
         _write_day(row, result, actor)
         saved.append(row)
     await db.flush()
     await _refresh(db, saved)
+    await schedule_notify.notify_changes(db, org_id, plan_date, changes, actor=actor)
     await record_audit(
         db,
         actor=actor,
@@ -408,6 +456,162 @@ async def add_overtime(
         detail=f"{dp.CHANNELS[body.channel]['label']} OT · {when}",
         fn=fn,
     )
+
+
+# ------------------------------------------- multi-week range, fill, publish
+
+
+def _check_range(start: date, end: date) -> None:
+    if end < start:
+        raise ValidationError("end must be on or after start")
+    if (end - start).days + 1 > MAX_RANGE_DAYS:
+        raise ValidationError(f"A range can cover at most {MAX_RANGE_DAYS} days")
+
+
+async def list_range(
+    db: AsyncSession, org_id: uuid.UUID, start: date, end: date,
+    agent_keys: list[str] | None = None,
+) -> list[DaySchedulePlan]:
+    _check_range(start, end)
+    q = select(DaySchedulePlan).where(
+        DaySchedulePlan.organization_id == org_id,
+        DaySchedulePlan.plan_date >= start, DaySchedulePlan.plan_date <= end,
+    )
+    if agent_keys:
+        q = q.where(DaySchedulePlan.agent_key.in_(agent_keys))
+    order = (DaySchedulePlan.plan_date, DaySchedulePlan.agent_key)
+    return list((await db.execute(q.order_by(*order))).scalars())
+
+
+def summary(row: DaySchedulePlan) -> dict:
+    return {
+        "plan_date": row.plan_date, "agent_key": row.agent_key,
+        "agent_name": row.agent_name or row.agent_key, "team": row.team,
+        "shift_start": row.shift_start, "shift_end": row.shift_end,
+        "ot_minutes": sum(o["end"] - o["start"] for o in row.overtime),
+        "activities": sorted({a["type"] for a in row.activities}),
+        "version": row.version, "published": row.published_at is not None,
+    }
+
+
+async def fill_missing(
+    db: AsyncSession, org_id: uuid.UUID, body: DayFillIn, *, actor: User
+) -> dict:
+    """Create the given days where none is saved yet; existing rows are untouched."""
+    seen = {(i.plan_date, i.agent_key) for i in body.items}
+    if len(seen) != len(body.items):
+        raise ValidationError("Each agent may appear only once per date")
+    dates = sorted({d for d, _ in seen})
+    _check_range(dates[0], dates[-1])
+    existing = {
+        (r.plan_date, r.agent_key)
+        for r in await list_range(db, org_id, dates[0], dates[-1],
+                                  sorted({k for _, k in seen}))
+    }
+    todo = [i for i in body.items if (i.plan_date, i.agent_key) not in existing]
+    problems = [
+        {"plan_date": i.plan_date.isoformat(), "agent_key": i.agent_key, "errors": errs}
+        for i in todo if (errs := dp.validate_day(_in_to_day(i)))
+    ]
+    if problems:
+        raise ValidationError(f"{len(problems)} schedule(s) break scheduling rules",
+                              details=problems[:50])
+    employee_ids = await _employee_ids_by_code(db, org_id, sorted({i.agent_key for i in todo}))
+    for i in todo:
+        row = DaySchedulePlan(
+            organization_id=org_id, plan_date=i.plan_date, agent_key=i.agent_key,
+            employee_id=employee_ids.get(i.agent_key), agent_name=i.agent_name,
+            team=i.team, team_lead=i.team_lead, version=0,
+        )
+        _write_day(row, _in_to_day(i), actor)
+        db.add(row)
+    await db.flush()
+    if todo:
+        await record_audit(
+            db, actor=actor, action="dayplan.fill", entity_type="day_schedule_plan",
+            entity_id=f"{dates[0].isoformat()}..{dates[-1].isoformat()}",
+            after={"created": len(todo)},
+        )
+    return {"created": len(todo), "existing": len(body.items) - len(todo)}
+
+
+async def publish(
+    db: AsyncSession, org_id: uuid.UUID, body: DayPublishIn, *, actor: User
+) -> dict:
+    """Publish every saved schedule in the range: agents and their team leaders
+    can now see them and are notified. Already-published days are left as they are."""
+    _check_range(body.start, body.end)
+    rows = await list_range(db, org_id, body.start, body.end, body.agent_keys)
+    links = await _employee_ids_by_code(
+        db, org_id, sorted({r.agent_key for r in rows if r.employee_id is None})
+    )
+    now = datetime.now(UTC)
+    fresh = [r for r in rows if r.published_at is None]
+    for r in rows:
+        r.employee_id = r.employee_id or links.get(r.agent_key)
+    for r in fresh:
+        r.published_at, r.published_by = now, actor.id
+    await db.flush()
+    notified = await schedule_notify.notify_published(db, org_id, fresh, actor=actor)
+    await record_audit(
+        db, actor=actor, action="dayplan.publish", entity_type="day_schedule_plan",
+        entity_id=f"{body.start.isoformat()}..{body.end.isoformat()}",
+        after={"published": len(fresh), "unchanged": len(rows) - len(fresh),
+               "notified": notified},
+        note=body.note or None,
+    )
+    return {
+        "start": body.start, "end": body.end,
+        "days": len({r.plan_date for r in rows}), "agents": len({r.agent_key for r in rows}),
+        "published": len(fresh), "unchanged": len(rows) - len(fresh), "notified": notified,
+    }
+
+
+async def my_schedule(
+    db: AsyncSession, user: User, start: date, end: date
+) -> tuple[list[str], list[DaySchedulePlan]]:
+    """The signed-in agent's published days (linked through their employee record)."""
+    _check_range(start, end)
+    if user.employee_id is None or user.organization_id is None:
+        return [], []
+    emp = await db.get(Employee, user.employee_id)
+    q = select(DaySchedulePlan).where(
+        DaySchedulePlan.organization_id == user.organization_id,
+        DaySchedulePlan.employee_id == user.employee_id,
+    )
+    keys = set((await db.execute(q.with_only_columns(DaySchedulePlan.agent_key))).scalars())
+    if emp is not None:
+        keys.add(emp.employee_code)
+    rows = await db.execute(
+        q.where(
+            DaySchedulePlan.plan_date >= start, DaySchedulePlan.plan_date <= end,
+            DaySchedulePlan.published_at.is_not(None),
+        ).order_by(DaySchedulePlan.plan_date)
+    )
+    return sorted(keys), list(rows.scalars())
+
+
+async def agent_schedule(
+    db: AsyncSession, org_id: uuid.UUID, user: User, agent_key: str, start: date, end: date
+) -> list[DaySchedulePlan]:
+    """One agent's published days — what that agent sees (staff preview)."""
+    if not sees_everyone(user):
+        raise PermissionDeniedError("Only staff can view another agent's schedule")
+    rows = await list_range(db, org_id, start, end, [agent_key])
+    return [r for r in rows if r.published_at is not None]
+
+
+def default_horizon(today: date | None = None) -> tuple[date, date]:
+    """Today through the same day three months on, minus one (≈ 13 weeks)."""
+    t = today or date.today()
+    month = t.month + 3
+    year, month = t.year + (month - 1) // 12, (month - 1) % 12 + 1
+    for day in (t.day, 30, 29, 28):
+        try:
+            return t, date(year, month, day) - timedelta(days=1)
+        except ValueError:
+            continue
+    raise AssertionError("unreachable")
 
 
 # ------------------------------------------------------- coverage & export

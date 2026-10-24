@@ -24,6 +24,7 @@ class NotificationOut(BaseModel):
     title: str
     body: str
     channel: str
+    link: str | None = None
     read_at: datetime | None
     created_at: datetime
 

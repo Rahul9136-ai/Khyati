@@ -17,17 +17,23 @@ from app.modules.scheduling.schemas import (
     DayApplyEditIn,
     DayComplianceOut,
     DayCoverageSlot,
+    DayFillIn,
+    DayFillOut,
     DayMarkAuxIn,
     DayMoveIn,
     DayOpResult,
     DayPlanBulkIn,
     DayPlanOut,
+    DayPlanSummaryOut,
+    DayPublishIn,
+    DayPublishOut,
     DayResizeShiftIn,
     DaySkipped,
     DayUnmarkIn,
     GenerateScheduleRequest,
     LabourLawPolicyIn,
     LabourLawPolicyOut,
+    MyScheduleOut,
     ScheduleDetailOut,
     ScheduleOut,
     ShiftIn,
@@ -154,12 +160,73 @@ def _result(saved, skipped) -> ApiResponse[DayOpResult]:
     ))
 
 
+@router.get("/day-plans", response_model=ApiResponse[list[DayPlanSummaryOut]])
+async def list_day_plan_range(
+    db: DbSession, user: Reader,
+    start: date | None = None, end: date | None = None,
+    agent_keys: Annotated[list[str] | None, Query()] = None,
+):
+    """Every saved agent-day in a date range (default: the next 3 months) as
+    one-line summaries — the multi-week overview. Drafts are hidden from
+    users who can't edit schedules; agents only get their own days."""
+    lo, hi = dayplan_service.default_horizon()
+    rows = await dayplan_service.list_range(db, org_scope(user), start or lo, end or hi, agent_keys)
+    rows = dayplan_service.visible(rows, user)
+    return ApiResponse(data=[DayPlanSummaryOut(**dayplan_service.summary(r)) for r in rows])
+
+
+@router.post("/day-plans/fill", response_model=ApiResponse[DayFillOut])
+async def fill_day_plans(body: DayFillIn, db: DbSession, actor: Writer):
+    """Create schedules for agent-days that have none saved (e.g. pattern
+    defaults for dates nobody has opened yet). Existing days are untouched."""
+    return ApiResponse(data=DayFillOut(**await dayplan_service.fill_missing(
+        db, org_scope(actor), body, actor=actor
+    )))
+
+
+@router.post("/day-plans/publish", response_model=ApiResponse[DayPublishOut])
+async def publish_day_plans(body: DayPublishIn, db: DbSession, actor: Publisher):
+    """Publish the saved schedules in a date range: agents and their team
+    leaders can see them and get a notification. Later changes to published
+    days are visible straight away and notify them again."""
+    org = org_scope(actor)
+    return ApiResponse(data=DayPublishOut(**await dayplan_service.publish(
+        db, org, body, actor=actor
+    )))
+
+
+@router.get("/my-schedule", response_model=ApiResponse[MyScheduleOut])
+async def my_schedule(
+    db: DbSession, user: Reader, start: date | None = None, end: date | None = None
+):
+    """The signed-in agent's published days (default: the next 3 months)."""
+    lo, hi = dayplan_service.default_horizon()
+    keys, rows = await dayplan_service.my_schedule(db, user, start or lo, end or hi)
+    return ApiResponse(data=MyScheduleOut(
+        agent_keys=keys, days=[DayPlanOut.model_validate(r) for r in rows]
+    ))
+
+
+@router.get("/agent-schedule/{agent_key}", response_model=ApiResponse[list[DayPlanOut]])
+async def agent_schedule(
+    agent_key: str, db: DbSession, user: Reader,
+    start: date | None = None, end: date | None = None,
+):
+    """One agent's published days, exactly as that agent sees them."""
+    lo, hi = dayplan_service.default_horizon()
+    rows = await dayplan_service.agent_schedule(
+        db, org_scope(user), user, agent_key, start or lo, end or hi
+    )
+    return ApiResponse(data=[DayPlanOut.model_validate(r) for r in rows])
+
+
 @router.get("/day-plans/{plan_date}", response_model=ApiResponse[list[DayPlanOut]])
 async def list_day_plans(
     plan_date: date, db: DbSession, user: Reader,
     agent_keys: Annotated[list[str] | None, Query()] = None,
 ):
     rows = await dayplan_service.list_day_plans(db, org_scope(user), plan_date, agent_keys)
+    rows = dayplan_service.visible(rows, user)
     return ApiResponse(data=[DayPlanOut.model_validate(r) for r in rows])
 
 
@@ -222,6 +289,7 @@ async def add_overtime(plan_date: date, body: DayAddOvertimeIn, db: DbSession, a
 @router.get("/day-plans/{plan_date}/coverage", response_model=ApiResponse[list[DayCoverageSlot]])
 async def day_plan_coverage(plan_date: date, db: DbSession, user: Reader):
     rows = await dayplan_service.list_day_plans(db, org_scope(user), plan_date)
+    rows = dayplan_service.visible(rows, user)
     return ApiResponse(data=[DayCoverageSlot(**s) for s in dayplan_service.coverage(rows)])
 
 
@@ -234,7 +302,9 @@ async def export_day_plans(
     """Same five sheets as the UI export (segments, agent summary, 15-min grid,
     channel coverage, legend) as JSON or a sectioned CSV."""
     org = org_scope(user)
-    rows = await dayplan_service.list_day_plans(db, org, plan_date, agent_keys)
+    rows = dayplan_service.visible(
+        await dayplan_service.list_day_plans(db, org, plan_date, agent_keys), user
+    )
     # Labour-law compliance sheets are included when the organisation has a country set.
     law = await dayplan_service.org_law(db, org)
     if format == "csv":
@@ -256,7 +326,7 @@ async def day_plan_compliance(
     `country` preset). Daily rules only; warnings, nothing is blocked."""
     org = org_scope(user)
     law = await dayplan_service.org_law(db, org, country)
-    rows = await dayplan_service.list_day_plans(db, org, plan_date)
+    rows = dayplan_service.visible(await dayplan_service.list_day_plans(db, org, plan_date), user)
     return ApiResponse(data=DayComplianceOut(**dayplan_service.compliance(rows, law)))
 
 

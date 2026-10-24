@@ -37,6 +37,7 @@ import {
   type ChannelSegment,
   type OvertimePlan,
 } from "@/lib/domain/channels"
+import { addDays, localISODate } from "@/lib/domain/horizon"
 import { LABOUR_LAW_BY_CODE, type LawOverrides } from "@/lib/domain/labourLaw"
 import { buildPlan, summarisePlan } from "@/lib/domain/planning"
 import type { Scenario } from "@/lib/domain/scenario"
@@ -166,6 +167,49 @@ export interface AgentDayPatch {
   channels: ChannelSegment[]
   overtime: ChannelSegment[]
   activities: ActivitySegment[]
+}
+
+/** One date's schedule — everything the Scheduling timeline edits for that day.
+ *  The selected date lives in the store's top-level slices (agents' shifts,
+ *  breakOverrides, channelPlan, overtimePlan, activityPlan); other dates are
+ *  parked in `dayStore` until selected. */
+export interface DaySlices {
+  /** agentId → "HH:MM–HH:MM"; missing = the agent's shift-pattern default. */
+  shifts: Record<string, string>
+  breakOverrides: BreakOverrides
+  channelPlan: ChannelPlan
+  overtimePlan: OvertimePlan
+  activityPlan: ActivityPlan
+}
+
+/** Days kept in `dayStore` after they've passed (for a look back). */
+const DAY_STORE_KEEP_PAST_DAYS = 14
+
+/** An agent's default shift for a date nobody has edited: their shift pattern's times. */
+export function baseShiftFor(agent: Agent, patterns: ShiftPattern[]): string {
+  const p = agent.shiftPatternId ? patterns.find((x) => x.id === agent.shiftPatternId) : undefined
+  return p ? shiftStringFor(p) : agent.shift
+}
+
+type ScheduleSlicesState = Pick<
+  WfmState,
+  "scheduleDate" | "dayStore" | "agents" | "shiftPatterns" | "breakOverrides" | "channelPlan" | "overtimePlan" | "activityPlan"
+>
+
+/** The schedule for any date — the live slices for the selected date, the
+ *  parked copy for one that's been opened before, else pattern defaults. */
+export function scheduleForDate(s: ScheduleSlicesState, date: string) {
+  if (date === s.scheduleDate) {
+    return { agents: s.agents, breakOverrides: s.breakOverrides, channelPlan: s.channelPlan, overtimePlan: s.overtimePlan, activityPlan: s.activityPlan }
+  }
+  const d = s.dayStore[date]
+  return {
+    agents: s.agents.map((a) => ({ ...a, shift: d?.shifts[a.id] ?? baseShiftFor(a, s.shiftPatterns) })),
+    breakOverrides: d?.breakOverrides ?? {},
+    channelPlan: d?.channelPlan ?? {},
+    overtimePlan: d?.overtimePlan ?? {},
+    activityPlan: d?.activityPlan ?? {},
+  }
 }
 
 /** The schedule slices after writing many agents' days — shared by local edits
@@ -326,6 +370,15 @@ interface WfmState {
   proposeSwap: (fromAgentId: string, toAgentId: string, slImpact: number, autoApprove: boolean) => void
   /** TL/manager decision on an escalated swap; approving applies the exchange. */
   setSwapStatus: (id: string, status: "Approved" | "Denied") => void
+
+  // Which date the schedule slices below belong to (local ISO date), and the
+  // other dates' schedules — see DaySlices. Defaults to today on every load.
+  scheduleDate: string
+  dayStore: Record<string, DaySlices>
+  /** Show another date on the timeline: the current date's schedule is parked
+   *  and that date's loaded (shift-pattern defaults if never opened). Use
+   *  switchScheduleDate (lib/scheduleSync) so the server sync follows along. */
+  setScheduleDate: (date: string) => void
 
   // Optimised per-agent break placements (from the Scheduling break optimiser).
   breakOverrides: BreakOverrides
@@ -812,6 +865,26 @@ export const useWfm = create<WfmState>()(
               ...s.auditLog,
             ],
           }
+        }),
+
+      scheduleDate: localISODate(),
+      dayStore: {},
+      setScheduleDate: (date) =>
+        set((s) => {
+          if (date === s.scheduleDate) return s
+          const parked: DaySlices = {
+            shifts: Object.fromEntries(s.agents.map((a) => [a.id, a.shift])),
+            breakOverrides: s.breakOverrides,
+            channelPlan: s.channelPlan,
+            overtimePlan: s.overtimePlan,
+            activityPlan: s.activityPlan,
+          }
+          const next = scheduleForDate(s, date)
+          const keepFrom = addDays(localISODate(), -DAY_STORE_KEEP_PAST_DAYS)
+          const dayStore = Object.fromEntries(
+            Object.entries({ ...s.dayStore, [s.scheduleDate]: parked }).filter(([d]) => d !== date && d >= keepFrom),
+          )
+          return { scheduleDate: date, dayStore, ...next }
         }),
 
       breakOverrides: {},
@@ -1309,13 +1382,22 @@ export const useWfm = create<WfmState>()(
       // get reseeded fresh rather than patched in place. (Bumped straight to
       // v6 because a v5 build without the exceptions reseed already shipped
       // and wrote version 5 into some browsers' localStorage.)
-      version: 6,
+      // v7: schedules became per-date (scheduleDate + dayStore). Older state's
+      // single day is taken to be today's.
+      version: 7,
       migrate: (persisted, fromVersion) => {
-        const state = persisted as Partial<{ permissions: PermissionMatrix; exceptions: AdherenceException[] }> | undefined
+        let state = persisted as Partial<{ permissions: PermissionMatrix; exceptions: AdherenceException[] }> | undefined
         if (state && fromVersion < 6) {
-          return { ...state, permissions: DEFAULT_PERMISSIONS, exceptions: seedExceptions(AGENTS) }
+          state = { ...state, permissions: DEFAULT_PERMISSIONS, exceptions: seedExceptions(AGENTS) }
+        }
+        if (state && fromVersion < 7) {
+          state = { ...state, scheduleDate: localISODate(), dayStore: {} } as typeof state
         }
         return state
+      },
+      // Every page outside Scheduling shows today, so a reload always starts there.
+      onRehydrateStorage: () => (state) => {
+        if (state && state.scheduleDate !== localISODate()) state.setScheduleDate(localISODate())
       },
       // persist everything a user changes so nothing is lost on refresh
       partialize: (s) => ({
@@ -1339,6 +1421,8 @@ export const useWfm = create<WfmState>()(
         users: s.users,
         scenarios: s.scenarios,
         swaps: s.swaps,
+        scheduleDate: s.scheduleDate,
+        dayStore: s.dayStore,
         breakOverrides: s.breakOverrides,
         channelPlan: s.channelPlan,
         overtimePlan: s.overtimePlan,

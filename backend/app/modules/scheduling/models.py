@@ -86,6 +86,10 @@ class DaySchedulePlan(UUIDMixin, TenantMixin, TimestampMixin, Base):
     `agent_key` is the roster id the frontend uses; when it matches an
     employee's `employee_code` the row is also linked via `employee_id`.
     `version` increments on every write for optimistic concurrency.
+
+    A row is a draft until published (`published_at`); only published rows are
+    visible to agents and team leaders, and changes to a published row notify
+    them (see `schedule_notify.py`).
     """
 
     __tablename__ = "day_schedule_plans"
@@ -98,6 +102,8 @@ class DaySchedulePlan(UUIDMixin, TenantMixin, TimestampMixin, Base):
     )
     agent_name: Mapped[str] = mapped_column(String(255), default="")
     team: Mapped[str] = mapped_column(String(128), default="")
+    # Team leader's name as the roster has it — matched to Team Leader logins.
+    team_lead: Mapped[str] = mapped_column(String(255), default="")
     shift_start: Mapped[int] = mapped_column(Integer)
     shift_end: Mapped[int] = mapped_column(Integer)
     # [{"id","type":"break|lunch","label","start","end"}]
@@ -109,6 +115,8 @@ class DaySchedulePlan(UUIDMixin, TenantMixin, TimestampMixin, Base):
     activities: Mapped[list] = mapped_column(JSON, default=list)
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
 
 
 class SchedulingPolicy(UUIDMixin, TenantMixin, TimestampMixin, Base):

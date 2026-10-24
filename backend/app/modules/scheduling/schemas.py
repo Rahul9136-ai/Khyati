@@ -133,6 +133,7 @@ class DayPlanIn(BaseModel):
     agent_key: str = Field(min_length=1, max_length=64)
     agent_name: str = Field("", max_length=255)
     team: str = Field("", max_length=128)
+    team_lead: str = Field("", max_length=255)
     shift_start: int = _Minute
     shift_end: int = _Minute
     breaks: list[DayBreakIn] = []
@@ -150,6 +151,7 @@ class DayPlanOut(BaseModel):
     employee_id: uuid.UUID | None
     agent_name: str
     team: str
+    team_lead: str = ""
     shift_start: int
     shift_end: int
     breaks: list
@@ -158,12 +160,68 @@ class DayPlanOut(BaseModel):
     activities: list
     version: int
     updated_at: datetime
+    published_at: datetime | None = None
 
 
 class DayPlanBulkIn(BaseModel):
     items: list[DayPlanIn] = Field(min_length=1, max_length=1000)
     #: Human-readable summary for the audit log, e.g. "Lunch 11:00–11:30 → 12:00–12:30".
     detail: str = Field("", max_length=500)
+
+
+class DayPlanSummaryOut(BaseModel):
+    """One agent-day in the multi-week overview (no block detail)."""
+
+    plan_date: date
+    agent_key: str
+    agent_name: str
+    team: str
+    shift_start: int
+    shift_end: int
+    ot_minutes: int
+    activities: list[str]  # activity types on the day, e.g. ["meeting", "loa"]
+    version: int
+    published: bool
+
+
+class DayPlanDatedIn(DayPlanIn):
+    plan_date: date
+
+
+class DayFillIn(BaseModel):
+    """Days to create where none is saved yet (existing rows are left untouched),
+    e.g. the default schedules for dates nobody has opened before publishing."""
+
+    items: list[DayPlanDatedIn] = Field(min_length=1, max_length=10_000)
+
+
+class DayFillOut(BaseModel):
+    created: int
+    existing: int
+
+
+class DayPublishIn(BaseModel):
+    start: date
+    end: date
+    #: Limit to these agents; default all saved schedules in the range.
+    agent_keys: list[str] | None = None
+    note: str = Field("", max_length=255)
+
+
+class DayPublishOut(BaseModel):
+    start: date
+    end: date
+    days: int
+    agents: int
+    published: int  # agent-days newly published or re-published with changes
+    unchanged: int  # already published and unchanged
+    notified: int  # users notified (agents + team leaders)
+
+
+class MyScheduleOut(BaseModel):
+    #: Roster ids linked to the signed-in user's employee record.
+    agent_keys: list[str]
+    days: list[DayPlanOut]
 
 
 class DaySkipped(BaseModel):

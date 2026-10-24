@@ -6,7 +6,8 @@ role, org structure, 20 agents, 120 days of history, an auto forecast, a
 capacity plan, shift templates, a published schedule, two weeks of attendance
 and today's interval actuals — so every screen and endpoint has live data.
 
-Idempotence: aborts if the demo org already exists.
+Idempotence: aborts if the demo org already exists; the roster logins
+(`seed_roster_logins`) are added to an existing demo org on every run.
 """
 from __future__ import annotations
 
@@ -471,6 +472,59 @@ async def seed_demo() -> dict:
         }
 
 
+# A few agents and the three team leaders of the frontend's demo roster
+# (frontend/src/lib/domain/seed.ts) get logins, so publishing schedules and the
+# change pop-ups can be tried end to end. The roster id is the employee code,
+# which is how day plans are linked to employees (and so to their logins).
+ROSTER_TEAM_LEADS = ["Marcus Webb", "Elena Faro", "Sam Okoye"]
+ROSTER_AGENTS = [("a01", "Ava", "Mendez"), ("a02", "Liam", "Carter"),
+                 ("a15", "Zara", "Khan"), ("a23", "Leah", "Webb")]
+
+
+async def seed_roster_logins() -> dict:
+    """Idempotent: adds whatever is missing to an existing demo org."""
+    from app.modules.identity.models import User
+
+    async with AsyncSessionLocal() as db:
+        org = (await db.execute(
+            select(Organization).where(Organization.code == "DEMO")
+        )).scalar_one_or_none()
+        if org is None:
+            return {"status": "skipped", "reason": "no demo org"}
+        admin = (await db.execute(
+            select(User).where(User.email == "admin@flowforce.dev")
+        )).scalar_one_or_none()
+        created: list[str] = []
+
+        async def ensure_user(email: str, name: str, role: str, employee_id=None) -> None:
+            if (await db.execute(select(User).where(User.email == email))).scalar_one_or_none():
+                return
+            await create_user(
+                db,
+                UserCreate(email=email, password="Demo@12345", full_name=name,
+                           role_names=[role], organization_id=org.id,
+                           employee_id=employee_id),
+                actor=admin,
+            )
+            created.append(email)
+
+        for name in ROSTER_TEAM_LEADS:
+            await ensure_user(f"{name.replace(' ', '.').lower()}@flowforce.dev", name,
+                              "Team Leader")
+        for code, first, last in ROSTER_AGENTS:
+            emp = (await db.execute(select(Employee).where(
+                Employee.organization_id == org.id, Employee.employee_code == code
+            ))).scalar_one_or_none()
+            if emp is None:
+                emp = Employee(organization_id=org.id, employee_code=code, first_name=first,
+                               last_name=last, email=f"{first}.{last}@flowforce.dev".lower())
+                db.add(emp)
+                await db.flush()
+            await ensure_user(emp.email, emp.full_name, "Employee", emp.id)
+        await db.commit()
+        return {"status": "seeded", "created": created, "password": "Demo@12345"}
+
+
 async def main() -> None:
     from app.core.config import settings
 
@@ -479,6 +533,7 @@ async def main() -> None:
             await conn.run_sync(Base.metadata.create_all)
     result = await seed_demo()
     print(result)
+    print(await seed_roster_logins())
 
 
 if __name__ == "__main__":
