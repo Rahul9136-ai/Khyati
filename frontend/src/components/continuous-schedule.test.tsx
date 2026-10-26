@@ -451,6 +451,29 @@ describe("country labour law", () => {
   })
 })
 
+describe("work-rule compliance on the timeline", () => {
+  const renderAll = () =>
+    render(<ContinuousSchedule agents={useWfm.getState().agents} queue={queue} plan={plan} onDuty={plan.map((p) => p.scheduled)} canEdit />)
+
+  beforeEach(() => useWfm.setState({ labourLaw: { country: null, overrides: {} }, channelPlan: {}, breakOverrides: {}, overtimePlan: {} }))
+
+  it("outlines a stretch over 3h without a break and filters to it", () => {
+    // 3h OT straight after the shift: 13:15–18:30 with no break.
+    useWfm.setState({ overtimePlan: { [agent.id]: [{ id: "o", channel: "phone", start: toMins("15:30"), end: toMins("18:30") }] } })
+    renderAll()
+    fireEvent.click(screen.getByRole("button", { name: "⏱ 1 break work rules" }))
+    expect(document.querySelectorAll("[data-agent-row]")).toHaveLength(1)
+    expect(screen.getByRole("img", { name: /^Work rules: Works 13:15–18:30 \(5h15\) without a break — max 3h in a row/ })).toBeInTheDocument()
+    expect(screen.getAllByTestId("work-rule-breach")).toHaveLength(1)
+  })
+
+  it("is green when every schedule meets the rules", () => {
+    renderAll()
+    expect(screen.getByRole("button", { name: "⏱ Work rules met" })).toBeInTheDocument()
+    expect(screen.queryByTestId("work-rule-breach")).not.toBeInTheDocument()
+  })
+})
+
 describe("adding OT for a channel", () => {
   const renderTwo = () => {
     const two = useWfm.getState().agents.slice(0, 2) // both 07:00–15:30

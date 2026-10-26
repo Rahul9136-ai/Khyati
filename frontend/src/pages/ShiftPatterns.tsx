@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react"
+import { Link } from "react-router-dom"
 import { Clock, Coffee, Pencil, Plus, Trash2, Utensils } from "lucide-react"
 
 import { KpiCard } from "@/components/kpi-card"
@@ -10,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import type { BreakSegment, BreakType, ShiftPattern } from "@/lib/domain/shiftPatterns"
+import { parseWorkRulePatternId } from "@/lib/domain/workRules"
 import { useWfm } from "@/store/wfm"
 
 const uid = () => Math.random().toString(36).slice(2, 8)
@@ -130,10 +132,14 @@ export function ShiftPatterns() {
                 ))}
               </div>
               <div className="mt-4 flex justify-end gap-2">
-                <PermissionGate module="shiftPatterns">
-                  <Button variant="outline" size="sm" onClick={() => openEdit(p)}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
-                  <Button variant="ghost" size="sm" onClick={() => onDelete(p)}><Trash2 className="h-3.5 w-3.5 text-destructive" /></Button>
-                </PermissionGate>
+                {parseWorkRulePatternId(p.id) ? (
+                  <Link to="/work-rules" className="text-xs text-primary hover:underline">From a work rule — edit it in Work Rules</Link>
+                ) : (
+                  <PermissionGate module="shiftPatterns">
+                    <Button variant="outline" size="sm" onClick={() => openEdit(p)}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
+                    <Button variant="ghost" size="sm" onClick={() => onDelete(p)}><Trash2 className="h-3.5 w-3.5 text-destructive" /></Button>
+                  </PermissionGate>
+                )}
               </div>
             </CardContent>
           </Card>

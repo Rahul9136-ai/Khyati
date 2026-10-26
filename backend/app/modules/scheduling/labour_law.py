@@ -32,7 +32,7 @@ OVERRIDABLE = {
     "maxWeeklyHours",
     "minDailyRestHours",
 }
-NOT_WORKING = {"loa", "absence"}
+NOT_WORKING = {"loa", "absence", "vto", "pto", "leave", "off"}
 
 
 @cache

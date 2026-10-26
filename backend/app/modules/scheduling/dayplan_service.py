@@ -567,6 +567,22 @@ async def publish(
     }
 
 
+async def user_agent_keys(db: AsyncSession, user: User) -> set[str]:
+    """Roster ids that are this login: day plans linked to their employee record,
+    plus that employee's code (the roster id day plans are linked by)."""
+    if user.employee_id is None or user.organization_id is None:
+        return set()
+    q = select(DaySchedulePlan.agent_key).where(
+        DaySchedulePlan.organization_id == user.organization_id,
+        DaySchedulePlan.employee_id == user.employee_id,
+    )
+    keys = set((await db.execute(q)).scalars())
+    emp = await db.get(Employee, user.employee_id)
+    if emp is not None:
+        keys.add(emp.employee_code)
+    return keys
+
+
 async def my_schedule(
     db: AsyncSession, user: User, start: date, end: date
 ) -> tuple[list[str], list[DaySchedulePlan]]:
@@ -574,14 +590,11 @@ async def my_schedule(
     _check_range(start, end)
     if user.employee_id is None or user.organization_id is None:
         return [], []
-    emp = await db.get(Employee, user.employee_id)
+    keys = await user_agent_keys(db, user)
     q = select(DaySchedulePlan).where(
         DaySchedulePlan.organization_id == user.organization_id,
         DaySchedulePlan.employee_id == user.employee_id,
     )
-    keys = set((await db.execute(q.with_only_columns(DaySchedulePlan.agent_key))).scalars())
-    if emp is not None:
-        keys.add(emp.employee_code)
     rows = await db.execute(
         q.where(
             DaySchedulePlan.plan_date >= start, DaySchedulePlan.plan_date <= end,
@@ -728,3 +741,9 @@ def compliance(rows: list[DaySchedulePlan], law: dict | None) -> dict:
         "country_code": law["code"] if law else None, "law": law,
         "disclaimer": labour_law.disclaimer(), "agents": agents,
     }
+
+
+# Shared with offers.py (slot claims edit the claimant's day the same way).
+row_to_day = _row_to_day
+apply_each = _apply_each
+check_range = _check_range

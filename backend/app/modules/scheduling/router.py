@@ -10,9 +10,13 @@ from fastapi.responses import Response
 
 from app.api.deps import DbSession, require_permission
 from app.modules.identity.models import User
-from app.modules.scheduling import dayplan_service, labour_law, service
+from app.modules.scheduling import channel_drafts, dayplan_service, labour_law, offers, service
 from app.modules.scheduling.models import ShiftTemplate
 from app.modules.scheduling.schemas import (
+    ChannelDraftOut,
+    ChannelDraftsIn,
+    ChannelPublishOut,
+    ChannelRangeIn,
     DayAddOvertimeIn,
     DayApplyEditIn,
     DayComplianceOut,
@@ -34,6 +38,11 @@ from app.modules.scheduling.schemas import (
     LabourLawPolicyIn,
     LabourLawPolicyOut,
     MyScheduleOut,
+    OfferClaimIn,
+    OfferOut,
+    OfferPatchIn,
+    OffersUpsertIn,
+    OffersUpsertOut,
     ScheduleDetailOut,
     ScheduleOut,
     ShiftIn,
@@ -173,6 +182,18 @@ async def list_day_plan_range(
     rows = await dayplan_service.list_range(db, org_scope(user), start or lo, end or hi, agent_keys)
     rows = dayplan_service.visible(rows, user)
     return ApiResponse(data=[DayPlanSummaryOut(**dayplan_service.summary(r)) for r in rows])
+
+
+@router.get("/day-plans/range", response_model=ApiResponse[list[DayPlanOut]])
+async def list_day_plan_range_full(
+    db: DbSession, user: Reader, start: date, end: date,
+    agent_keys: Annotated[list[str] | None, Query()] = None,
+):
+    """Full day plans (breaks, channel blocks, OT, activities) for a date range —
+    what the channel auto-planner works from. Same visibility as one day."""
+    rows = await dayplan_service.list_range(db, org_scope(user), start, end, agent_keys)
+    rows = dayplan_service.visible(rows, user)
+    return ApiResponse(data=[DayPlanOut.model_validate(r) for r in rows])
 
 
 @router.post("/day-plans/fill", response_model=ApiResponse[DayFillOut])
@@ -328,6 +349,102 @@ async def day_plan_compliance(
     law = await dayplan_service.org_law(db, org, country)
     rows = dayplan_service.visible(await dayplan_service.list_day_plans(db, org, plan_date), user)
     return ApiResponse(data=DayComplianceOut(**dayplan_service.compliance(rows, law)))
+
+
+# ------------------------------------------- VTO / PTO / OT / Leave slots
+
+
+async def _offer_view(db, user: User, offer) -> OfferOut:
+    keys = None if dayplan_service.sees_everyone(user) else (
+        await dayplan_service.user_agent_keys(db, user)
+    )
+    return OfferOut(**offers.offer_out(offer, keys))
+
+
+@router.get("/offers", response_model=ApiResponse[list[OfferOut]])
+async def list_offers(
+    db: DbSession, user: Reader, start: date | None = None, end: date | None = None
+):
+    """Open slots with filled / left counts (default: the next 3 months).
+    Agents see the slots they can take and their own claims."""
+    lo, hi = dayplan_service.default_horizon()
+    rows = await offers.list_offers(db, org_scope(user), user, start or lo, end or hi)
+    return ApiResponse(data=[OfferOut(**r) for r in rows])
+
+
+@router.post("/offers", response_model=ApiResponse[OffersUpsertOut])
+async def open_offers(body: OffersUpsertIn, db: DbSession, actor: Writer):
+    """Open VTO / PTO / OT / Leave slots (or update ones already open for the
+    same date, queue, kind and times) and tell eligible agents."""
+    res = await offers.upsert_offers(db, org_scope(actor), body, actor=actor)
+    return ApiResponse(data=OffersUpsertOut(
+        created=res["created"], updated=res["updated"], notified=res["notified"],
+        offers=[OfferOut(**o) for o in res["offers"]],
+    ))
+
+
+@router.patch("/offers/{offer_id}", response_model=ApiResponse[OfferOut])
+async def update_offer(offer_id: uuid.UUID, body: OfferPatchIn, db: DbSession, actor: Writer):
+    """Change a slot's capacity (not below what's taken) or close / reopen it."""
+    offer = await offers.patch_offer(db, org_scope(actor), offer_id, body, actor=actor)
+    return ApiResponse(data=OfferOut(**offers.offer_out(offer)))
+
+
+@router.delete("/offers/{offer_id}", response_model=ApiResponse[dict])
+async def delete_offer(offer_id: uuid.UUID, db: DbSession, actor: Writer):
+    await offers.delete_offer(db, org_scope(actor), offer_id, actor=actor)
+    return ApiResponse(data={"detail": "Slot removed"})
+
+
+@router.post("/offers/{offer_id}/claim", response_model=ApiResponse[OfferOut])
+async def claim_offer(offer_id: uuid.UUID, body: OfferClaimIn, db: DbSession, user: Reader):
+    """Take a slot (first come, first served). It's written into the agent's
+    schedule straight away: VTO / PTO / Leave as time off, OT as an OT block."""
+    offer = await offers.claim(db, org_scope(user), offer_id, body, user=user)
+    return ApiResponse(data=await _offer_view(db, user, offer))
+
+
+@router.post("/offers/claims/{claim_id}/cancel", response_model=ApiResponse[OfferOut])
+async def cancel_offer_claim(claim_id: uuid.UUID, db: DbSession, user: Reader):
+    """Give a slot back (agents: their own, for today or later) — it's taken
+    back out of the schedule and the slot reopens."""
+    offer = await offers.cancel_claim(db, org_scope(user), claim_id, user=user)
+    return ApiResponse(data=await _offer_view(db, user, offer))
+
+
+# ------------------------------------- auto-planned Phone/Chat/Email (drafts)
+
+
+@router.get("/channel-drafts", response_model=ApiResponse[list[ChannelDraftOut]])
+async def list_channel_drafts(db: DbSession, actor: Writer, start: date, end: date):
+    """Unpublished auto-planned channel changes — schedulers only."""
+    rows = await channel_drafts.list_drafts(db, org_scope(actor), start, end)
+    return ApiResponse(data=[ChannelDraftOut.model_validate(r, from_attributes=True) for r in rows])
+
+
+@router.put("/channel-drafts", response_model=ApiResponse[list[ChannelDraftOut]])
+async def save_channel_drafts(body: ChannelDraftsIn, db: DbSession, actor: Writer):
+    """Save a fresh auto-plan for a date range (replaces earlier drafts there).
+    Nothing changes for agents until it's published."""
+    rows = await channel_drafts.replace_drafts(db, org_scope(actor), body, actor=actor)
+    return ApiResponse(data=[ChannelDraftOut.model_validate(r, from_attributes=True) for r in rows])
+
+
+@router.post("/channel-drafts/discard", response_model=ApiResponse[dict])
+async def discard_channel_drafts(body: ChannelRangeIn, db: DbSession, actor: Writer):
+    n = await channel_drafts.discard(db, org_scope(actor), body, actor=actor)
+    return ApiResponse(data={"discarded": n})
+
+
+@router.post("/channel-drafts/publish", response_model=ApiResponse[ChannelPublishOut])
+async def publish_channel_drafts(body: ChannelRangeIn, db: DbSession, actor: Publisher):
+    """Write the drafts into the schedules and publish those days: agents and
+    their team leaders see the new channels and get a pop-up."""
+    res = await channel_drafts.publish(db, org_scope(actor), body, actor=actor)
+    return ApiResponse(data=ChannelPublishOut(
+        applied=res["applied"], stale=[DaySkipped(**s) for s in res["stale"]],
+        published_days=res["published_days"], notified=res["notified"],
+    ))
 
 
 # ------------------------------------------------------------ country labour law

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Clock, Pencil, Plus, RotateCcw, Scale, Trash2 } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Clock, Pencil, Plus, RotateCcw, Scale, Timer, Trash2 } from "lucide-react"
 
 import { ActivitySwatch, AddActivityDialog, EditActivityDialog, type AddActivityPreset } from "@/components/activity-dialogs"
 import { AddOvertimeDialog, type AddOvertimePreset } from "@/components/add-overtime-dialog"
@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import type { AbsenceRisk } from "@/lib/domain/absenceRisk"
 import { checkCompliance, effectiveLaw, LABOUR_LAWS } from "@/lib/domain/labourLaw"
+import { checkWorkDay } from "@/lib/domain/workRules"
 import {
   ACTIVITIES,
   ACTIVITY_BY_ID,
@@ -173,11 +174,12 @@ export function ContinuousSchedule({
   /** AI absence-risk flags, shown beside the agent's name. */
   riskById?: Map<string, AbsenceRisk>
 }) {
-  const { shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, queues, updateAgentDay, updateAgentDays, labourLaw, setLabourLawCountry } = useWfm()
+  const { shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, queues, updateAgentDay, updateAgentDays, labourLaw, setLabourLawCountry, workCompliance } = useWfm()
   // Country labour law the schedules are checked against (preset + local overrides).
   const law = useMemo(() => effectiveLaw(labourLaw.country, labourLaw.overrides), [labourLaw])
   const [lawOpen, setLawOpen] = useState(false)
   const [onlyIssues, setOnlyIssues] = useState(false)
+  const [onlyWorkIssues, setOnlyWorkIssues] = useState(false)
   const [filter, setFilter] = useState<Channel | "all">("all")
   const [grouped, setGrouped] = useState(true)
   const [sort, setSort] = useState<ScheduleSort>("roster")
@@ -468,14 +470,20 @@ export function ContinuousSchedule({
             otMins: day.ot.reduce((t, o) => t + o.end - o.start, 0),
             // Re-checked live, so a drag shows compliance as you go.
             issues: law ? checkCompliance(day, law) : [],
+            // Work-rule compliance (breaks, hours in a row…) — see Work Rules.
+            workIssues: checkWorkDay(day, workCompliance),
           }
         })
-        .filter((r) => !onlyIssues || r.issues.length > 0),
-    [agents, filter, sort, channelPlan, overtimePlan, days, previewDays, law, onlyIssues],
+        .filter((r) => (!onlyIssues || r.issues.length > 0) && (!onlyWorkIssues || r.workIssues.length > 0)),
+    [agents, filter, sort, channelPlan, overtimePlan, days, previewDays, law, onlyIssues, workCompliance, onlyWorkIssues],
   )
   const issueCount = useMemo(
     () => (law ? agents.filter((a) => checkCompliance(days.get(a.id)!, law).length > 0).length : 0),
     [agents, days, law],
+  )
+  const workIssueCount = useMemo(
+    () => agents.filter((a) => checkWorkDay(days.get(a.id)!, workCompliance).length > 0).length,
+    [agents, days, workCompliance],
   )
   const groups = grouped
     ? CHANNELS.map((c) => ({ channel: c, rows: rows.filter((r) => r.primary === c.id) })).filter((g) => g.rows.length)
@@ -543,6 +551,19 @@ export function ContinuousSchedule({
               {issueCount ? `⚖ ${issueCount} with issues` : "⚖ All compliant"}
             </button>
           )}
+          <button
+            type="button"
+            aria-pressed={onlyWorkIssues}
+            onClick={() => setOnlyWorkIssues((v) => !v)}
+            title={`${onlyWorkIssues ? "Show all schedules" : "Show only schedules that break a work rule"} — breaks, hours in a row and lunch (set on the Work Rules page)`}
+            className={cn(
+              "rounded-full border px-2 py-0.5 text-xs",
+              workIssueCount ? "border-destructive/50 text-destructive" : "border-emerald-500/50 text-emerald-600 dark:text-emerald-400",
+              onlyWorkIssues && "bg-destructive/10",
+            )}
+          >
+            {workIssueCount ? `⏱ ${workIssueCount} break work rules` : "⏱ Work rules met"}
+          </button>
         </span>
         <Select
           aria-label="Sort schedules"
@@ -713,7 +734,7 @@ export function ContinuousSchedule({
                   <div />
                 </div>
               )}
-              {g.rows.map(({ agent: a, day, segs, otMins, issues }) => {
+              {g.rows.map(({ agent: a, day, segs, otMins, issues, workIssues }) => {
                 const skilled = a.skills.includes(queue.id)
                 const risk = riskById?.get(a.id)
                 const myDrag = drag?.agent.id === a.id ? drag : null
@@ -766,6 +787,15 @@ export function ContinuousSchedule({
                               title={`${law.name} labour law:\n• ${issues.map((i) => i.message).join("\n• ")}`}
                             >
                               <Scale className="h-3 w-3 shrink-0 text-destructive" />
+                            </span>
+                          )}
+                          {workIssues.length > 0 && (
+                            <span
+                              role="img"
+                              aria-label={`Work rules: ${workIssues.map((i) => i.message).join("; ")}`}
+                              title={`Work rules:\n• ${workIssues.map((i) => i.message).join("\n• ")}`}
+                            >
+                              <Timer className="h-3 w-3 shrink-0 text-destructive" />
                             </span>
                           )}
                         </div>
@@ -862,6 +892,17 @@ export function ContinuousSchedule({
                           </div>
                         )
                       })}
+
+                      {/* Work-rule breaches (e.g. over 3h in a row without a break) outlined in red. */}
+                      {workIssues.filter((i) => i.span).map((i, k) => (
+                        <div
+                          key={`wr-${k}`}
+                          data-testid="work-rule-breach"
+                          className="pointer-events-none absolute inset-y-0 z-[9] rounded-sm border-2 border-dashed border-destructive bg-destructive/10"
+                          style={{ left: `${pct(i.span!.start)}%`, width: `${pct(i.span!.end) - pct(i.span!.start)}%` }}
+                          title={i.message}
+                        />
+                      ))}
 
                       {/* Activity layer: meetings, training, LOA, absence… overlap the upper part of the base schedule. */}
                       {segs.filter((s) => s.kind === "activity").map((s) => {

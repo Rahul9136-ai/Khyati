@@ -19,7 +19,8 @@ export interface ScheduleNotification {
 /** How often the pop-up checks for schedule news. */
 export const SCHEDULE_POPUP_POLL_MS = 15_000
 
-const isScheduleNews = (n: ScheduleNotification) => n.kind === "schedule_published" || n.kind === "schedule_changed"
+const SCHEDULE_KINDS = new Set(["schedule_published", "schedule_changed", "schedule_slots"])
+const isScheduleNews = (n: ScheduleNotification) => SCHEDULE_KINDS.has(n.kind)
 
 /** Pops up on an agent's or team leader's screen, whatever page they're on,
  *  when their published schedule is published or changed (backend

@@ -71,8 +71,12 @@ def describe_change(before: dp.AgentDay | None, after: dp.AgentDay | None) -> st
     blocks(lambda b: b.label, before.breaks, after.breaks)
     blocks(lambda a: dp.ACTIVITIES[a.type]["label"], before.activities, after.activities)
     blocks(lambda o: f"OT {dp.CHANNELS[o.channel]['label']}", before.ot, after.ot)
-    if not parts and before.channels != after.channels:
-        parts.append("Phone/Chat/Email alignment changed")
+    def lanes(d: dp.AgentDay) -> list[tuple[str, int, int]]:
+        return [(c.channel, c.start, c.end) for c in sorted(d.channels, key=lambda c: c.start)]
+
+    if not parts and lanes(before) != lanes(after):
+        now = " · ".join(f"{dp.CHANNELS[ch]['label']} {_rng(s, e)}" for ch, s, e in lanes(after))
+        parts.append(f"Channels now {now}")
     return "; ".join(parts) or "Schedule updated"
 
 
@@ -154,7 +158,7 @@ async def resolve_audience(
 # --------------------------------------------------------------- notifications
 
 
-async def _upsert(
+async def upsert_notification(
     db: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, *,
     ref: str, kind: str, title: str, link: str, body: str, merge=None,
 ) -> None:
@@ -207,7 +211,7 @@ async def notify_changes(
     per_lead: dict[uuid.UUID, dict[str, str]] = defaultdict(dict)
     for row, text in changes:
         for uid in aud.agents.get(row.agent_key, set()) - {actor.id}:
-            await _upsert(
+            await upsert_notification(
                 db, org_id, uid, ref=f"schedule:{plan_date.isoformat()}:{row.agent_key}",
                 kind=KIND_CHANGED, title=f"Your schedule changed · {day}", link=link,
                 body=text, merge=lambda old, t=text: f"{old}; {t}",
@@ -218,7 +222,7 @@ async def notify_changes(
     for uid, lines in per_lead.items():
         merge = _merge_lines(lines)
         body = merge("")
-        await _upsert(
+        await upsert_notification(
             db, org_id, uid, ref=f"schedule-team:{plan_date.isoformat()}", kind=KIND_CHANGED,
             title=f"Team schedule changed · {day}", link=link, body=body, merge=merge,
         )
@@ -246,7 +250,7 @@ async def notify_published(
         n = f"{len(dates)} day{'s' if len(dates) > 1 else ''}"
         link = f"/scheduling?date={dates[0].isoformat()}"
         for uid in aud.agents.get(key, set()) - {actor.id}:
-            await _upsert(
+            await upsert_notification(
                 db, org_id, uid, ref=f"schedule-publish:{key}", kind=KIND_PUBLISHED,
                 title="Your schedule is published", link=link,
                 body=f"{span} · {n}. Open Scheduling to see your shifts.",
@@ -258,7 +262,7 @@ async def notify_published(
         dates = sorted({d for ds in agents.values() for d in ds})
         names = sorted(agents)
         shown = ", ".join(names[:8]) + (f" +{len(names) - 8} more" if len(names) > 8 else "")
-        await _upsert(
+        await upsert_notification(
             db, org_id, uid, ref="schedule-publish-team", kind=KIND_PUBLISHED,
             title="Team schedules published",
             link=f"/scheduling?date={dates[0].isoformat()}",

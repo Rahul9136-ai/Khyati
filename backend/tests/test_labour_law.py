@@ -85,6 +85,13 @@ def test_full_shift_absence_has_nothing_to_check() -> None:
     assert rules("PH", d) == []
 
 
+def test_week_off_is_not_work() -> None:
+    d = base_day()
+    off = dp.mark_aux(d, "off", m("07:00"), 30, True, "week-off", "Week off")
+    assert [(a.type, a.start, a.end) for a in off.activities] == [("off", m("07:00"), m("15:30"))]
+    assert rules("PH", off) == []
+
+
 def test_germany_daily_max_and_continuous() -> None:
     assert rules("DE", with_ot(120)) == []
     assert rules("DE", with_ot(180)) == ["maxDailyHours"]

@@ -26,6 +26,7 @@ import { Settings } from "@/pages/Settings"
 import { ShiftPatterns } from "@/pages/ShiftPatterns"
 import { Skills } from "@/pages/Skills"
 import { Swaps } from "@/pages/Swaps"
+import { WorkRules } from "@/pages/WorkRules"
 
 export default function App() {
   return (
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/scheduling" element={<RoleGuard module="scheduling"><Scheduling /></RoleGuard>} />
         <Route path="/planning" element={<RoleGuard module="planning"><Planning /></RoleGuard>} />
         <Route path="/shift-patterns" element={<RoleGuard module="shiftPatterns"><ShiftPatterns /></RoleGuard>} />
+        <Route path="/work-rules" element={<RoleGuard module="shiftPatterns"><WorkRules /></RoleGuard>} />
         <Route path="/swaps" element={<RoleGuard module="swaps"><Swaps /></RoleGuard>} />
         <Route path="/intraday" element={<RoleGuard module="intraday"><Intraday /></RoleGuard>} />
         <Route path="/rta" element={<RoleGuard module="realtime"><Rta /></RoleGuard>} />

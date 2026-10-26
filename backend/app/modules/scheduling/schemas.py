@@ -99,8 +99,13 @@ class ValidationOut(BaseModel):
 
 _Minute = Field(ge=0, le=24 * 60)
 ChannelName = Literal["phone", "chat", "email"]
-ActivityName = Literal["meeting", "training", "coaching", "loa", "absence", "other"]
-AuxName = Literal["break", "lunch", "meeting", "training", "coaching", "loa", "absence", "other"]
+ActivityName = Literal[
+    "meeting", "training", "coaching", "loa", "absence", "other", "vto", "pto", "leave", "off"
+]
+AuxName = Literal[
+    "break", "lunch", "meeting", "training", "coaching", "loa", "absence", "other",
+    "vto", "pto", "leave", "off",
+]
 
 
 class DayBreakIn(BaseModel):
@@ -216,6 +221,117 @@ class DayPublishOut(BaseModel):
     published: int  # agent-days newly published or re-published with changes
     unchanged: int  # already published and unchanged
     notified: int  # users notified (agents + team leaders)
+
+
+OfferKind = Literal["vto", "pto", "ot", "leave"]
+
+
+class OfferIn(BaseModel):
+    """One slot to open (or update — same date, queue, kind and times)."""
+
+    plan_date: date
+    queue_key: str = Field(min_length=1, max_length=64)
+    queue_name: str = Field("", max_length=128)
+    kind: OfferKind
+    start: int = _Minute
+    end: int = _Minute
+    capacity: int = Field(ge=0, le=1000)
+    channel: ChannelName | None = None
+    eligible: list[str] | None = Field(None, max_length=5000)
+    note: str = Field("", max_length=255)
+
+
+class OffersUpsertIn(BaseModel):
+    items: list[OfferIn] = Field(min_length=1, max_length=500)
+    #: Tell eligible agents that new slots are open (one pop-up each).
+    notify: bool = True
+
+
+class OfferPatchIn(BaseModel):
+    capacity: int | None = Field(None, ge=0, le=1000)
+    status: Literal["open", "closed"] | None = None
+
+
+class OfferClaimIn(BaseModel):
+    #: Staff can claim for an agent; agents claim for themselves (leave empty).
+    agent_key: str | None = Field(None, max_length=64)
+
+
+class OfferClaimOut(BaseModel):
+    id: uuid.UUID
+    agent_key: str
+    agent_name: str
+    start: int
+    end: int
+    status: str
+    created_at: datetime
+
+
+class OfferOut(BaseModel):
+    id: uuid.UUID
+    plan_date: date
+    queue_key: str
+    queue_name: str
+    kind: OfferKind
+    start: int
+    end: int
+    capacity: int
+    filled: int
+    left: int
+    channel: str | None
+    status: str
+    note: str
+    #: Staff see every active claim; agents only their own.
+    claims: list[OfferClaimOut]
+    #: The caller's own active claim on this slot, if any.
+    mine: OfferClaimOut | None = None
+
+
+class OffersUpsertOut(BaseModel):
+    created: int
+    updated: int
+    notified: int
+    offers: list[OfferOut]
+
+
+class ChannelDraftIn(BaseModel):
+    plan_date: date
+    agent_key: str = Field(min_length=1, max_length=64)
+    agent_name: str = Field("", max_length=255)
+    channels: list[DayChannelIn] = Field(min_length=1)
+    #: The day plan's version the plan was made from; publishing skips it if it changed since.
+    base_version: int
+    summary: str = Field("", max_length=500)
+
+
+class ChannelDraftsIn(BaseModel):
+    """Replace every draft in [start, end] with these (a fresh auto-plan)."""
+
+    start: date
+    end: date
+    items: list[ChannelDraftIn] = Field(max_length=10_000)
+
+
+class ChannelDraftOut(BaseModel):
+    plan_date: date
+    agent_key: str
+    agent_name: str
+    channels: list
+    base_version: int
+    summary: str
+
+
+class ChannelRangeIn(BaseModel):
+    start: date
+    end: date
+
+
+class ChannelPublishOut(BaseModel):
+    applied: int  # agent-days whose channels were changed
+    #: Drafts skipped because the day was edited after it was planned.
+    stale: list[DaySkipped]
+    published_days: int  # agent-days that were drafts and are now published too
+    notified: int
 
 
 class MyScheduleOut(BaseModel):

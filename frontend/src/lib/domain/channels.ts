@@ -35,7 +35,7 @@ export type OvertimePlan = Record<string, ChannelSegment[]>
 
 /** Off-phone activities layered over the base schedule (upper band of a row).
  *  While one runs the agent is unavailable for contacts. */
-export type ActivityType = "meeting" | "training" | "coaching" | "loa" | "absence" | "other"
+export type ActivityType = "meeting" | "training" | "coaching" | "loa" | "absence" | "other" | "vto" | "pto" | "leave" | "off"
 
 export const ACTIVITIES: { id: ActivityType; label: string; short: string; color: string; fullShift?: boolean }[] = [
   { id: "meeting", label: "Meeting", short: "MTG", color: "#0891b2" },
@@ -44,6 +44,12 @@ export const ACTIVITIES: { id: ActivityType; label: string; short: string; color
   { id: "loa", label: "LOA", short: "LOA", color: "#475569", fullShift: true },
   { id: "absence", label: "Absence", short: "ABS", color: "#dc2626", fullShift: true },
   { id: "other", label: "Other", short: "OTH", color: "#78716c" },
+  // Time off taken from an opened slot (lib/domain/slots.ts) — the agent isn't working.
+  { id: "vto", label: "VTO", short: "VTO", color: "#0f766e" },
+  { id: "pto", label: "PTO", short: "PTO", color: "#4f46e5" },
+  { id: "leave", label: "Leave", short: "LV", color: "#c026d3", fullShift: true },
+  // A rostered day off from the agent's work rule (lib/domain/workRules.ts).
+  { id: "off", label: "Week off", short: "OFF", color: "#94a3b8", fullShift: true },
 ]
 export const ACTIVITY_BY_ID = Object.fromEntries(ACTIVITIES.map((a) => [a.id, a])) as Record<ActivityType, (typeof ACTIVITIES)[number]>
 

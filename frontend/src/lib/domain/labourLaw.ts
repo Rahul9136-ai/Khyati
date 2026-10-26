@@ -85,7 +85,7 @@ function subtract(pieces: Span[], cuts: Span[]): Span[] {
   return out.sort((a, b) => a.start - b.start)
 }
 
-const NOT_WORKING = new Set(["loa", "absence"])
+const NOT_WORKING = new Set(["loa", "absence", "vto", "pto", "leave", "off"])
 
 /** Worked time: shift + OT, minus breaks/lunch and LOA/absence (meetings etc. are work). */
 function workPieces(day: AgentDay): Span[] {

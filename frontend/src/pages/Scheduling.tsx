@@ -6,6 +6,7 @@ import { Link, useSearchParams } from "react-router-dom"
 
 import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
+import { ChannelAutoPlan } from "@/components/channel-auto-plan"
 import { ContinuousSchedule } from "@/components/continuous-schedule"
 import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
@@ -14,13 +15,15 @@ import { PageHeader } from "@/components/page-header"
 import { ScheduleDateBar } from "@/components/schedule-date-bar"
 import { ScheduleOverview } from "@/components/schedule-overview"
 import { ScheduleRequestCard } from "@/components/schedule-request-card"
+import { AgentSlotOffers, SlotOffersManager } from "@/components/slot-offers"
 import { PermissionGate } from "@/components/permission-gate"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { computeAbsenceRisk } from "@/lib/domain/absenceRisk"
 import { breakAwareCoverage, optimiseBreaks, projectedSLRow } from "@/lib/domain/breaks"
-import { activityCoverageLoss, overtimeAgents } from "@/lib/domain/channels"
+import { activityCoverageLoss, overtimeAgents, toMins } from "@/lib/domain/channels"
+import { INTERVALS } from "@/lib/domain/seed"
 import { planAutoSchedule, type AutoScheduleResult } from "@/lib/domain/autoschedule"
 import { occupancy } from "@/lib/domain/erlang"
 import { buildPlan, fmtPct, summarisePlan } from "@/lib/domain/planning"
@@ -90,7 +93,8 @@ export function Scheduling() {
     [roster, publishedOnly, serverAgents],
   )
   // Agents only ever see their own row — everyone else sees the full roster.
-  const visibleAgents = currentRole === "Agent" ? agents.filter((a) => a.id === currentAgentId) : agents
+  const isAgent = currentRole === "Agent"
+  const visibleAgents = isAgent ? agents.filter((a) => a.id === currentAgentId) : agents
   // Roster plus every OT block as an extra head, so overtime counts toward coverage & SL.
   const staffed = useMemo(() => [...agents, ...overtimeAgents(agents, overtimePlan)], [agents, overtimePlan])
   const plan = useMemo(() => buildPlan(forecasts[queue.id], queue.aht, queue, shrinkage, staffed), [forecasts, queue, shrinkage, staffed])
@@ -98,11 +102,14 @@ export function Scheduling() {
 
   // Break- and activity-aware view: heads actually on the phones (not on
   // break/lunch, not in a meeting / training / LOA / absence) + Erlang SL per interval.
+  const lost = useMemo(
+    () => activityCoverageLoss(queue.id, agents, shiftPatterns, breakOverrides, activityPlan),
+    [queue.id, agents, shiftPatterns, breakOverrides, activityPlan],
+  )
   const onDuty = useMemo(() => {
     const base = breakAwareCoverage(queue.id, staffed, shiftPatterns, breakOverrides)
-    const lost = activityCoverageLoss(queue.id, agents, shiftPatterns, breakOverrides, activityPlan)
     return base.map((c, i) => Math.max(0, c - lost[i]))
-  }, [queue.id, staffed, agents, shiftPatterns, breakOverrides, activityPlan])
+  }, [queue.id, staffed, shiftPatterns, breakOverrides, lost])
   const slRow = useMemo(
     () => projectedSLRow(forecasts[queue.id] ?? [], onDuty, queue, shrinkage),
     [forecasts, queue, onDuty, shrinkage],
@@ -249,13 +256,21 @@ export function Scheduling() {
 
       <ScheduleDateBar canPublish={canPublish} />
       {currentRole === "Agent" ? (
-        <MySchedule agentId={currentAgentId} onOpenDate={openDate} />
+        <>
+          <MySchedule agentId={currentAgentId} onOpenDate={openDate} />
+          <AgentSlotOffers
+            agentId={currentAgentId}
+            staffPreview={!!user && (user.is_superuser || user.permission_codes.includes("employee:read"))}
+          />
+        </>
       ) : (
         <ScheduleOverview agents={agents} onOpenDate={openDate} />
       )}
 
       <ScheduleRequestCard source="scheduling" />
 
+      {/* Staffing analytics are for planners; an agent's view only has their own row. */}
+      {!isAgent && (<>
       <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <KpiCard
           label="Required FTE"
@@ -300,6 +315,7 @@ export function Scheduling() {
           </p>
         </CardContent>
       </Card>
+      </>)}
 
       {autoResult && (
         <Card className="glass mb-4 border-primary/40">
@@ -350,9 +366,11 @@ export function Scheduling() {
         </div>
       )}
 
-      <div className="mb-4">
-        <AiSummary insight={insight} title="AI Scheduling Summary" />
-      </div>
+      {!isAgent && (
+        <div className="mb-4">
+          <AiSummary insight={insight} title="AI Scheduling Summary" />
+        </div>
+      )}
 
       <Card className="glass mb-4">
         <CardHeader className="pb-2">
@@ -388,6 +406,20 @@ export function Scheduling() {
         </CardContent>
       </Card>
 
+      {!isAgent && canEditSchedule && syncCanWrite && <ChannelAutoPlan canPublish={canPublish} />}
+
+      {currentRole !== "Agent" && (
+        <SlotOffersManager
+          date={scheduleDate}
+          queue={queue}
+          plan={plan}
+          lost={lost}
+          firstIntervalStart={INTERVALS.length ? toMins(INTERVALS[0].label) : 7 * 60}
+          agents={agents}
+          canEdit={canEditSchedule && syncCanWrite}
+        />
+      )}
+
       <Card className="glass scroll-mt-20" ref={timelineRef}>
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <CardTitle>Daily shift plan — {fmtDayLong(scheduleDate)}</CardTitle>
@@ -413,6 +445,7 @@ export function Scheduling() {
         </CardContent>
       </Card>
 
+      {!isAgent && (
       <Card className="glass mt-4">
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <CardTitle>Interval detail — all metrics ({queue.name})</CardTitle>
@@ -544,6 +577,7 @@ export function Scheduling() {
           </p>
         </CardContent>
       </Card>
+      )}
     </>
   )
 }

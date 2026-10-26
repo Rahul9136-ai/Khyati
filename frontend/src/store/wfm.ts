@@ -30,6 +30,7 @@ import { effectiveSegments, optimiseBreaks, type BreakOverrides } from "@/lib/do
 import {
   ACTIVITY_BY_ID,
   fmtHM,
+  toMins,
   withOvertimeAdded,
   type ActivityPlan,
   type ActivitySegment,
@@ -45,6 +46,18 @@ import { AGENTS, forecastFor, inAdherence, makeRTA, QUEUES, SHRINKAGE, TEAMS } f
 import { recommendSkillChanges } from "@/lib/domain/skillRecommend"
 import { DEFAULT_SHIFT_PATTERNS, shiftStringFor, type BreakSegment, type ShiftPattern } from "@/lib/domain/shiftPatterns"
 import type { Agent, Queue, RtaEntry } from "@/lib/domain/types"
+import {
+  DEFAULT_WORK_COMPLIANCE,
+  DEFAULT_WORK_RULES,
+  describeWeekOff,
+  isOffOn,
+  parseWorkRulePatternId,
+  WEEK_OFF_ID,
+  workRulePattern,
+  type WeekOffMode,
+  type WorkCompliance,
+  type WorkRule,
+} from "@/lib/domain/workRules"
 
 export interface NewAgent {
   name: string
@@ -203,13 +216,38 @@ export function scheduleForDate(s: ScheduleSlicesState, date: string) {
     return { agents: s.agents, breakOverrides: s.breakOverrides, channelPlan: s.channelPlan, overtimePlan: s.overtimePlan, activityPlan: s.activityPlan }
   }
   const d = s.dayStore[date]
+  const agents = s.agents.map((a) => ({ ...a, shift: d?.shifts[a.id] ?? baseShiftFor(a, s.shiftPatterns) }))
   return {
-    agents: s.agents.map((a) => ({ ...a, shift: d?.shifts[a.id] ?? baseShiftFor(a, s.shiftPatterns) })),
+    agents,
     breakOverrides: d?.breakOverrides ?? {},
     channelPlan: d?.channelPlan ?? {},
     overtimePlan: d?.overtimePlan ?? {},
-    activityPlan: d?.activityPlan ?? {},
+    activityPlan: d?.activityPlan ?? weekOffActivities(agents, date),
   }
+}
+
+/** Shift patterns with every work-rule pattern an agent uses (re)generated from
+ *  the current rules, and ones nobody uses any more dropped. */
+function withRulePatterns(patterns: ShiftPattern[], agents: Agent[], rules: WorkRule[]): ShiftPattern[] {
+  const used = new Map<string, ShiftPattern>()
+  for (const a of agents) {
+    const ref = parseWorkRulePatternId(a.shiftPatternId)
+    const rule = ref && rules.find((r) => r.id === ref.ruleId)
+    if (rule && ref && !used.has(a.shiftPatternId!)) used.set(a.shiftPatternId!, workRulePattern(rule, ref.start))
+  }
+  return [...patterns.filter((p) => !parseWorkRulePatternId(p.id)), ...used.values()]
+}
+
+/** A date nobody has edited yet: agents whose work rule has it as a week off
+ *  get a full-shift "Week off". */
+function weekOffActivities(agents: Agent[], date: string): ActivityPlan {
+  const plan: ActivityPlan = {}
+  for (const a of agents) {
+    if (!isOffOn(a.weekOff, a.weekOffMode, date)) continue
+    const [s, e] = a.shift.split("–").map((t) => toMins(t))
+    plan[a.id] = [{ id: WEEK_OFF_ID, type: "off", start: s, end: e, note: "Week off" }]
+  }
+  return plan
 }
 
 /** The schedule slices after writing many agents' days — shared by local edits
@@ -323,6 +361,20 @@ interface WfmState {
   addShiftPattern: (p: Omit<ShiftPattern, "id">) => void
   updateShiftPattern: (id: string, patch: Partial<Omit<ShiftPattern, "id">>) => void
   removeShiftPattern: (id: string) => void
+
+  // Work rules: shift length + break pattern + default week offs, assigned to
+  // agents at a start time (a generated shift pattern) with their own week offs.
+  workRules: WorkRule[]
+  addWorkRule: (r: Omit<WorkRule, "id">) => string
+  /** Edits flow into every agent on the rule (their generated patterns). */
+  updateWorkRule: (id: string, patch: Partial<Omit<WorkRule, "id">>) => void
+  removeWorkRule: (id: string) => void
+  /** Put agents on a rule at a start time with these week offs (null = take them off any rule). */
+  assignWorkRule: (agentIds: string[], a: { ruleId: string; start: string; weekOff: number[]; weekOffMode?: WeekOffMode } | null) => void
+  /** Change only the week offs of these agents (mode: fixed / rotating; omitted = keep). */
+  setWeekOff: (agentIds: string[], weekOff: number[], mode?: WeekOffMode) => void
+  workCompliance: WorkCompliance
+  setWorkCompliance: (c: WorkCompliance) => void
 
   shrinkage: number
   setShrinkage: (n: number) => void
@@ -612,6 +664,80 @@ export const useWfm = create<WfmState>()(
               : s.auditLog,
           }
         }),
+
+      workRules: DEFAULT_WORK_RULES,
+      addWorkRule: (r) => {
+        const id = "wr-" + uid()
+        set((s) => ({
+          workRules: [...s.workRules, { ...r, id }],
+          auditLog: [entry(s.currentUser, "Config", "Added work rule", r.name), ...s.auditLog],
+        }))
+        return id
+      },
+      updateWorkRule: (id, patch) =>
+        set((s) => {
+          const existing = s.workRules.find((r) => r.id === id)
+          if (!existing) return s
+          const workRules = s.workRules.map((r) => (r.id === id ? { ...r, ...patch } : r))
+          return {
+            workRules,
+            shiftPatterns: withRulePatterns(s.shiftPatterns, s.agents, workRules),
+            auditLog: [entry(s.currentUser, "Config", "Updated work rule", existing.name), ...s.auditLog],
+          }
+        }),
+      removeWorkRule: (id) =>
+        set((s) => {
+          const existing = s.workRules.find((r) => r.id === id)
+          if (!existing) return s
+          // Agents on it keep their times as an ordinary pattern-less shift.
+          const agents = s.agents.map((a) => (parseWorkRulePatternId(a.shiftPatternId)?.ruleId === id ? { ...a, shiftPatternId: undefined, weekOff: undefined } : a))
+          const workRules = s.workRules.filter((r) => r.id !== id)
+          return {
+            workRules,
+            agents,
+            shiftPatterns: withRulePatterns(s.shiftPatterns, agents, workRules),
+            auditLog: [entry(s.currentUser, "Config", "Removed work rule", existing.name), ...s.auditLog],
+          }
+        }),
+      assignWorkRule: (agentIds, assign) =>
+        set((s) => {
+          const ids = new Set(agentIds)
+          const rule = assign ? s.workRules.find((r) => r.id === assign.ruleId) : undefined
+          if (assign && !rule) return s
+          const pattern = rule && assign ? workRulePattern(rule, assign.start) : null
+          const agents = s.agents.map((a) => {
+            if (!ids.has(a.id)) return a
+            if (!pattern || !assign) return { ...a, shiftPatternId: parseWorkRulePatternId(a.shiftPatternId) ? undefined : a.shiftPatternId, weekOff: undefined, weekOffMode: undefined }
+            return { ...a, shiftPatternId: pattern.id, weekOff: [...assign.weekOff].sort(), weekOffMode: assign.weekOffMode ?? a.weekOffMode ?? rule?.weekOffMode ?? "fixed" }
+          })
+          const mode = assign?.weekOffMode ?? rule?.weekOffMode
+          const what = pattern && assign
+            ? `${pattern.name} (${pattern.start}–${pattern.end}) · off ${describeWeekOff(assign.weekOff, mode)}`
+            : "Removed work rule"
+          return {
+            agents,
+            shiftPatterns: withRulePatterns(s.shiftPatterns, agents, s.workRules),
+            auditLog: [entry(s.currentUser, "Schedule", "Assigned work rule", `${ids.size} agent${ids.size === 1 ? "" : "s"} · ${what}`), ...s.auditLog],
+          }
+        }),
+      setWeekOff: (agentIds, weekOff, mode) =>
+        set((s) => {
+          const ids = new Set(agentIds)
+          const days = [...weekOff].sort()
+          return {
+            agents: s.agents.map((a) => (ids.has(a.id) ? { ...a, weekOff: days, weekOffMode: mode ?? a.weekOffMode ?? "fixed" } : a)),
+            auditLog: [
+              entry(s.currentUser, "Schedule", "Changed week offs", `${ids.size} agent${ids.size === 1 ? "" : "s"} · off ${describeWeekOff(days, mode)}`),
+              ...s.auditLog,
+            ],
+          }
+        }),
+      workCompliance: DEFAULT_WORK_COMPLIANCE,
+      setWorkCompliance: (c) =>
+        set((s) => ({
+          workCompliance: c,
+          auditLog: [entry(s.currentUser, "Config", "Changed work-rule compliance", "Break / hours-in-a-row / weekly rules"), ...s.auditLog],
+        })),
 
       recallAgent: (id) =>
         set((s) => {
@@ -1410,6 +1536,8 @@ export const useWfm = create<WfmState>()(
         agents: s.agents,
         rta: s.rta,
         shiftPatterns: s.shiftPatterns,
+        workRules: s.workRules,
+        workCompliance: s.workCompliance,
         shrinkage: s.shrinkage,
         nowIdx: s.nowIdx,
         forecasts: s.forecasts,

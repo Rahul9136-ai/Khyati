@@ -21,6 +21,11 @@ export interface Agent {
   // rosters without one still work (Scheduling falls back to a synthesised
   // pattern derived from `shift`).
   shiftPatternId?: string
+  // Rostered days off each week (0 = Mon … 6 = Sun), from the agent's work
+  // rule (lib/domain/workRules.ts). Absent = works every day.
+  weekOff?: number[]
+  // "rotating" moves those days one day later each week; absent = fixed.
+  weekOffMode?: "fixed" | "rotating"
   team: string
   tl: string
 }

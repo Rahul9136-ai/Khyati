@@ -22,9 +22,14 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 
 Channel = Literal["phone", "chat", "email"]
-ActivityType = Literal["meeting", "training", "coaching", "loa", "absence", "other"]
+ActivityType = Literal[
+    "meeting", "training", "coaching", "loa", "absence", "other", "vto", "pto", "leave", "off"
+]
 BreakType = Literal["break", "lunch"]
-AuxKind = Literal["break", "lunch", "meeting", "training", "coaching", "loa", "absence", "other"]
+AuxKind = Literal[
+    "break", "lunch", "meeting", "training", "coaching", "loa", "absence", "other",
+    "vto", "pto", "leave", "off",
+]
 Edge = Literal["start", "end"]
 
 DAY_MINUTES = 24 * 60
@@ -45,6 +50,12 @@ ACTIVITIES: dict[str, dict] = {
     "loa": {"label": "LOA", "short": "LOA", "full_shift": True},
     "absence": {"label": "Absence", "short": "ABS", "full_shift": True},
     "other": {"label": "Other", "short": "OTH", "full_shift": False},
+    # Time off taken from an opened slot (see offers.py) — the agent isn't working.
+    "vto": {"label": "VTO", "short": "VTO", "full_shift": False},
+    "pto": {"label": "PTO", "short": "PTO", "full_shift": False},
+    "leave": {"label": "Leave", "short": "LV", "full_shift": True},
+    # A rostered day off from the agent's work rule.
+    "off": {"label": "Week off", "short": "OFF", "full_shift": True},
 }
 
 

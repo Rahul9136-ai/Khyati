@@ -85,6 +85,40 @@ The repo is a monorepo with two independently runnable halves:
   piling up. Dev logins for the demo roster: `ava.mendez@`, `liam.carter@`, `zara.khan@`,
   `leah.webb@` (agents) and `marcus.webb@`, `elena.faro@`, `sam.okoye@` (TLs) `flowforce.dev`,
   password `Demo@12345` (`python -m app.db.seed` adds them).
+- **VTO / PTO / Overtime / Leave slots** — for the selected day and queue, "Open slots" works out
+  each interval's heads over/under Required HC (net of meetings, VTO and leave already booked)
+  and suggests time off (as VTO or PTO) where you're over, OT where you're short and full-day
+  Leave where the whole day has room (slot length 30 min / 1 h / 2 h; room already on offer isn't
+  offered twice). Opened slots go to the agents skilled for the queue with a pop-up; agents see
+  each slot as "3 filled · 2 left" and take it first come, first served — it's written straight
+  into their schedule (VTO / PTO / Leave activity, or an OT block) and their TL is notified like
+  any change. Slots that don't fit an agent's published day are greyed out with the reason.
+  Schedulers can change capacity, close/reopen, remove empty slots or cancel a claim (which
+  takes it back out of the schedule). API: `GET/POST /scheduling/offers`,
+  `PATCH/DELETE /offers/{id}`, `POST /offers/{id}/claim`, `POST /offers/claims/{id}/cancel`.
+- **Auto-plan channels (future weeks)** — "Plan channels" re-aligns Phone / Chat / Email for next
+  week, 2 weeks, 4 weeks or the rest of the 3 months: in every 30-min interval the free agents
+  (not on a break, meeting or time off) go to **phone first** — enough for every queue's forecast
+  before shrinkage — then the chat minimum, and everyone else to email; agents keep their channel
+  wherever the need doesn't change, and OT isn't moved. The result is a **draft** only schedulers
+  see (per-day agents moved and phone / chat shortfall in head-hours, before → after).
+  **Publish changes** writes it into the schedules (skipping any day edited after planning),
+  publishes those days and notifies agents and TLs ("Channels now Phone 09:30–18:00"); agents see
+  their channels in My schedule. API: `GET/PUT /scheduling/channel-drafts`,
+  `POST /channel-drafts/publish` (`schedule:publish`), `POST /channel-drafts/discard`, full rows
+  via `GET /scheduling/day-plans/range`.
+- **Work rules** (`/work-rules`) — reusable shift + break patterns (e.g. *8h · 30m lunch + 2×15m
+  breaks*, *9h · 1h lunch + 2×15m breaks*, 10h × 4 days, part-time 6h / 4h; breaks are spread so
+  the work splits into equal stretches) assigned to agents at a start time, each with their own
+  **week off** — *Fixed* (same days every week, e.g. the "Fixed Sat–Sun" preset) or *Rotating*
+  (the days move one day later each week) — set with presets or Mon–Sun toggles; bulk assign and
+  "stagger days off" across a team. Unopened dates
+  follow the rules automatically (a full-shift *Week off* activity on days off); **Apply to
+  schedules** rewrites saved days for a range. **Compliance rules** (break in every shift of 3h+,
+  max 3h in a row without a break, lunch on long shifts, max days in a row, days off a week, weekly
+  hours, rest between shifts) are checked on rule cards, in a per-agent report, and on the
+  Scheduling timeline (⏱ badge, offending stretch outlined in red). Rules and assignments are kept
+  in the browser like shift patterns; week offs written into schedules are saved on the server.
 - Global, reusable **shift patterns** (start/end + break/lunch segments) that seed each
   agent's breaks on the timeline.
 - Bulk schedule import from Excel with a downloadable template.

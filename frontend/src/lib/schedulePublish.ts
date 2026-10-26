@@ -57,12 +57,9 @@ export function missingDays(start: string, end: string, saved: Set<string>): (Se
   return out
 }
 
-export async function publishSchedules(
-  start: string,
-  end: string,
-  opts: { note?: string; onProgress?: (step: string) => void } = {},
-): Promise<PublishResult> {
-  const step = opts.onProgress ?? (() => {})
+/** Save pending edits, then create every day in the range the server doesn't
+ *  have yet from shift patterns (or this browser's parked edits). Returns how many. */
+export async function ensureSaved(start: string, end: string, step: (s: string) => void = () => {}): Promise<number> {
   step("Saving pending changes…")
   await flush()
   const saved = new Set((await fetchRange(start, end)).map((r) => `${r.plan_date}|${r.agent_key}`))
@@ -73,6 +70,16 @@ export async function publishSchedules(
     const res = await api.post("/scheduling/day-plans/fill", { items: todo.slice(i, i + FILL_CHUNK) })
     created += (res.data.data as { created: number }).created
   }
+  return created
+}
+
+export async function publishSchedules(
+  start: string,
+  end: string,
+  opts: { note?: string; onProgress?: (step: string) => void } = {},
+): Promise<PublishResult> {
+  const step = opts.onProgress ?? (() => {})
+  const created = await ensureSaved(start, end, step)
   step("Publishing…")
   const res = await api.post("/scheduling/day-plans/publish", { start, end, note: opts.note ?? "" })
   await pull() // refresh the selected day's published flags

@@ -161,13 +161,16 @@ describe("my schedule (agent view)", () => {
     useAuth.setState({ user: { id: "u", email: "ava@x", full_name: "Ava", is_superuser: false, role_names: ["Employee"], permission_codes: ["schedule:read"] } })
     get.mockResolvedValue({ data: { data: { agent_keys: [a01.id], days: [{
       plan_date: tomorrow, agent_key: a01.id, agent_name: a01.name, team: "Alpha", shift_start: 420, shift_end: 930,
-      breaks: [{ id: "b2", type: "lunch", label: "Lunch", start: 660, end: 690 }], channels: [],
+      breaks: [{ id: "b2", type: "lunch", label: "Lunch", start: 660, end: 690 }],
+      channels: [{ id: "p", channel: "phone", start: 420, end: 660 }, { id: "e", channel: "email", start: 660, end: 930 }],
       overtime: [{ id: "o", channel: "chat", start: 930, end: 990 }],
       activities: [{ id: "m", type: "training", start: 780, end: 840 }],
     }] } } })
     const onOpen = vi.fn()
     renderWith(<MySchedule agentId={a01.id} onOpenDate={onOpen} />)
     const row = await screen.findByRole("button", { name: /07:00–15:30/ })
+    expect(row).toHaveTextContent("Phone 07:00–11:00")
+    expect(row).toHaveTextContent("Email 11:00–15:30")
     expect(row).toHaveTextContent("Lunch 11:00")
     expect(row).toHaveTextContent("Training 13:00–14:00")
     expect(row).toHaveTextContent("OT Chat 15:30–16:30")

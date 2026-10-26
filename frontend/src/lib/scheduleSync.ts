@@ -87,15 +87,20 @@ export function toServerPlan(agent: Agent, day: AgentDay): ServerDayPlan {
   }
 }
 
-/** Server row → the store patch applyServerDays expects. */
-export function fromServerPlan(row: ServerDayPlan): AgentDayPatch {
-  return dayToPatch({
+/** Server row → an agent's day in absolute minutes. */
+export function dayFromServer(row: ServerDayPlan): AgentDay {
+  return {
     shift: [row.shift_start, row.shift_end],
     breaks: row.breaks.map((b) => ({ ...b, label: b.label || (b.type === "lunch" ? "Lunch" : "Break") })),
     channels: row.channels,
     ot: row.overtime,
     activities: row.activities.map(({ note, ...x }) => (note ? { ...x, note } : x)),
-  })
+  }
+}
+
+/** Server row → the store patch applyServerDays expects. */
+export function fromServerPlan(row: ServerDayPlan): AgentDayPatch {
+  return dayToPatch(dayFromServer(row))
 }
 
 function currentPlans(): Map<string, ServerDayPlan> {

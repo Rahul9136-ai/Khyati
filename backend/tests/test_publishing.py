@@ -104,7 +104,14 @@ def test_describe_change() -> None:
     )
     assert schedule_notify.describe_change(busy, base).endswith("− OT Chat 16:30–17:30")
     realigned = day(channels=[dp.ChannelSeg("c", "chat", m("07:00"), m("15:30"))])
-    assert schedule_notify.describe_change(base, realigned) == "Phone/Chat/Email alignment changed"
+    assert schedule_notify.describe_change(base, realigned) == "Channels now Chat 07:00–15:30"
+    split = day(channels=[dp.ChannelSeg("a", "phone", m("07:00"), m("11:00")),
+                          dp.ChannelSeg("b", "email", m("11:00"), m("15:30"))])
+    assert schedule_notify.describe_change(base, split) == (
+        "Channels now Phone 07:00–11:00 · Email 11:00–15:30"
+    )
+    renamed = day(channels=[dp.ChannelSeg("zz", "phone", m("07:00"), m("15:30"))])
+    assert schedule_notify.describe_change(base, renamed) == "Schedule updated"  # same lanes
     assert schedule_notify.describe_change(base, None) == "Schedule removed"
     assert schedule_notify.fmt_day(date(2026, 11, 5)) == "Thu 5 Nov"
 
