@@ -1,8 +1,11 @@
 import { useQuery } from "@tanstack/react-query"
-import { ArrowDown, ArrowUp, CalendarCheck, CheckCircle2, Coffee, Loader2, Pencil, Plus, ShieldAlert, Shuffle, Trash2, Utensils } from "lucide-react"
+import { ArrowDown, ArrowUp, CalendarCheck, CheckCircle2, Coffee, Loader2, Pencil, Plus, ShieldAlert, Shuffle, Trash2, Upload, Utensils } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import { KpiCard } from "@/components/kpi-card"
+import { SettingsSyncBadge } from "@/components/settings-sync-badge"
+import { WorkRuleAlign } from "@/components/work-rule-align"
+import { WorkRuleImportDialog } from "@/components/work-rule-import-dialog"
 import { PageHeader } from "@/components/page-header"
 import { PermissionGate } from "@/components/permission-gate"
 import { Badge } from "@/components/ui/badge"
@@ -13,7 +16,7 @@ import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { fmtHM, toMins } from "@/lib/domain/channels"
-import { addDays, fmtDay, localISODate, scheduleHorizon, weekStart } from "@/lib/domain/horizon"
+import { addDays, fmtDay, localISODate, weekStart } from "@/lib/domain/horizon"
 import { fmtDuration } from "@/lib/domain/labourLaw"
 import {
   checkWorkRule,
@@ -32,10 +35,10 @@ import {
   type WorkCompliance,
   type WorkRule,
 } from "@/lib/domain/workRules"
-import { errorText } from "@/lib/offers"
 import { useScheduleSync } from "@/lib/scheduleSync"
 import { cn } from "@/lib/utils"
-import { applyWorkRules, fetchRangeRows, rangeCompliance } from "@/lib/workRuleApply"
+import { fetchRangeRows, rangeCompliance } from "@/lib/workRuleApply"
+import { useAuth } from "@/store/auth"
 import { useWfm } from "@/store/wfm"
 
 
@@ -349,33 +352,11 @@ function RulesTab() {
   )
 }
 
-type RangeId = "today" | "next" | "4w" | "week"
-function useRanges() {
-  const today = localISODate()
-  const horizon = scheduleHorizon(today)
-  const next = addDays(weekStart(today), 7)
-  return {
-    today,
-    ranges: {
-      today: { label: `From today · ${fmtDay(today)} – ${fmtDay(horizon.end)}`, start: today, end: horizon.end },
-      next: { label: `From next week · ${fmtDay(next)} – ${fmtDay(horizon.end)}`, start: next, end: horizon.end },
-      "4w": { label: `Next 4 weeks · ${fmtDay(next)} – ${fmtDay(addDays(next, 27))}`, start: next, end: addDays(next, 27) },
-      week: { label: `This week · ${fmtDay(weekStart(today))} – ${fmtDay(addDays(weekStart(today), 6))}`, start: weekStart(today), end: addDays(weekStart(today), 6) },
-    } satisfies Record<RangeId, { label: string; start: string; end: string }>,
-  }
-}
-
-function AgentsTab({ canEdit }: { canEdit: boolean }) {
+function AgentsTab({ canEdit, canPublish }: { canEdit: boolean; canPublish: boolean }) {
   const { agents, workRules, workCompliance, assignWorkRule, setWeekOff } = useWfm()
-  const status = useScheduleSync((s) => s.status)
-  const syncCanWrite = useScheduleSync((s) => s.canWrite)
-  const online = status !== "idle" && status !== "offline"
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulk, setBulk] = useState<{ ruleId: string; start: string; weekOff: number[]; weekOffMode: WeekOffMode }>({ ruleId: workRules[0]?.id ?? "", start: workRules[0]?.defaultStart ?? "09:00", weekOff: workRules[0]?.weekOff ?? [5, 6], weekOffMode: workRules[0]?.weekOffMode ?? "fixed" })
   const [teamFilter, setTeamFilter] = useState("all")
-  const { ranges } = useRanges()
-  const [rangeId, setRangeId] = useState<RangeId>("next")
-  const [step, setStep] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   const teams = [...new Set(agents.map((a) => a.team))].sort()
@@ -398,49 +379,9 @@ function AgentsTab({ canEdit }: { canEdit: boolean }) {
     setMsg({ ok: true, text: `Staggered 2 days off in a row across ${ids.length} agent${ids.length === 1 ? "" : "s"} (Sat–Sun, Sun–Mon, Mon–Tue, …).` })
   }
 
-  async function writeToSchedules() {
-    const r = ranges[rangeId]
-    setMsg(null)
-    try {
-      const res = await applyWorkRules(r.start, r.end, selected.size ? [...selected] : null, setStep)
-      setMsg({
-        ok: true,
-        text: res.changed
-          ? `Updated ${res.changed} agent-day${res.changed === 1 ? "" : "s"} on ${res.days} date${res.days === 1 ? "" : "s"} with the work rules.` +
-            (res.conflicts ? ` ${res.conflicts} date${res.conflicts === 1 ? "" : "s"} skipped — someone saved them meanwhile; try again.` : "") +
-            " Published days changed live — those agents and their team leaders got a pop-up."
-          : "Every schedule in the range already follows the work rules.",
-      })
-    } catch (e) {
-      setMsg({ ok: false, text: errorText(e) })
-    } finally {
-      setStep(null)
-    }
-  }
-
   return (
     <div className="space-y-4">
-      {canEdit && (
-        <Card className="glass">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base"><CalendarCheck className="h-4 w-4 text-primary" /> Write work rules into the schedules</CardTitle>
-            <p className="text-xs text-muted-foreground">
-              Dates nobody has opened yet already follow each agent's rule. This rewrites days that are already saved — shift times, breaks and week offs
-              {selected.size ? ` for the ${selected.size} selected agent${selected.size === 1 ? "" : "s"}` : " for every agent on a rule or with week offs"}. Channels stretch to the new shift; meetings and OT inside the shift are kept.
-            </p>
-          </CardHeader>
-          <CardContent className="flex flex-wrap items-center gap-2 text-xs">
-            <Select aria-label="Dates to update" className="h-8 text-xs" value={rangeId} onChange={(e) => setRangeId(e.target.value as RangeId)}
-              options={(Object.keys(ranges) as RangeId[]).map((id) => ({ value: id, label: ranges[id].label }))} />
-            <Button size="sm" className="h-8" disabled={!online || !syncCanWrite || !!step} onClick={() => void writeToSchedules()}
-              title={online ? undefined : "Needs the server connection"}>
-              {step ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CalendarCheck className="h-3.5 w-3.5" />} Apply to schedules
-            </Button>
-            {step && <span role="status" className="text-primary">{step}</span>}
-            {!online && <span className="text-muted-foreground">Connect to the server to update saved schedules.</span>}
-          </CardContent>
-        </Card>
-      )}
+      {canEdit && <WorkRuleAlign selectedIds={[...selected]} canPublish={canPublish} />}
       {msg && (
         <p role="status" className={cn("rounded-lg border px-3 py-2 text-xs", msg.ok ? "border-emerald-500/40 text-emerald-600 dark:text-emerald-400" : "border-destructive/40 text-destructive")}>
           {msg.ok ? "✓ " : "✕ "}{msg.text}
@@ -672,12 +613,31 @@ function ComplianceTab({ canEdit }: { canEdit: boolean }) {
 export function WorkRules() {
   const { agents, workRules, workCompliance, can } = useWfm()
   const canEdit = can("shiftPatterns", "edit")
+  const user = useAuth((s) => s.user)
+  const canPublish = !!user && (user.is_superuser || user.permission_codes.includes("schedule:publish"))
   const onRule = agents.filter((a) => parseWorkRulePatternId(a.shiftPatternId)).length
   const withOff = agents.filter((a) => a.weekOff?.length).length
   const badRules = workRules.filter((r) => checkWorkRule(r, workCompliance).length).length
+  const [importOpen, setImportOpen] = useState(false)
+  const [imported, setImported] = useState<string | null>(null)
   return (
     <>
-      <PageHeader title="Work Rules" subtitle="Shift + break patterns, week offs and the compliance rules every schedule is checked against" />
+      <PageHeader
+        title="Work Rules"
+        subtitle="Shift + break patterns, week offs and the compliance rules every schedule is checked against"
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <SettingsSyncBadge />
+            <PermissionGate module="shiftPatterns">
+              <Button variant="outline" onClick={() => setImportOpen(true)}><Upload className="h-4 w-4" /> Bulk import</Button>
+            </PermissionGate>
+          </div>
+        }
+      />
+      <WorkRuleImportDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={setImported} />
+      {imported && (
+        <p role="status" className="mb-4 rounded-lg border border-emerald-500/40 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">✓ Imported {imported}</p>
+      )}
       <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiCard label="Work rules" value={workRules.length} hint="shift + break patterns" icon={Coffee} />
         <KpiCard label="Agents on a rule" value={onRule} hint={`of ${agents.length}`} tone={onRule === agents.length ? "good" : "warn"} icon={CalendarCheck} />
@@ -690,7 +650,7 @@ export function WorkRules() {
           <TabsTrigger value="rules">Shift & break patterns</TabsTrigger>
           <TabsTrigger value="compliance">Compliance</TabsTrigger>
         </TabsList>
-        <TabsContent value="agents"><AgentsTab canEdit={canEdit} /></TabsContent>
+        <TabsContent value="agents"><AgentsTab canEdit={canEdit} canPublish={canPublish} /></TabsContent>
         <TabsContent value="rules"><RulesTab /></TabsContent>
         <TabsContent value="compliance"><ComplianceTab canEdit={canEdit} /></TabsContent>
       </Tabs>

@@ -7,14 +7,15 @@ from app.api.v1 import health
 from app.modules.ai.router import router as ai_router
 from app.modules.attendance.router import router as attendance_router
 from app.modules.autonomy.router import router as autonomy_router
+from app.modules.connect.router import router as connect_router
 from app.modules.forecasting.router import router as forecasting_router
+from app.modules.hcplanning.router import router as hcplanning_router
 from app.modules.identity.router import (
     audit_router,
     auth_router,
     roles_router,
     users_router,
 )
-from app.modules.hcplanning.router import router as hcplanning_router
 from app.modules.integrations.router import router as integrations_router
 from app.modules.intraday.router import router as intraday_router
 from app.modules.notifications.router import router as notifications_router
@@ -40,6 +41,7 @@ api_router.include_router(scheduling_router)
 api_router.include_router(intraday_router)
 api_router.include_router(requests_router)
 api_router.include_router(integrations_router)
+api_router.include_router(connect_router)
 api_router.include_router(hcplanning_router)
 api_router.include_router(attendance_router)
 api_router.include_router(reports_router)

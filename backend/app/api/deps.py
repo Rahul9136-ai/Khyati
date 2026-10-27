@@ -5,7 +5,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import Depends
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import APIKeyHeader, OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -15,12 +15,26 @@ from app.db.session import get_db
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_PREFIX}/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl=f"{settings.API_V1_PREFIX}/auth/token", auto_error=False
+)
+#: Connected tools (CRMs…) authenticate with an API key instead of a login —
+#: see app/modules/connect.
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-async def get_current_user(db: DbSession, token: Annotated[str, Depends(oauth2_scheme)]):
+async def get_current_user(
+    db: DbSession,
+    token: Annotated[str | None, Depends(oauth2_scheme)],
+    api_key: Annotated[str | None, Depends(api_key_header)],
+):
+    from app.modules.connect.keys import KEY_PREFIX, resolve_api_key
     from app.modules.identity.models import User  # avoid import cycle at module load
 
+    if api_key or (token and token.startswith(KEY_PREFIX)):
+        return await resolve_api_key(db, api_key or token or "")
+    if not token:
+        raise AuthenticationError("Not authenticated")
     payload = decode_token(token, "access")
     user = await db.get(User, uuid.UUID(payload["sub"]))
     if user is None or not user.is_active:

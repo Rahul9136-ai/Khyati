@@ -112,9 +112,16 @@ The repo is a monorepo with two independently runnable halves:
   the work splits into equal stretches) assigned to agents at a start time, each with their own
   **week off** — *Fixed* (same days every week, e.g. the "Fixed Sat–Sun" preset) or *Rotating*
   (the days move one day later each week) — set with presets or Mon–Sun toggles; bulk assign and
-  "stagger days off" across a team. Unopened dates
-  follow the rules automatically (a full-shift *Week off* activity on days off); **Apply to
-  schedules** rewrites saved days for a range. **Compliance rules** (break in every shift of 3h+,
+  "stagger days off" across a team. **Bulk import** takes an Excel / CSV file (or rows pasted
+  from Excel): a *Work rules* sheet (Name · Shift Hours · Breaks e.g. "Break 15; Lunch 30;
+  Break 15" · Week Off · Fixed/Rotating · Usual Start) and an *Agents* sheet (Work Rule · Start ·
+  Week Off · Fixed/Rotating); the downloadable template is pre-filled with the current setup, and
+  every row is checked in a preview before anything changes. Unopened dates
+  follow the rules automatically (a full-shift *Week off* activity on days off). **Align schedules
+  to work rules** (on Work Rules and Scheduling) sets any period you pick — for everyone on a rule,
+  one team or the selected agents — to the rules: preview per day (schedules changing, week offs
+  added / removed, shift and break moves), then align, optionally publishing the period. Offline
+  it aligns the schedules kept in the browser. **Compliance rules** (break in every shift of 3h+,
   max 3h in a row without a break, lunch on long shifts, max days in a row, days off a week, weekly
   hours, rest between shifts) are checked on rule cards, in a per-agent report, and on the
   Scheduling timeline (⏱ badge, offending stretch outlined in red). Rules and assignments are kept
@@ -179,6 +186,23 @@ The repo is a monorepo with two independently runnable halves:
 - A policy (`manual` / `assisted` / `autonomous` + auto-apply confidence threshold) governs
   whether a proposal auto-applies or waits for a human approve/reject.
 - Full run history and a decision audit trail, exposed on the **Autonomous Agents** page.
+
+### Shared settings, API keys & webhooks (connect a CRM)
+- **Saved for everyone** — work rules, compliance limits, shift patterns and each agent's rule /
+  start / week off are stored per organisation (`GET/PUT /scheduling/settings/{key}`, versioned,
+  409 on a stale save). Every browser loads them at sign-in, saves changes as they're made, picks
+  up other people's changes every 20 s and uploads offline edits when back online; the Work Rules
+  page shows "Saved for everyone".
+- **API keys** (Settings → API & Webhooks) — named keys limited to chosen permissions (never more
+  than their creator has), optional expiry, shown once, stored hashed, revocable. A tool sends
+  `X-API-Key: wfm_…` (or `Authorization: Bearer wfm_…`) and uses the normal REST API.
+- **Webhooks** — signed JSON events (`schedule.updated`, `schedule.published`, `slot.opened`,
+  `slot.claimed`, `slot.released`, `settings.updated`) written to an outbox in the same transaction
+  as the change and sent within seconds; `X-WFM-Signature: sha256=HMAC(secret, "{timestamp}.{body}")`.
+  Failures retry after 30 s / 2 min / 10 min / 1 h / 6 h; a delivery log with payloads, redeliver,
+  pause, rotate secret and "Send test".
+- **Inbound** — `POST /connect/inbound/time-off` lets a CRM / HR tool mark (or remove, by
+  `external_id`) leave, absence, week off or other activities for an agent over a date range.
 
 ### Workforce, access & onboarding
 - Employees, dynamic **Skills** (add a new skill/LOB and it gets its own forecast + Erlang

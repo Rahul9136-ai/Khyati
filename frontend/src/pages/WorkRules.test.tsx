@@ -11,7 +11,11 @@ import { useScheduleSync } from "@/lib/scheduleSync"
 import { WorkRules } from "@/pages/WorkRules"
 import { useWfm } from "@/store/wfm"
 
-vi.mock("@/lib/api", () => ({ api: { get: vi.fn(), put: vi.fn(), post: vi.fn() } }))
+vi.mock("@/lib/api", () => ({
+  api: { get: vi.fn(), put: vi.fn(), post: vi.fn() },
+  setSessionExpiredHandler: vi.fn(),
+  tokenStore: { get: () => null, set: vi.fn(), clear: vi.fn() },
+}))
 const get = vi.mocked(api.get)
 const put = vi.mocked(api.put)
 const post = vi.mocked(api.post)
@@ -69,6 +73,25 @@ describe("Work Rules page", () => {
     expect(useWfm.getState().agents[0].weekOffMode).toBe("fixed")
   })
 
+  it("bulk imports agents' rules and week offs from pasted rows", () => {
+    renderPage()
+    fireEvent.click(screen.getByRole("button", { name: /Bulk import/ }))
+    const dialog = screen.getByRole("dialog")
+    fireEvent.change(within(dialog).getByLabelText("Paste rows"), {
+      target: { value: `Agent ID\tWork Rule\tStart\tWeek Off\tWeek Off Type\n${A.id}\twr-9h\t08:00\tSat, Sun\tFixed\n${B.id}\t\t\tFri-Sat\tRotating\nnobody\twr-8h\t\t\t` },
+    })
+    fireEvent.click(within(dialog).getByRole("button", { name: /Check pasted rows/ }))
+    const table = within(dialog).getByRole("table", { name: "Imported agents" })
+    expect(within(table).getByText("9h · 1h lunch + 2×15m breaks from 08:00 · week off Fixed · Sat, Sun")).toBeInTheDocument()
+    expect(within(table).getByText(/Unknown agent "nobody"/)).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Import 2 agents" }))
+    const [a, b] = useWfm.getState().agents
+    expect(a).toMatchObject({ shiftPatternId: "wr:wr-9h@08:00", weekOff: [5, 6], weekOffMode: "fixed" })
+    expect(b).toMatchObject({ weekOff: [4, 5], weekOffMode: "rotating" })
+    expect(screen.getByText(/Imported 2 agents set \(1 row skipped\)/)).toBeInTheDocument()
+  })
+
   it("staggers two days off in a row across the selected agents", () => {
     renderPage()
     fireEvent.click(screen.getByRole("checkbox", { name: "Select all" }))
@@ -80,8 +103,14 @@ describe("Work Rules page", () => {
   it("writes the rules into saved schedules: new shift, rule breaks and the week off", async () => {
     useWfm.getState().assignWorkRule([A.id], { ruleId: "wr-8h", start: "09:00", weekOff: [5, 6] })
     renderPage()
-    fireEvent.click(screen.getByRole("button", { name: /Apply to schedules/ }))
-    expect(await screen.findByText(/Updated 1 agent-day on 1 date with the work rules/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Next week" }))
+    fireEvent.click(screen.getByRole("button", { name: /Preview changes/ }))
+    const preview = await screen.findByRole("table", { name: "Alignment preview" })
+    expect(within(preview).getByText("Sat 7 Nov")).toBeInTheDocument()
+    expect(screen.getByText(/1 schedule on 1 day will change/)).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled() // preview changes nothing
+    fireEvent.click(screen.getByRole("button", { name: "Align 1 schedule" }))
+    expect(await screen.findByText(/Aligned 1 schedule on 1 day \(Mon 2 Nov – Sun 8 Nov\) with the work rules/)).toBeInTheDocument()
     expect(put).toHaveBeenCalledTimes(1)
     const [url, body] = put.mock.calls[0] as [string, { items: { agent_key: string; shift_start: number; shift_end: number; base_version: number; breaks: unknown[]; activities: { type: string }[] }[] }]
     expect(url).toBe(`/scheduling/day-plans/${SAT}`)

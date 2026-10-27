@@ -54,6 +54,7 @@ import {
   parseWorkRulePatternId,
   WEEK_OFF_ID,
   workRulePattern,
+  workRulePatternId,
   type WeekOffMode,
   type WorkCompliance,
   type WorkRule,
@@ -226,6 +227,16 @@ export function scheduleForDate(s: ScheduleSlicesState, date: string) {
   }
 }
 
+/** Scheduling configuration shared through the server (GET/PUT /scheduling/settings). */
+export interface ServerSettings {
+  workRules: WorkRule[]
+  workCompliance: WorkCompliance
+  /** Ordinary shift patterns (work-rule ones are generated from the rules). */
+  shiftPatterns: ShiftPattern[]
+  /** agentId → their pattern (incl. "wr:<rule>@HH:MM") and week off. */
+  agentRules: Record<string, { shiftPatternId?: string | null; weekOff?: number[] | null; weekOffMode?: WeekOffMode | null }>
+}
+
 /** Shift patterns with every work-rule pattern an agent uses (re)generated from
  *  the current rules, and ones nobody uses any more dropped. */
 function withRulePatterns(patterns: ShiftPattern[], agents: Agent[], rules: WorkRule[]): ShiftPattern[] {
@@ -373,8 +384,17 @@ interface WfmState {
   assignWorkRule: (agentIds: string[], a: { ruleId: string; start: string; weekOff: number[]; weekOffMode?: WeekOffMode } | null) => void
   /** Change only the week offs of these agents (mode: fixed / rotating; omitted = keep). */
   setWeekOff: (agentIds: string[], weekOff: number[], mode?: WeekOffMode) => void
+  /** Bulk import: create / update rules (by existingId, or new — agents can
+   *  point at a new one as "new:<lower-case name>"), then set agents' rule,
+   *  start and week off. undefined fields are left as they are. */
+  importWorkRules: (
+    rules: { existingId?: string; rule: Omit<WorkRule, "id"> }[],
+    assignments: { agentId: string; ruleId?: string | null; start?: string; weekOff?: number[]; weekOffMode?: WeekOffMode }[],
+  ) => void
   workCompliance: WorkCompliance
   setWorkCompliance: (c: WorkCompliance) => void
+  /** Shared settings loaded from the server (lib/settingsSync) — no audit entry. */
+  applyServerSettings: (s: Partial<ServerSettings>) => void
 
   shrinkage: number
   setShrinkage: (n: number) => void
@@ -441,6 +461,9 @@ interface WfmState {
   updateAgentDay: (agentId: string, patch: AgentDayPatch, detail: string) => void
   /** Same as updateAgentDay for many agents at once (bulk edits) — one audit entry. */
   updateAgentDays: (items: { agentId: string; patch: AgentDayPatch }[], detail: string) => void
+  /** updateAgentDays for any date: the selected one, or one kept in dayStore
+   *  (a date never opened gets one, starting from its defaults). */
+  applyDayPatches: (date: string, items: { agentId: string; patch: AgentDayPatch }[], detail: string) => void
   /** Apply schedules loaded from the backend (server sync) — no local audit
    *  entry, since the change originated on the server. Unknown agents are ignored. */
   applyServerDays: (items: { agentId: string; patch: AgentDayPatch }[]) => void
@@ -730,6 +753,71 @@ export const useWfm = create<WfmState>()(
               entry(s.currentUser, "Schedule", "Changed week offs", `${ids.size} agent${ids.size === 1 ? "" : "s"} · off ${describeWeekOff(days, mode)}`),
               ...s.auditLog,
             ],
+          }
+        }),
+      importWorkRules: (rules, assignments) =>
+        set((s) => {
+          const ids = new Map<string, string>()
+          let workRules = [...s.workRules]
+          let added = 0
+          for (const { existingId, rule } of rules) {
+            if (existingId && workRules.some((r) => r.id === existingId)) {
+              workRules = workRules.map((r) => (r.id === existingId ? { ...r, ...rule } : r))
+            } else {
+              const id = "wr-" + uid()
+              ids.set(`new:${rule.name.toLowerCase()}`, id)
+              workRules.push({ ...rule, id })
+              added++
+            }
+          }
+          const byAgent = new Map(assignments.map((x) => [x.agentId, x]))
+          const agents = s.agents.map((a) => {
+            const x = byAgent.get(a.id)
+            if (!x) return a
+            let next: Agent = { ...a }
+            const ref = parseWorkRulePatternId(a.shiftPatternId)
+            if (x.ruleId === null) next = { ...next, shiftPatternId: ref ? undefined : a.shiftPatternId }
+            else if (x.ruleId) next.shiftPatternId = workRulePatternId(ids.get(x.ruleId) ?? x.ruleId, x.start ?? ref?.start ?? "09:00")
+            else if (x.start && ref) next.shiftPatternId = workRulePatternId(ref.ruleId, x.start)
+            if (x.weekOff) next = { ...next, weekOff: [...x.weekOff].sort(), weekOffMode: x.weekOffMode ?? "fixed" }
+            else if (x.ruleId === null) next = { ...next, weekOff: undefined, weekOffMode: undefined }
+            return next
+          })
+          const updated = rules.length - added
+          return {
+            workRules,
+            agents,
+            shiftPatterns: withRulePatterns(s.shiftPatterns, agents, workRules),
+            auditLog: [
+              entry(
+                s.currentUser,
+                "Schedule",
+                "Imported work rules",
+                [added && `${added} new rule${added === 1 ? "" : "s"}`, updated && `${updated} rule${updated === 1 ? "" : "s"} updated`, `${byAgent.size} agent${byAgent.size === 1 ? "" : "s"} set`]
+                  .filter(Boolean)
+                  .join(" · "),
+              ),
+              ...s.auditLog,
+            ],
+          }
+        }),
+      applyServerSettings: (next) =>
+        set((s) => {
+          const workRules = next.workRules ?? s.workRules
+          const agents = next.agentRules
+            ? s.agents.map((a) => {
+                const r = next.agentRules![a.id]
+                if (!r) return a
+                const out: Agent = { ...a, shiftPatternId: r.shiftPatternId ?? undefined, weekOff: r.weekOff ?? undefined, weekOffMode: r.weekOffMode ?? undefined }
+                return out
+              })
+            : s.agents
+          const own = next.shiftPatterns ?? s.shiftPatterns.filter((p) => !parseWorkRulePatternId(p.id))
+          return {
+            workRules,
+            workCompliance: next.workCompliance ?? s.workCompliance,
+            agents,
+            shiftPatterns: withRulePatterns(own, agents, workRules),
           }
         }),
       workCompliance: DEFAULT_WORK_COMPLIANCE,
@@ -1043,6 +1131,21 @@ export const useWfm = create<WfmState>()(
             ...dayPatchSlices(s, items),
             auditLog: [entry(s.currentUser, "Schedule", items.length > 1 ? "Bulk-edited schedules" : "Edited schedule on timeline", detail), ...s.auditLog],
           }
+        }),
+      applyDayPatches: (date, items, detail) =>
+        set((s) => {
+          if (!items.length) return s
+          const audit = [entry(s.currentUser, "Schedule", "Bulk-edited schedules", `${date} · ${items.length} schedule${items.length === 1 ? "" : "s"} · ${detail}`), ...s.auditLog]
+          if (date === s.scheduleDate) return { ...dayPatchSlices(s, items), auditLog: audit }
+          const next = dayPatchSlices(scheduleForDate(s, date), items)
+          const parked: DaySlices = {
+            shifts: Object.fromEntries(next.agents.map((a) => [a.id, a.shift])),
+            breakOverrides: next.breakOverrides,
+            channelPlan: next.channelPlan,
+            overtimePlan: next.overtimePlan,
+            activityPlan: next.activityPlan,
+          }
+          return { dayStore: { ...s.dayStore, [date]: parked }, auditLog: audit }
         }),
       channelPlan: {},
       overtimePlan: {},

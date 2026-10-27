@@ -2,6 +2,7 @@ import { Loader2 } from "lucide-react"
 import { useEffect } from "react"
 
 import { startScheduleSync, stopScheduleSync } from "@/lib/scheduleSync"
+import { startSettingsSync, stopSettingsSync } from "@/lib/settingsSync"
 import { Login } from "@/pages/Login"
 import { useAuth } from "@/store/auth"
 
@@ -21,7 +22,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (status !== "authenticated") return
     void startScheduleSync({ canWrite })
-    return () => stopScheduleSync()
+    // Work rules, compliance, shift patterns and agents' week offs are shared too.
+    void startSettingsSync({ canWrite })
+    return () => {
+      stopScheduleSync()
+      stopSettingsSync()
+    }
   }, [status, canWrite])
 
   if (status === "booting") {

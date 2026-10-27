@@ -196,6 +196,21 @@ class ChannelPlanDraft(UUIDMixin, TenantMixin, TimestampMixin, Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
 
 
+class WorkspaceSetting(UUIDMixin, TenantMixin, TimestampMixin, Base):
+    """A piece of scheduling configuration saved for the whole organisation, so
+    every browser (and any connected tool) sees the same: work rules, the
+    compliance limits, shift patterns and each agent's rule / week off. One row
+    per key; `version` guards against overwriting someone else's change."""
+
+    __tablename__ = "workspace_settings"
+    __table_args__ = (UniqueConstraint("organization_id", "key"),)
+
+    key: Mapped[str] = mapped_column(String(64))
+    value: Mapped[dict | list] = mapped_column(JSON)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_by: Mapped[str] = mapped_column(String(255), default="")
+
+
 class SchedulingPolicy(UUIDMixin, TenantMixin, TimestampMixin, Base):
     """Organisation-wide scheduling policy: the country labour-law preset the
     day plans are checked against (see `labour_law.py`) plus local overrides

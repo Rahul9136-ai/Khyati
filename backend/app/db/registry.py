@@ -9,9 +9,10 @@ from __future__ import annotations
 from app.db.base import Base  # noqa: F401
 from app.modules.attendance import models as attendance_models  # noqa: F401
 from app.modules.autonomy import models as autonomy_models  # noqa: F401
+from app.modules.connect import models as connect_models  # noqa: F401
 from app.modules.forecasting import models as forecasting_models  # noqa: F401
-from app.modules.identity import models as identity_models  # noqa: F401
 from app.modules.hcplanning import models as hcplanning_models  # noqa: F401
+from app.modules.identity import models as identity_models  # noqa: F401
 from app.modules.integrations import models as integration_models  # noqa: F401
 from app.modules.intraday import models as intraday_models  # noqa: F401
 from app.modules.notifications import models as notification_models  # noqa: F401

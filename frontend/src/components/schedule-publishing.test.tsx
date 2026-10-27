@@ -110,6 +110,29 @@ describe("3-month overview", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument()
   })
 
+  it("shows week offs, leave and absence in place of the shift, with totals", async () => {
+    const day = (date: string, activities: string[]) => ({ plan_date: date, agent_key: a01.id, agent_name: a01.name, team: a01.team, shift_start: 540, shift_end: 1020, ot_minutes: 0, activities, version: 1, published: true })
+    get.mockResolvedValue({ data: { data: [day(tomorrow, ["leave"]), day(addDays(today, 2), ["absence", "meeting"]), day(addDays(today, 3), ["meeting"])] } })
+    // a02 has Sat–Sun off by work rule: unsaved dates show OFF from the rule.
+    useWfm.setState({ agents: AGENTS.map((a) => (a.id === a02.id ? { ...a, weekOff: [5, 6], weekOffMode: "fixed" as const } : a)) })
+    renderWith(<ScheduleOverview agents={[a01, useWfm.getState().agents[1]]} onOpenDate={() => {}} />)
+
+    const leave = await screen.findByRole("button", { name: new RegExp(`^${a01.name} · .* · Leave · published$`) }, { timeout: 5000 })
+    expect(leave).toHaveTextContent("LV")
+    const absent = screen.getByRole("button", { name: new RegExp(`^${a01.name} · .* · Absence · Meeting · published$`) })
+    expect(absent).toHaveTextContent("ABS")
+    expect(screen.getByRole("button", { name: new RegExp(`^${a01.name} · .* · 09:00–17:00 · Meeting · published$`) })).toHaveTextContent("09:00")
+
+    const { start, end } = scheduleHorizon(today)
+    // Today comes from the live timeline (no week off marked there), so it's left out.
+    const weekends = datesBetween(start, end).filter((d) => d !== today && [0, 6].includes(new Date(`${d}T00:00:00`).getDay())).length
+    const offs = screen.getAllByRole("button", { name: new RegExp(`^${a02.name} · .* · Week off · draft$`) })
+    expect(offs).toHaveLength(weekends)
+    expect(offs[0]).toHaveTextContent("OFF")
+    expect(screen.getByText(`${weekends} OFF`)).toBeInTheDocument() // a02's tally
+    expect(screen.getByText("1 ABS · 1 LV")).toBeInTheDocument() // a01's tally
+  })
+
   it("view-only users see only published days", async () => {
     useScheduleSync.setState({ canWrite: false, serverAgents: {} })
     get.mockResolvedValue({ data: { data: [] } })
@@ -177,6 +200,20 @@ describe("my schedule (agent view)", () => {
     expect(get.mock.calls[0][0]).toBe("/scheduling/my-schedule")
     fireEvent.click(row)
     expect(onOpen).toHaveBeenCalledWith(tomorrow)
+  })
+
+  it("shows a whole day off or on leave as that, not as a shift", async () => {
+    useAuth.setState({ user: { id: "u", email: "ava@x", full_name: "Ava", is_superuser: false, role_names: ["Employee"], permission_codes: ["schedule:read"] } })
+    const base = { agent_key: a01.id, agent_name: a01.name, team: "Alpha", shift_start: 540, shift_end: 1020, breaks: [{ id: "b", type: "break", label: "Break", start: 640, end: 655 }], channels: [{ id: "p", channel: "phone", start: 540, end: 1020 }], overtime: [] }
+    get.mockResolvedValue({ data: { data: { agent_keys: [a01.id], days: [
+      { ...base, plan_date: tomorrow, activities: [{ id: "week-off", type: "off", start: 540, end: 1020, note: "Week off" }] },
+      { ...base, plan_date: addDays(today, 2), activities: [{ id: "l", type: "leave", start: 540, end: 1020, note: "Family wedding" }] },
+    ] } } })
+    renderWith(<MySchedule agentId={a01.id} onOpenDate={() => {}} />)
+    expect(await screen.findByText("Week off — not working")).toBeInTheDocument()
+    expect(screen.getByText("Leave — not working · Family wedding")).toBeInTheDocument()
+    expect(screen.queryByText(/09:00–17:00/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Phone/)).not.toBeInTheDocument()
   })
 
   it("staff previewing the Agent view get that agent's published days", async () => {

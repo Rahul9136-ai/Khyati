@@ -10,7 +10,14 @@ from fastapi.responses import Response
 
 from app.api.deps import DbSession, require_permission
 from app.modules.identity.models import User
-from app.modules.scheduling import channel_drafts, dayplan_service, labour_law, offers, service
+from app.modules.scheduling import (
+    channel_drafts,
+    dayplan_service,
+    labour_law,
+    offers,
+    service,
+    settings_service,
+)
 from app.modules.scheduling.models import ShiftTemplate
 from app.modules.scheduling.schemas import (
     ChannelDraftOut,
@@ -45,6 +52,8 @@ from app.modules.scheduling.schemas import (
     OffersUpsertOut,
     ScheduleDetailOut,
     ScheduleOut,
+    SettingIn,
+    SettingOut,
     ShiftIn,
     ShiftOut,
     ShiftTemplateIn,
@@ -445,6 +454,34 @@ async def publish_channel_drafts(body: ChannelRangeIn, db: DbSession, actor: Pub
         applied=res["applied"], stale=[DaySkipped(**s) for s in res["stale"]],
         published_days=res["published_days"], notified=res["notified"],
     ))
+
+
+# ------------------------------------------------- shared settings (config)
+
+
+@router.get("/settings", response_model=ApiResponse[list[SettingOut]])
+async def list_settings(db: DbSession, user: Reader):
+    """Work rules, compliance limits, shift patterns and agents' rules / week
+    offs saved for the organisation (keys that were never saved are absent)."""
+    rows = await settings_service.list_settings(db, org_scope(user))
+    return ApiResponse(data=[SettingOut.model_validate(r, from_attributes=True) for r in rows])
+
+
+@router.get("/settings/{key}", response_model=ApiResponse[SettingOut])
+async def get_setting(key: str, db: DbSession, user: Reader):
+    row = await settings_service.get_setting(db, org_scope(user), key)
+    return ApiResponse(data=SettingOut.model_validate(row, from_attributes=True))
+
+
+@router.put("/settings/{key}", response_model=ApiResponse[SettingOut])
+async def put_setting(key: str, body: SettingIn, db: DbSession, actor: Writer):
+    """Save one setting (work_rules, work_compliance, shift_patterns or
+    agent_rules). Pass the `base_version` you read to avoid overwriting a newer
+    change (409). Every browser and connected tool picks it up."""
+    row = await settings_service.put_setting(
+        db, org_scope(actor), key, body.value, body.base_version, actor=actor
+    )
+    return ApiResponse(data=SettingOut.model_validate(row, from_attributes=True))
 
 
 # ------------------------------------------------------------ country labour law

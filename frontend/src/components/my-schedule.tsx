@@ -62,7 +62,10 @@ export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDat
               <div key={ws}>
                 <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Week of {fmtDay(ws)}</p>
                 <ul className="divide-y rounded-lg border">
-                  {days.map((d) => (
+                  {days.map((d) => {
+                    // A whole day off / leave / absence replaces the shift.
+                    const allDay = d.activities.find((x) => ACTIVITY_BY_ID[x.type]?.fullShift && x.start <= d.shift_start && x.end >= d.shift_end)
+                    return (
                     <li key={d.plan_date}>
                       <button
                         type="button"
@@ -70,6 +73,12 @@ export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDat
                         className={cn("flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-xs hover:bg-accent", d.plan_date === today && "bg-primary/5")}
                       >
                         <span className={cn("w-24 font-semibold", d.plan_date === today && "text-primary")}>{fmtDay(d.plan_date)}{d.plan_date === today && " · today"}</span>
+                        {allDay ? (
+                          <span className="rounded px-2 py-0.5 font-semibold text-white" style={{ background: ACTIVITY_BY_ID[allDay.type].color }}>
+                            {ACTIVITY_BY_ID[allDay.type].label} — not working{allDay.note && allDay.note !== ACTIVITY_BY_ID[allDay.type].label ? ` · ${allDay.note}` : ""}
+                          </span>
+                        ) : (
+                        <>
                         <span className="w-24 font-semibold tabular-nums">{fmtHM(d.shift_start)}–{fmtHM(d.shift_end)}</span>
                         <span className="flex flex-wrap gap-1">
                           {lanes(d.channels).map(([ch, s, e]) => (
@@ -93,9 +102,12 @@ export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDat
                             </span>
                           ))}
                         </span>
+                        </>
+                        )}
                       </button>
                     </li>
-                  ))}
+                    )
+                  })}
                 </ul>
               </div>
             ))}

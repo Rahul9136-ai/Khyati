@@ -29,7 +29,7 @@ from app.modules.identity.models import User
 from app.modules.identity.service import record_audit
 from app.modules.scheduling import dayplan as dp
 from app.modules.scheduling import dayplan_service as days
-from app.modules.scheduling import schedule_notify
+from app.modules.scheduling import events, schedule_notify
 from app.modules.scheduling.models import OfferClaim, ScheduleOffer
 from app.modules.scheduling.schemas import OfferClaimIn, OfferPatchIn, OffersUpsertIn
 from app.modules.workforce.models import Employee
@@ -186,6 +186,7 @@ async def upsert_offers(
             fresh.append((offer, gained))
     await db.flush()
     notified = await _notify_open(db, org_id, fresh, actor=actor) if body.notify else 0
+    await events.slots_opened(db, org_id, saved, action="opened")
     await record_audit(
         db,
         actor=actor,
@@ -282,6 +283,7 @@ async def patch_offer(
     if body.status is not None:
         offer.status = body.status
     await db.flush()
+    await events.slots_opened(db, org_id, [offer], action="updated")
     await record_audit(
         db,
         actor=actor,
@@ -414,6 +416,7 @@ async def claim(
     offer.claims.append(c)
     await db.flush()
     await db.refresh(c, ["created_at"])
+    await events.slot_claim(db, org_id, "slot.claimed", offer, c)
     return offer
 
 
@@ -464,4 +467,5 @@ async def cancel_claim(
         )
     c.status, c.cancelled_by, c.cancelled_at = "cancelled", user.id, datetime.now(UTC)
     await db.flush()
+    await events.slot_claim(db, org_id, "slot.released", offer, c)
     return offer

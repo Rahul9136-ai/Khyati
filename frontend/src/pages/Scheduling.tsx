@@ -7,6 +7,7 @@ import { Link, useSearchParams } from "react-router-dom"
 import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
 import { ChannelAutoPlan } from "@/components/channel-auto-plan"
+import { WorkRuleAlign } from "@/components/work-rule-align"
 import { ContinuousSchedule } from "@/components/continuous-schedule"
 import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
@@ -406,6 +407,7 @@ export function Scheduling() {
         </CardContent>
       </Card>
 
+      {!isAgent && canEditSchedule && <WorkRuleAlign canPublish={canPublish} />}
       {!isAgent && canEditSchedule && syncCanWrite && <ChannelAutoPlan canPublish={canPublish} />}
 
       {currentRole !== "Agent" && (

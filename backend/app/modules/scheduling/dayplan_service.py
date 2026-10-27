@@ -31,7 +31,7 @@ from app.core.exceptions import (
 from app.modules.identity.models import User
 from app.modules.identity.service import record_audit
 from app.modules.scheduling import dayplan as dp
-from app.modules.scheduling import labour_law, schedule_notify
+from app.modules.scheduling import events, labour_law, schedule_notify
 from app.modules.scheduling.models import DaySchedulePlan, SchedulingPolicy
 from app.modules.scheduling.schemas import (
     DayAddOvertimeIn,
@@ -230,6 +230,7 @@ async def save_day_plans(
     await db.flush()
     await _refresh(db, saved)
     await schedule_notify.notify_changes(db, org_id, plan_date, changes, actor=actor)
+    await events.schedule_updated(db, org_id, saved, action="dayplan.save")
     await record_audit(
         db,
         actor=actor,
@@ -251,6 +252,9 @@ async def reset_day_plan(
         text = schedule_notify.describe_change(_row_to_day(row), None)
         await schedule_notify.notify_changes(db, org_id, plan_date, [(row, text)], actor=actor)
     await db.delete(row)
+    await events.schedule_updated(
+        db, org_id, [], action="dayplan.reset", deleted=[(plan_date, agent_key)]
+    )
     await record_audit(
         db,
         actor=actor,
@@ -293,6 +297,7 @@ async def _apply_each(
     await db.flush()
     await _refresh(db, saved)
     await schedule_notify.notify_changes(db, org_id, plan_date, changes, actor=actor)
+    await events.schedule_updated(db, org_id, saved, action=action)
     await record_audit(
         db,
         actor=actor,
@@ -517,6 +522,7 @@ async def fill_missing(
         raise ValidationError(f"{len(problems)} schedule(s) break scheduling rules",
                               details=problems[:50])
     employee_ids = await _employee_ids_by_code(db, org_id, sorted({i.agent_key for i in todo}))
+    created: list[DaySchedulePlan] = []
     for i in todo:
         row = DaySchedulePlan(
             organization_id=org_id, plan_date=i.plan_date, agent_key=i.agent_key,
@@ -525,7 +531,9 @@ async def fill_missing(
         )
         _write_day(row, _in_to_day(i), actor)
         db.add(row)
+        created.append(row)
     await db.flush()
+    await events.schedule_updated(db, org_id, created, action="dayplan.fill")
     if todo:
         await record_audit(
             db, actor=actor, action="dayplan.fill", entity_type="day_schedule_plan",
@@ -553,6 +561,7 @@ async def publish(
         r.published_at, r.published_by = now, actor.id
     await db.flush()
     notified = await schedule_notify.notify_published(db, org_id, fresh, actor=actor)
+    await events.schedule_published(db, org_id, body.start, body.end, fresh)
     await record_audit(
         db, actor=actor, action="dayplan.publish", entity_type="day_schedule_plan",
         entity_id=f"{body.start.isoformat()}..{body.end.isoformat()}",

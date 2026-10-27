@@ -473,3 +473,78 @@ class DayComplianceOut(BaseModel):
     law: dict | None
     disclaimer: str
     agents: list[AgentComplianceOut]
+
+
+# ------------------------------------------- workspace settings (shared config)
+
+_HHMM = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+WeekOffMode = Literal["fixed", "rotating"]
+
+
+class _Loose(BaseModel):
+    """Extra fields are kept (the app may add some), known ones are checked."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class BreakStepIn(_Loose):
+    type: Literal["break", "lunch"]
+    minutes: int = Field(ge=5, le=240)
+
+
+class WorkRuleIn(_Loose):
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=120)
+    shiftMinutes: int = Field(ge=60, le=16 * 60)
+    breaks: list[BreakStepIn] = []
+    weekOff: list[int] = []
+    weekOffMode: WeekOffMode | None = None
+    defaultStart: str = _HHMM
+
+
+class PatternBreakIn(_Loose):
+    id: str
+    type: Literal["break", "lunch"]
+    label: str = ""
+    offsetMinutes: int = Field(ge=0, le=24 * 60)
+    durationMinutes: int = Field(ge=1, le=240)
+
+
+class ShiftPatternIn(_Loose):
+    id: str = Field(min_length=1, max_length=96)
+    name: str = Field(min_length=1, max_length=160)
+    start: str = _HHMM
+    end: str = _HHMM
+    breaks: list[PatternBreakIn] = []
+
+
+class AgentRuleIn(_Loose):
+    #: Shift pattern (a work rule's pattern is "wr:<rule id>@HH:MM").
+    shiftPatternId: str | None = None
+    weekOff: list[int] | None = None
+    weekOffMode: WeekOffMode | None = None
+
+
+class WorkComplianceIn(_Loose):
+    breakRequiredAfterHours: float | None = None
+    maxContinuousWorkHours: float | None = None
+    lunchRequiredAfterHours: float | None = None
+    minLunchMinutes: int = 30
+    maxConsecutiveWorkDays: int | None = None
+    minDaysOffPerWeek: int | None = None
+    maxWeeklyHours: float | None = None
+    minRestBetweenShiftsHours: float | None = None
+
+
+class SettingIn(BaseModel):
+    value: dict | list
+    #: The version this change is based on; a mismatch is rejected with 409.
+    base_version: int | None = None
+
+
+class SettingOut(BaseModel):
+    key: str
+    value: dict | list
+    version: int
+    updated_at: datetime
+    updated_by: str

@@ -23,7 +23,7 @@ from app.modules.identity.models import User
 from app.modules.identity.service import record_audit
 from app.modules.scheduling import dayplan as dp
 from app.modules.scheduling import dayplan_service as days
-from app.modules.scheduling import schedule_notify
+from app.modules.scheduling import events, schedule_notify
 from app.modules.scheduling.models import ChannelPlanDraft, DaySchedulePlan
 from app.modules.scheduling.schemas import ChannelDraftsIn, ChannelRangeIn
 
@@ -189,6 +189,7 @@ async def publish(
     await db.execute(delete(ChannelPlanDraft).where(*_in_range(org_id, body.start, body.end)))
     await db.flush()
     notified = await schedule_notify.notify_published(db, org_id, newly_published, actor=actor)
+    await events.schedule_published(db, org_id, body.start, body.end, newly_published)
     await record_audit(
         db,
         actor=actor,

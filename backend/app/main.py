@@ -1,6 +1,8 @@
 """FastAPI application factory: middleware, error handlers, router wiring."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -15,6 +17,8 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging, get_logger
+from app.db.session import AsyncSessionLocal
+from app.modules.connect import webhooks
 
 log = get_logger(__name__)
 
@@ -24,7 +28,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown hooks (warm caches, dispose engine, etc.)."""
     configure_logging()
     log.info("app.startup", env=settings.ENVIRONMENT, version=__version__)
+    # Sends queued webhook deliveries (see app/modules/connect/webhooks.py).
+    dispatcher = asyncio.create_task(webhooks.run_dispatcher(AsyncSessionLocal))
     yield
+    dispatcher.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await dispatcher
     log.info("app.shutdown")
 
 
