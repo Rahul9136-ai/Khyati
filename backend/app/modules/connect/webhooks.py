@@ -19,16 +19,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.modules.connect.models import WebhookDelivery, WebhookSubscription
 
@@ -59,6 +62,26 @@ TIMEOUT_SECONDS = 10
 #: Tests swap in an httpx.MockTransport.
 _transport: httpx.AsyncBaseTransport | None = None
 _kick: asyncio.Event | None = None
+
+
+async def blocked_url_reason(url: str) -> str | None:
+    """Why a webhook URL mustn't be called (production only: localhost and private
+    networks stay usable while developing). Checks every address the host resolves
+    to, so a public name pointing at an internal address is refused as well."""
+    if not settings.is_production:
+        return None
+    host = urlsplit(url).hostname
+    if not host:
+        return "URL has no host"
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+    except OSError:
+        return None  # doesn't resolve (yet) — nothing to reach; delivery reports the error
+    for info in infos:
+        ip = ipaddress.ip_address(str(info[4][0]).split("%")[0])
+        if not ip.is_global:
+            return f"{host} points to an internal address, which webhooks can't call"
+    return None
 
 
 def sign(secret: str, timestamp: str, body: bytes) -> str:
@@ -154,7 +177,10 @@ async def deliver(db: AsyncSession, delivery: WebhookDelivery, sub: WebhookSubsc
     delivery.attempts += 1
     delivery.last_attempt_at = _now()
     ok = False
+    blocked = await blocked_url_reason(sub.url)
     try:
+        if blocked:
+            raise httpx.InvalidURL(blocked)
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, transport=_transport) as client:
             resp = await client.post(sub.url, content=body, headers=headers)
         delivery.response_status = resp.status_code
@@ -163,7 +189,7 @@ async def deliver(db: AsyncSession, delivery: WebhookDelivery, sub: WebhookSubsc
         ok = 200 <= resp.status_code < 300
         if not ok:
             delivery.error = f"HTTP {resp.status_code}"
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         delivery.response_status = None
         delivery.response_body = ""
         delivery.error = f"{type(exc).__name__}: {exc}"[:500]

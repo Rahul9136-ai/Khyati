@@ -40,6 +40,11 @@ class AuthenticationError(AppError):
     code = "authentication_error"
 
 
+class TooManyRequestsError(AppError):
+    status_code = 429
+    code = "too_many_requests"
+
+
 class PermissionDeniedError(AppError):
     status_code = 403
     code = "permission_denied"

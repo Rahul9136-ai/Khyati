@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -13,6 +13,7 @@ from app.core.exceptions import (
     AuthenticationError,
     ConflictError,
     NotFoundError,
+    TooManyRequestsError,
     ValidationError,
 )
 from app.core.security import (
@@ -101,13 +102,35 @@ async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
     return result.scalar_one_or_none()
 
 
+# Failed sign-ins per email: too many in the window locks that email for the rest
+# of it. Kept in memory, so it's per process and resets on restart (the API runs
+# as one worker); unknown emails count too, so it doesn't reveal which exist.
+LOGIN_MAX_FAILURES = 10
+LOGIN_WINDOW = timedelta(minutes=15)
+_login_failures: dict[str, list[datetime]] = {}
+
+
+def _recent_failures(email: str, now: datetime) -> list[datetime]:
+    recent = [t for t in _login_failures.get(email, []) if now - t < LOGIN_WINDOW]
+    if recent:
+        _login_failures[email] = recent
+    else:
+        _login_failures.pop(email, None)
+    return recent
+
+
 async def authenticate(db: AsyncSession, email: str, password: str) -> User:
+    key, now = email.strip().lower(), datetime.now(UTC)
+    if len(_recent_failures(key, now)) >= LOGIN_MAX_FAILURES:
+        raise TooManyRequestsError("Too many failed sign-ins — try again in 15 minutes")
     user = await get_user_by_email(db, email)
     if user is None or not verify_password(password, user.hashed_password):
+        _login_failures.setdefault(key, []).append(now)
         raise AuthenticationError("Incorrect email or password")
     if not user.is_active:
         raise AuthenticationError("Account is disabled")
-    user.last_login_at = datetime.now(UTC)
+    _login_failures.pop(key, None)
+    user.last_login_at = now
     return user
 
 

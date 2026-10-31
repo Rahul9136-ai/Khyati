@@ -62,6 +62,11 @@ def create_app() -> FastAPI:
         structlog.contextvars.bind_contextvars(request_id=request_id)
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        if settings.is_production:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         structlog.contextvars.clear_contextvars()
         return response
 

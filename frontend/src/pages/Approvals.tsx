@@ -53,7 +53,7 @@ export function Approvals() {
     queryFn: () => listApprovals(),
     refetchInterval: 20_000,
   })
-  const { data: config } = useQuery({ queryKey: ["integration-config-status"], queryFn: getConfig, retry: false })
+  const { data: config } = useQuery({ queryKey: ["integration-config-status"], queryFn: getConfig, enabled: perms.includes("integration:manage"), retry: false })
 
   // open the raise dialog when navigated to with ?raise=1 (e.g. from RTA/Scheduling)
   useEffect(() => {

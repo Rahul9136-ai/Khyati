@@ -525,7 +525,7 @@ export function ContinuousSchedule({
           <input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} className="accent-primary" />
           Group by primary channel
         </label>
-        <span className="ml-1 flex items-center gap-1">
+        <span className="ml-1 flex flex-wrap items-center gap-1">
           <Scale className="h-3.5 w-3.5 text-muted-foreground" />
           <Select
             aria-label="Labour law country"
@@ -572,7 +572,7 @@ export function ContinuousSchedule({
           onChange={(e) => setSort(e.target.value as ScheduleSort)}
           options={SCHEDULE_SORTS.map((s) => ({ value: s.id, label: `Sort: ${s.label}` }))}
         />
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <ScheduleSyncBadge />
           {totalOtHrs > 0 && <Badge variant="secondary"><Clock className="mr-1 h-3 w-3" />{totalOtHrs.toFixed(1)}h OT</Badge>}
           {canEdit && (

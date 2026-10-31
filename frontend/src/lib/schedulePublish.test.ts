@@ -28,10 +28,10 @@ beforeEach(() => {
   get.mockReset()
   put.mockReset()
   post.mockReset()
-  get.mockImplementation(async (url: string, cfg?: { params?: { start: string; end: string } }) => {
+  get.mockImplementation(async (url: string, cfg?: { params?: unknown }) => {
     if (url === "/scheduling/labour-law") return { data: { data: { country_code: null, overrides: {}, version: 0 } } }
     if (url === "/scheduling/day-plans") {
-      const { start, end } = cfg!.params!
+      const { start, end } = cfg!.params as { start: string; end: string }
       const out = [...server].filter(([d]) => d >= start && d <= end).flatMap(([d, rows]) =>
         [...rows.values()].map((r) => ({ plan_date: d, agent_key: r.agent_key, shift_start: r.shift_start, shift_end: r.shift_end, published: !!r.published_at })),
       )

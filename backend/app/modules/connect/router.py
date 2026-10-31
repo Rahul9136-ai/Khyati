@@ -162,6 +162,8 @@ async def list_webhooks(db: DbSession, user: Manager):
 
 @router.post("/webhooks", response_model=ApiResponse[WebhookOut], status_code=201)
 async def create_webhook(body: WebhookIn, db: DbSession, actor: Manager):
+    if reason := await webhooks.blocked_url_reason(body.url):
+        raise ValidationError(reason)
     sub = WebhookSubscription(
         organization_id=org_scope(actor),
         url=body.url,
@@ -188,6 +190,8 @@ async def create_webhook(body: WebhookIn, db: DbSession, actor: Manager):
 @router.patch("/webhooks/{sub_id}", response_model=ApiResponse[WebhookOut])
 async def update_webhook(sub_id: uuid.UUID, body: WebhookPatch, db: DbSession, actor: Manager):
     sub = await _sub(db, actor, sub_id)
+    if body.url and (reason := await webhooks.blocked_url_reason(body.url)):
+        raise ValidationError(reason)
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(sub, field, value)
     if body.active:

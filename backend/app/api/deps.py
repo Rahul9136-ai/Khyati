@@ -13,7 +13,9 @@ from app.core.exceptions import AuthenticationError, PermissionDeniedError
 from app.core.security import decode_token
 from app.db.session import get_db
 
-DbSession = Annotated[AsyncSession, Depends(get_db)]
+# scope="function": commit before the response goes out, so a client that gets
+# a success can rely on it, and a failed commit is reported instead of lost.
+DbSession = Annotated[AsyncSession, Depends(get_db, scope="function")]
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_PREFIX}/auth/token", auto_error=False
