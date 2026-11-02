@@ -17,6 +17,7 @@ from app.modules.integrations import models as integration_models  # noqa: F401
 from app.modules.intraday import models as intraday_models  # noqa: F401
 from app.modules.notifications import models as notification_models  # noqa: F401
 from app.modules.planning import models as planning_models  # noqa: F401
+from app.modules.reporting import models as reporting_models  # noqa: F401
 from app.modules.requests import models as request_models  # noqa: F401
 from app.modules.scheduling import models as scheduling_models  # noqa: F401
 from app.modules.workforce import models as workforce_models  # noqa: F401

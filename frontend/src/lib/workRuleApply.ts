@@ -8,7 +8,7 @@
 // * Offline: the selected date and any dates kept in this browser are
 //   rewritten locally (other dates already follow the rules).
 import { api, type ApiError } from "@/lib/api"
-import { agentDay, dayToPatch, type AgentDay } from "@/lib/domain/channels"
+import { agentDay, dayToPatch, noBreakFor, type AgentDay } from "@/lib/domain/channels"
 import { datesBetween } from "@/lib/domain/horizon"
 import { workedMinutes } from "@/lib/domain/labourLaw"
 import type { Agent } from "@/lib/domain/types"
@@ -204,20 +204,36 @@ export interface AgentCompliance {
   workedMinutes: number
 }
 
-/** Every agent's days in the range against the daily and weekly work-rule
- *  checks — saved schedules where the server has them, else this browser's. */
-export function rangeCompliance(start: string, end: string, saved: RangeRow[] = []): AgentCompliance[] {
+export interface RangeDay {
+  date: string
+  day: AgentDay
+  /** published / draft = saved on the server; planned = from the rules, not saved yet. */
+  source: "published" | "draft" | "planned"
+}
+
+/** Every agent's days in the range — saved schedules where the server has them,
+ *  else this browser's plan (left out with `savedOnly`). */
+export function rangeDays(start: string, end: string, saved: RangeRow[] = [], savedOnly = false): Map<string, RangeDay[]> {
   const s = useWfm.getState()
   const savedBy = new Map(saved.map((r) => [`${r.plan_date}|${r.agent_key}`, r]))
-  const perAgent = new Map<string, { date: string; day: AgentDay }[]>(s.agents.map((a) => [a.id, []]))
+  const perAgent = new Map<string, RangeDay[]>(s.agents.map((a) => [a.id, []]))
   for (const date of datesBetween(start, end)) {
     const d = scheduleForDate(s, date)
     for (const a of d.agents) {
       const row = savedBy.get(`${date}|${a.id}`)
-      const day = row ? dayFromServer(row) : agentDay(a, s.shiftPatterns, d.breakOverrides, d.channelPlan, d.overtimePlan, d.activityPlan)
-      perAgent.get(a.id)!.push({ date, day })
+      const guard = noBreakFor(a, s.shiftPatterns)
+      const day = row ? { ...dayFromServer(row), ...(guard ? { noBreak: guard } : {}) } : agentDay(a, s.shiftPatterns, d.breakOverrides, d.channelPlan, d.overtimePlan, d.activityPlan)
+      if (!row && savedOnly) continue
+      perAgent.get(a.id)!.push({ date, day, source: row ? (row.published_at ? "published" : "draft") : "planned" })
     }
   }
+  return perAgent
+}
+
+/** Every agent's days in the range against the daily and weekly work-rule checks. */
+export function rangeCompliance(start: string, end: string, saved: RangeRow[] = []): AgentCompliance[] {
+  const s = useWfm.getState()
+  const perAgent = rangeDays(start, end, saved)
   const c = s.workCompliance
   return s.agents.map((agent) => {
     const days = perAgent.get(agent.id)!

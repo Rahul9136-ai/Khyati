@@ -19,6 +19,7 @@ from app.core.exceptions import AppError
 from app.core.logging import configure_logging, get_logger
 from app.db.session import AsyncSessionLocal
 from app.modules.connect import webhooks
+from app.modules.reporting import scheduled
 
 log = get_logger(__name__)
 
@@ -30,10 +31,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     log.info("app.startup", env=settings.ENVIRONMENT, version=__version__)
     # Sends queued webhook deliveries (see app/modules/connect/webhooks.py).
     dispatcher = asyncio.create_task(webhooks.run_dispatcher(AsyncSessionLocal))
+    # Sends scheduled report emails when they're due (app/modules/reporting/scheduled.py).
+    report_scheduler = asyncio.create_task(scheduled.run_scheduler(AsyncSessionLocal))
     yield
-    dispatcher.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await dispatcher
+    for task in (dispatcher, report_scheduler):
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
     log.info("app.shutdown")
 
 

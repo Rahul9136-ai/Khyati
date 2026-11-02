@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react"
 import { CalendarClock, Clock3, PlaneTakeoff, Plus, ShieldCheck, Star } from "lucide-react"
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 
+import { AgentPerformance } from "@/components/agent-performance"
 import { KpiCard } from "@/components/kpi-card"
+import { MySchedule, usePublishedDays } from "@/components/my-schedule"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -11,8 +13,10 @@ import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { DAY_END, DAY_START, fmtMin, type RequestKind } from "@/lib/domain/adherence"
 import { effectiveSegments } from "@/lib/domain/breaks"
-import { agentAdherencePct, AUX, AUX_BY_CODE } from "@/lib/domain/seed"
-import { fmtPct } from "@/lib/domain/planning"
+import { workedMinutes } from "@/lib/domain/labourLaw"
+import { addDays, localISODate } from "@/lib/domain/horizon"
+import { AUX, AUX_BY_CODE } from "@/lib/domain/seed"
+import { dayFromServer } from "@/lib/scheduleSync"
 import type { BreakType } from "@/lib/domain/shiftPatterns"
 import { useWfm } from "@/store/wfm"
 
@@ -34,15 +38,18 @@ const toHHMM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${
 /** Self-service landing view for the Agent designation: only their own
  *  shift/breaks, adherence, and leave — never the wider roster or queue ops. */
 export function AgentWorkspace({ agentId }: { agentId: string }) {
-  const { agents, queues, rta, shiftPatterns, breakOverrides, ptoRequests, exceptions, addException, currentUser } = useWfm()
+  const { agents, queues, shiftPatterns, breakOverrides, ptoRequests, exceptions, addException, currentUser } = useWfm()
+  const navigate = useNavigate()
+  const { data: published } = usePublishedDays(agentId)
   const agent = agents.find((a) => a.id === agentId)
-  const rtaEntry = rta.find((r) => r.id === agentId)
 
   const segments = useMemo(
     () => (agent ? effectiveSegments(agent, shiftPatterns, breakOverrides) : []),
     [agent, shiftPatterns, breakOverrides],
   )
-  const adherence = rtaEntry ? agentAdherencePct(rtaEntry) : null
+  const today = localISODate()
+  const nextWeek = (published ?? []).filter((d) => d.plan_date >= today && d.plan_date <= addDays(today, 6))
+  const nextWeekHours = nextWeek.reduce((t, d) => t + workedMinutes(dayFromServer(d)), 0) / 60
 
   const myPto = useMemo(
     () => ptoRequests.filter((r) => r.agentId === agentId).sort((a, b) => b.from.localeCompare(a.from)),
@@ -127,16 +134,13 @@ export function AgentWorkspace({ agentId }: { agentId: string }) {
 
       <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiCard label="Today's shift" value={agent.shift} hint={primarySkill?.name ?? "unassigned"} icon={Clock3} />
-        <KpiCard
-          label="Adherence today"
-          value={adherence != null ? fmtPct(adherence) : "—"}
-          hint={rtaEntry ? "vs schedule" : "no live data"}
-          tone={adherence == null ? undefined : adherence >= 0.95 ? "good" : adherence >= 0.9 ? "warn" : "bad"}
-          icon={ShieldCheck}
-        />
+        <KpiCard label="Planned hours" value={`${nextWeekHours.toFixed(1)}h`} hint="published · next 7 days" icon={ShieldCheck} />
         <KpiCard label="Pending leave" value={pendingCount} hint="awaiting approval" tone={pendingCount ? "warn" : "good"} icon={CalendarClock} />
         <KpiCard label="Next approved leave" value={nextApproved ? nextApproved.from : "—"} hint={nextApproved ? nextApproved.type : "none scheduled"} icon={PlaneTakeoff} />
       </div>
+
+      <AgentPerformance agent={agent} />
+      <MySchedule agentId={agentId} onOpenDate={(date) => navigate(`/scheduling?date=${date}`)} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="glass">

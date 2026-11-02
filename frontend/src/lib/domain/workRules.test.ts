@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest"
 
-import type { AgentDay } from "@/lib/domain/channels"
+import { agentDay, applyEdit, editBounds, markAux, type AgentDay } from "@/lib/domain/channels"
 import { AGENTS } from "@/lib/domain/seed"
 import {
   applyWorkRuleToDay,
@@ -206,5 +206,71 @@ describe("store: assigning work rules", () => {
     const s = useWfm.getState()
     expect(s.agents.find((x) => x.id === a.id)).toMatchObject({ shiftPatternId: undefined, weekOff: undefined })
     expect(s.shiftPatterns.some((p) => p.id.startsWith("wr:"))).toBe(false)
+  })
+})
+
+describe("no-break time at the start and end of a shift", () => {
+  const guarded = { shiftMinutes: 480, breaks: rule("wr-8h").breaks, noBreakStartMinutes: 150, noBreakEndMinutes: 150 }
+  const guardedDay = (): AgentDay => ({ ...day(at(9), at(17), [[at(12), 15]]), noBreak: [60, 60] })
+
+  it("places breaks outside the zones, and leaves rules without zones as they were", () => {
+    const placed = placeBreaks(guarded)
+    expect(placed[0].offsetMinutes).toBe(150)
+    const lastEnd = placed.at(-1)!.offsetMinutes + placed.at(-1)!.durationMinutes
+    expect(lastEnd).toBeLessThanOrEqual(480 - 150)
+    expect(placeBreaks(rule("wr-8h")).map((b) => b.offsetMinutes)).toEqual([105, 225, 360])
+    expect(placeBreaks({ ...rule("wr-8h"), noBreakStartMinutes: 30, noBreakEndMinutes: 30 }).map((b) => b.offsetMinutes)).toEqual([105, 225, 360])
+    expect(placeBreaks({ shiftMinutes: 240, breaks: [{ type: "break", minutes: 15 }], noBreakStartMinutes: 180 })[0].offsetMinutes).toBe(180)
+  })
+
+  it("flags a rule whose breaks can't fit", () => {
+    const issues = checkWorkRule({ shiftMinutes: 240, breaks: [{ type: "break", minutes: 15 }], noBreakStartMinutes: 120, noBreakEndMinutes: 120 }, C)
+    expect(issues[0].message).toBe("The breaks don't fit between the no-break zones")
+  })
+
+  it("carries through the generated pattern to the agent's day", () => {
+    const p = workRulePattern({ ...rule("wr-8h"), noBreakStartMinutes: 30, noBreakEndMinutes: 45 }, "09:00")
+    const agent = { ...AGENTS[0], shift: "09:00–17:00", shiftPatternId: p.id }
+    expect(agentDay(agent, [p], {}, {}, {}).noBreak).toEqual([30, 45])
+    expect(agentDay(AGENTS[0], DEFAULT_SHIFT_PATTERNS, {}, {}, {}).noBreak).toBeUndefined()
+  })
+
+  it("dragging can't enter a zone; an activity still can", () => {
+    const d = guardedDay()
+    const move = { kind: "aux-move", segId: "b0" } as const
+    expect(editBounds(d, move)).toEqual([at(10), at(16) - 15])
+    expect(applyEdit(d, move, at(9, 5)).breaks[0].start).toBe(at(10))
+    expect(applyEdit(d, move, at(16, 50)).breaks[0].start).toBe(at(15, 45))
+    expect(applyEdit(d, move, at(11)).noBreak).toEqual([60, 60])
+    const resize = { kind: "aux-resize", segId: "b0", edge: "end" } as const
+    expect(applyEdit(d, resize, at(16, 30)).breaks[0].end).toBe(at(16))
+    expect(markAux(d, "meeting", at(9), 30, false, "m").ok).toBe(true)
+  })
+
+  it("moving the shift's edge can't bring a break into a zone", () => {
+    const d = guardedDay()
+    expect(editBounds(d, { kind: "shift-resize", edge: "start" })[1]).toBe(at(11))
+    expect(editBounds(d, { kind: "shift-resize", edge: "end" })[0]).toBe(at(13, 15))
+  })
+
+  it("a break already inside can move out, not further in", () => {
+    const d: AgentDay = { ...day(at(9), at(17), [[at(9, 30), 15]]), noBreak: [60, 60] }
+    expect(editBounds(d, { kind: "aux-move", segId: "b0" })[0]).toBe(at(9, 30))
+  })
+
+  it("right-click marking is refused with the reason", () => {
+    expect(markAux(guardedDay(), "break", at(9, 30), 15, false, "x")).toEqual({ ok: false, reason: "No breaks in the first 60 min of this shift (work rule)" })
+    expect(markAux(guardedDay(), "lunch", at(16, 30), 30, false, "x")).toEqual({ ok: false, reason: "No breaks in the last 60 min of this shift (work rule)" })
+    expect(markAux(guardedDay(), "break", at(14), 15, false, "x").ok).toBe(true)
+  })
+
+  it("flags a break already in a zone, and aligning moves it out", () => {
+    const d: AgentDay = { ...day(at(9), at(17), [[at(9, 30), 15], [at(11), 15], [at(13), 30, "lunch"], [at(15), 15]]), noBreak: [60, 0] }
+    const issue = checkWorkDay(d, C).find((i) => i.rule === "breakInNoBreakZone")!
+    expect(issue.message).toBe("break 09:30–09:45 is in the first 60 min of the shift, where the work rule allows no breaks")
+    const p = workRulePattern({ ...rule("wr-8h"), noBreakStartMinutes: 120 }, "09:00")
+    const aligned = applyWorkRuleToDay(d, p, [], "2026-11-02")
+    expect(aligned.noBreak).toEqual([120, 0])
+    expect(aligned.breaks[0].start).toBeGreaterThanOrEqual(at(11))
   })
 })

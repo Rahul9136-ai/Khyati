@@ -49,6 +49,18 @@ You'll see **Capacity Planning** (the AGS Health CP module) and **Approval Bridg
 
 ---
 
+### Scheduled report emails
+Set these on the backend service, then redeploy. Until then, schedules and previews work but
+sends are recorded as failed.
+- `EMAIL_FROM`: the sender, on a domain your email service has verified.
+- `RESEND_API_KEY`: from [Resend](https://resend.com). Needed on Render's free plan, which
+  [blocks outbound SMTP](https://render.com/changelog/free-web-services-will-no-longer-allow-outbound-traffic-to-smtp-ports).
+- Or, on a host that allows SMTP: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`,
+  `SMTP_SECURITY` (`starttls`, `ssl` or `none`).
+
+Reports are sent by the backend process. A free instance sleeps when idle, so a report due then
+goes out late, when the service next wakes. For on-time sends use a paid instance.
+
 ### Redeploys
 Both hosts auto-deploy on every push to `main`, so future changes go live on
 their own. The seeder is idempotent (skips if the demo org already exists), so

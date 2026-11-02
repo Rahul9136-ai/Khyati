@@ -63,6 +63,9 @@ export interface WorkRule {
   weekOff: number[]
   /** Fixed days every week, or rotating one day later each week (absent = fixed). */
   weekOffMode?: WeekOffMode
+  /** No break may be placed this many minutes after the shift starts / before it ends. */
+  noBreakStartMinutes?: number
+  noBreakEndMinutes?: number
   /** Usual start time, offered first when assigning. */
   defaultStart: string
 }
@@ -126,15 +129,25 @@ const fmtMins = (m: number) => (m % 60 ? `${m}m` : `${m / 60}h`)
 
 /** Break offsets (from shift start) that split the work into equal stretches,
  *  on a 5-minute grid; the last stretch takes the rounding. */
-export function placeBreaks(rule: Pick<WorkRule, "shiftMinutes" | "breaks">): BreakSegment[] {
+export function placeBreaks(rule: Pick<WorkRule, "shiftMinutes" | "breaks" | "noBreakStartMinutes" | "noBreakEndMinutes">): BreakSegment[] {
   const total = rule.breaks.reduce((t, b) => t + b.minutes, 0)
   const work = rule.shiftMinutes - total
   if (!rule.breaks.length || work <= 0) return []
-  const chunk = Math.floor(work / (rule.breaks.length + 1) / 5) * 5
+  const [first, last] = [rule.noBreakStartMinutes ?? 0, rule.noBreakEndMinutes ?? 0]
+  const stretch = (fixed: number, count: number) => Math.floor(Math.max(0, work - fixed) / Math.max(1, count) / 5) * 5
+  // Equal stretches, except that the first and last are at least the no-break zones.
+  let chunk = stretch(0, rule.breaks.length + 1)
+  let fixFirst = first > chunk
+  let fixLast = last > chunk
+  for (let i = 0; i < 2; i++) {
+    chunk = stretch((fixFirst ? first : 0) + (fixLast ? last : 0), rule.breaks.length + 1 - Number(fixFirst) - Number(fixLast))
+    fixFirst ||= first > chunk
+    fixLast ||= last > chunk
+  }
   let at = 0
   let nBreak = 0
   return rule.breaks.map((b, i) => {
-    at += chunk
+    at += i === 0 && fixFirst ? first : chunk
     const seg: BreakSegment = {
       id: `wr${i + 1}`,
       type: b.type,
@@ -165,6 +178,8 @@ export function workRulePattern(rule: WorkRule, start: string): ShiftPattern & {
     start,
     end: fmtHM(Math.min(24 * 60, s + rule.shiftMinutes)),
     breaks: placeBreaks(rule),
+    ...(rule.noBreakStartMinutes ? { noBreakStartMinutes: rule.noBreakStartMinutes } : {}),
+    ...(rule.noBreakEndMinutes ? { noBreakEndMinutes: rule.noBreakEndMinutes } : {}),
     workRuleId: rule.id,
   }
 }
@@ -173,6 +188,7 @@ export function workRulePattern(rule: WorkRule, start: string): ShiftPattern & {
 
 export type WorkCheck =
   | "breakRequired"
+  | "breakInNoBreakZone"
   | "maxContinuousWork"
   | "lunchRequired"
   | "otOnWeekOff"
@@ -183,6 +199,7 @@ export type WorkCheck =
 
 export const WORK_CHECK_LABEL: Record<WorkCheck, string> = {
   breakRequired: "Break in every shift",
+  breakInNoBreakZone: "Break too close to shift start / end",
   maxContinuousWork: "Max hours in a row",
   lunchRequired: "Lunch on long shifts",
   otOnWeekOff: "Overtime on a week off",
@@ -240,6 +257,13 @@ export function checkWorkDay(day: AgentDay, c: WorkCompliance): WorkIssue[] {
   const [s, e] = day.shift
   const inShift = day.breaks.filter((b) => b.start < e && b.end > s)
   const length = stretches.at(-1)!.end - stretches[0].start
+  const [noFirst, noLast] = day.noBreak ?? [0, 0]
+  for (const b of inShift) {
+    if ((noFirst && b.start < s + noFirst) || (noLast && b.end > e - noLast)) {
+      const where = noFirst && b.start < s + noFirst ? `first ${noFirst}` : `last ${noLast}`
+      issues.push({ rule: "breakInNoBreakZone", message: `${b.label} ${fmtHM(b.start)}–${fmtHM(b.end)} is in the ${where} min of the shift, where the work rule allows no breaks`, span: { start: b.start, end: b.end } })
+    }
+  }
 
   if (c.breakRequiredAfterHours != null && length >= c.breakRequiredAfterHours * 60 && !inShift.length) {
     issues.push({ rule: "breakRequired", message: `${fmtDuration(length)} shift with no break — shifts of ${fmtDuration(c.breakRequiredAfterHours * 60)} or more need one` })
@@ -262,7 +286,11 @@ export function checkWorkDay(day: AgentDay, c: WorkCompliance): WorkIssue[] {
 }
 
 /** A rule template against the daily rules (as a sample day). */
-export function checkWorkRule(rule: Pick<WorkRule, "shiftMinutes" | "breaks">, c: WorkCompliance): WorkIssue[] {
+export function checkWorkRule(rule: Pick<WorkRule, "shiftMinutes" | "breaks" | "noBreakStartMinutes" | "noBreakEndMinutes">, c: WorkCompliance): WorkIssue[] {
+  const zones = (rule.noBreakStartMinutes ?? 0) + (rule.noBreakEndMinutes ?? 0)
+  if (rule.breaks.length && rule.breaks.reduce((t, b) => t + b.minutes, 0) + zones > rule.shiftMinutes) {
+    return [{ rule: "breakInNoBreakZone", message: "The breaks don't fit between the no-break zones" }]
+  }
   if (rule.breaks.reduce((t, b) => t + b.minutes, 0) >= rule.shiftMinutes) {
     return [{ rule: "breakRequired", message: "Breaks take up the whole shift" }]
   }
@@ -368,6 +396,9 @@ export function applyWorkRuleToDay(day: AgentDay, pattern: ShiftPattern | null, 
     .filter((a) => a.end > a.start)
   if (isOffOn(weekOff, mode, date)) activities.push({ id: WEEK_OFF_ID, type: "off", start: s, end: e, note: "Week off" })
   return {
+    ...(pattern?.noBreakStartMinutes || pattern?.noBreakEndMinutes
+      ? { noBreak: [pattern.noBreakStartMinutes ?? 0, pattern.noBreakEndMinutes ?? 0] as [number, number] }
+      : {}),
     shift: [s, e],
     breaks: pattern
       ? pattern.breaks.map((b) => ({ id: b.id, type: b.type, label: b.label, start: s + b.offsetMinutes, end: s + b.offsetMinutes + b.durationMinutes }))

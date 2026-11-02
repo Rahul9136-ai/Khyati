@@ -45,6 +45,24 @@ describe("resolving rows", () => {
     expect(rows[2]).toMatchObject({ ok: false, reason: "Breaks take up the whole shift" })
   })
 
+  it("reads no-break minutes, keeps them when blank, and rejects bad values", () => {
+    const withZones = [{ ...DEFAULT_WORK_RULES[0], noBreakStartMinutes: 20, noBreakEndMinutes: 25 }]
+    const base = { "Shift Hours": 8, Breaks: "15, 30L, 15" }
+    const rows = resolveRuleRows(
+      [
+        { ...base, Name: "A", "No Break First (min)": 30, "No Break Last (min)": 45 },
+        { ...base, Name: withZones[0].name },
+        { ...base, Name: "B", "No Break First (min)": "soon" },
+        { ...base, Name: "C", "No Break First (min)": 240, "No Break Last (min)": 240 },
+      ],
+      withZones,
+    )
+    expect(rows[0].rule).toMatchObject({ noBreakStartMinutes: 30, noBreakEndMinutes: 45 })
+    expect(rows[1].rule).toMatchObject({ noBreakStartMinutes: 20, noBreakEndMinutes: 25 })
+    expect(rows[2]).toMatchObject({ ok: false, reason: "No-break minutes must be 0–240" })
+    expect(rows[3]).toMatchObject({ ok: false, reason: "The breaks don't fit between the no-break times" })
+  })
+
   it("sets agents' rule, start and week off; blank rows are left alone", () => {
     const [a, b, c, d] = AGENTS
     const rows = resolveAgentRows(

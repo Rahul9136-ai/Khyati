@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { api } from "@/lib/api"
 import { AGENTS } from "@/lib/domain/seed"
@@ -32,6 +32,9 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  // The saved Saturday below must stay inside "Next week", whenever this runs.
+  vi.useFakeTimers({ toFake: ["Date"] })
+  vi.setSystemTime(new Date("2026-10-27T10:00:00"))
   get.mockReset()
   put.mockReset()
   post.mockReset()
@@ -44,6 +47,8 @@ beforeEach(() => {
   post.mockResolvedValue({ data: { data: { created: 0, existing: 0 } } })
   put.mockResolvedValue({ data: { data: [] } })
 })
+
+afterEach(() => vi.useRealTimers())
 
 const agentRow = (name: string) => screen.getByRole("checkbox", { name: `Select ${name}` }).closest("tr")!
 
@@ -136,6 +141,26 @@ describe("Work Rules page", () => {
     expect(useWfm.getState().workCompliance.maxContinuousWorkHours).toBe(1.5)
     expect(await screen.findByText(/3 of 3 agents break a rule/)).toBeInTheDocument()
     expect(within(table).getAllByText(/without a break — max 1h30 in a row/).length).toBeGreaterThan(0)
+  })
+
+  it("sets no-break time on a rule, flags breaks that can't fit, and passes it to agents", () => {
+    renderPage()
+    fireEvent.click(screen.getByRole("button", { name: "Shift & break patterns" }))
+    fireEvent.click(within(screen.getByTestId("rule-wr-8h")).getByRole("button", { name: /Edit/ }))
+    const dialog = screen.getByRole("dialog")
+    fireEvent.change(within(dialog).getByLabelText("No breaks in the first minutes"), { target: { value: "240" } })
+    fireEvent.change(within(dialog).getByLabelText("No breaks in the last minutes"), { target: { value: "240" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }))
+    expect(within(dialog).getByText("The breaks don't fit between the no-break times.")).toBeInTheDocument()
+
+    fireEvent.change(within(dialog).getByLabelText("No breaks in the first minutes"), { target: { value: "30" } })
+    fireEvent.change(within(dialog).getByLabelText("No breaks in the last minutes"), { target: { value: "45" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }))
+    expect(useWfm.getState().workRules.find((r) => r.id === "wr-8h")).toMatchObject({ noBreakStartMinutes: 30, noBreakEndMinutes: 45 })
+    expect(within(screen.getByTestId("rule-wr-8h")).getByText("No breaks: first 30 min · last 45 min of the shift")).toBeInTheDocument()
+
+    useWfm.getState().assignWorkRule([A.id], { ruleId: "wr-8h", start: "09:00", weekOff: [] })
+    expect(useWfm.getState().shiftPatterns.find((p) => p.id === "wr:wr-8h@09:00")).toMatchObject({ noBreakStartMinutes: 30, noBreakEndMinutes: 45 })
   })
 
   it("builds a new rule and flags it when it breaks compliance", () => {

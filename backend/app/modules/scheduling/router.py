@@ -7,8 +7,10 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
+from sqlalchemy import select
 
-from app.api.deps import DbSession, require_permission
+from app.api.deps import DbSession, own_employee_id, require_permission, self_only
+from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.modules.identity.models import User
 from app.modules.scheduling import (
     channel_drafts,
@@ -18,7 +20,7 @@ from app.modules.scheduling import (
     service,
     settings_service,
 )
-from app.modules.scheduling.models import ShiftTemplate
+from app.modules.scheduling.models import ScheduleShift, ShiftTemplate
 from app.modules.scheduling.schemas import (
     ChannelDraftOut,
     ChannelDraftsIn,
@@ -77,6 +79,12 @@ Writer = Annotated[User, Depends(require_permission("schedule:write"))]
 Publisher = Annotated[User, Depends(require_permission("schedule:publish"))]
 
 
+def _staff_only(user: User) -> None:
+    """For views of a whole team, which agents don't get."""
+    if self_only(user):
+        raise PermissionDeniedError("Requires employee:read")
+
+
 # ---------------------------------------------------------------- templates
 
 @router.get("/templates", response_model=ApiResponse[list[ShiftTemplateOut]])
@@ -126,17 +134,31 @@ async def list_schedules(
     db: DbSession, user: Reader, team_id: uuid.UUID | None = None, status: str | None = None
 ):
     rows = await service.list_schedules(db, org_scope(user), team_id=team_id, status=status)
-    return ApiResponse(data=[ScheduleOut.model_validate(s) for s in rows])
+    if self_only(user):  # agents: only published schedules they have a shift in
+        mine = await db.execute(
+            select(ScheduleShift.schedule_id).where(
+                ScheduleShift.employee_id == own_employee_id(user)
+            )
+        )
+        ids = set(mine.scalars())
+        rows = [r for r in rows if r.id in ids and r.status == "published"]
+    return ApiResponse(data=[ScheduleOut.model_validate(r) for r in rows])
 
 
 @router.get("/schedules/{schedule_id}", response_model=ApiResponse[ScheduleDetailOut])
 async def get_schedule(schedule_id: uuid.UUID, db: DbSession, user: Reader):
     schedule = await service.get_schedule(db, schedule_id)
-    return ApiResponse(data=ScheduleDetailOut.model_validate(schedule))
+    out = ScheduleDetailOut.model_validate(schedule)
+    if self_only(user):  # agents: only their own shifts, and no sign the rest exists
+        out.shifts = [x for x in out.shifts if x.employee_id == own_employee_id(user)]
+        if not out.shifts or schedule.status != "published":
+            raise NotFoundError("Schedule not found")
+    return ApiResponse(data=out)
 
 
 @router.get("/schedules/{schedule_id}/validate", response_model=ApiResponse[ValidationOut])
 async def validate_schedule(schedule_id: uuid.UUID, db: DbSession, user: Reader):
+    _staff_only(user)
     schedule = await service.get_schedule(db, schedule_id)
     return ApiResponse(data=service.validate_schedule(schedule))
 
@@ -459,18 +481,27 @@ async def publish_channel_drafts(body: ChannelRangeIn, db: DbSession, actor: Pub
 # ------------------------------------------------- shared settings (config)
 
 
+async def _setting_for(db: DbSession, user: User, row) -> SettingOut:  # noqa: ANN001
+    """Agents get only their own entry of agent_rules, not colleagues' week offs."""
+    out = SettingOut.model_validate(row, from_attributes=True)
+    if row.key == "agent_rules" and self_only(user) and isinstance(out.value, dict):
+        mine = await dayplan_service.user_agent_keys(db, user)
+        out.value = {k: v for k, v in out.value.items() if k in mine}
+    return out
+
+
 @router.get("/settings", response_model=ApiResponse[list[SettingOut]])
 async def list_settings(db: DbSession, user: Reader):
     """Work rules, compliance limits, shift patterns and agents' rules / week
     offs saved for the organisation (keys that were never saved are absent)."""
     rows = await settings_service.list_settings(db, org_scope(user))
-    return ApiResponse(data=[SettingOut.model_validate(r, from_attributes=True) for r in rows])
+    return ApiResponse(data=[await _setting_for(db, user, r) for r in rows])
 
 
 @router.get("/settings/{key}", response_model=ApiResponse[SettingOut])
 async def get_setting(key: str, db: DbSession, user: Reader):
     row = await settings_service.get_setting(db, org_scope(user), key)
-    return ApiResponse(data=SettingOut.model_validate(row, from_attributes=True))
+    return ApiResponse(data=await _setting_for(db, user, row))
 
 
 @router.put("/settings/{key}", response_model=ApiResponse[SettingOut])

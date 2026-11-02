@@ -893,6 +893,20 @@ export function ContinuousSchedule({
                         )
                       })}
 
+                      {/* Work rule: no breaks allowed in these parts of the shift. */}
+                      {day.noBreak && !workIssues.some((i) => i.rule === "otOnWeekOff") &&
+                        ([[day.shift[0], day.shift[0] + day.noBreak[0]], [day.shift[1] - day.noBreak[1], day.shift[1]]] as const)
+                          .filter(([from, to]) => to > from)
+                          .map(([from, to]) => (
+                            <div
+                              key={`nb-${from}`}
+                              data-testid="no-break-zone"
+                              className="pointer-events-none absolute bottom-0 z-[7] h-1 bg-slate-900/70 dark:bg-white/70"
+                              style={{ left: `${pct(from)}%`, width: `${pct(to) - pct(from)}%` }}
+                              title={`No breaks ${fmtHM(from)}–${fmtHM(to)} (work rule)`}
+                            />
+                          ))}
+
                       {/* Work-rule breaches (e.g. over 3h in a row without a break) outlined in red. */}
                       {workIssues.filter((i) => i.span).map((i, k) => (
                         <div

@@ -49,3 +49,8 @@ services:
         sync: false
       - key: APP_WEB_URL
         sync: false
+      # Scheduled report emails. Render's free plan blocks SMTP: use RESEND_API_KEY there.
+      - key: EMAIL_FROM
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false

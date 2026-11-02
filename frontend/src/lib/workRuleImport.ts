@@ -136,6 +136,11 @@ export function resolveRuleRows(rows: Record<string, unknown>[], existing: WorkR
     const start = hhmm(startCell)
     if (String(startCell ?? "").trim() && !start) return void out.push({ row, name, ok: false, reason: `Can't read start time "${String(startCell)}" (use HH:MM)` })
     const match = existing.find((x) => x.name.toLowerCase() === key || x.id.toLowerCase() === key)
+    const zone = (cell: unknown, current: number | undefined) => (String(cell ?? "").trim() === "" ? (current ?? 0) : Number(cell))
+    const noBreakStartMinutes = zone(pick(r, ["nobreakfirstmin", "nobreakfirst", "nobreakstart"]), match?.noBreakStartMinutes)
+    const noBreakEndMinutes = zone(pick(r, ["nobreaklastmin", "nobreaklast", "nobreakend"]), match?.noBreakEndMinutes)
+    if (![noBreakStartMinutes, noBreakEndMinutes].every((v) => Number.isInteger(v) && v >= 0 && v <= 240)) return void out.push({ row, name, ok: false, reason: "No-break minutes must be 0–240" })
+    if (breaks.length && breaks.reduce((t, b) => t + b.minutes, 0) + noBreakStartMinutes + noBreakEndMinutes > shiftMinutes) return void out.push({ row, name, ok: false, reason: "The breaks don't fit between the no-break times" })
     out.push({
       row,
       name,
@@ -147,6 +152,8 @@ export function resolveRuleRows(rows: Record<string, unknown>[], existing: WorkR
         breaks,
         weekOff: off.days,
         weekOffMode: modeOf(pick(r, ["weekofftype", "offtype", "type", "mode"])) ?? off.mode ?? "fixed",
+        noBreakStartMinutes,
+        noBreakEndMinutes,
         defaultStart: start ?? match?.defaultStart ?? "09:00",
       },
     })
@@ -253,10 +260,12 @@ export function downloadWorkRuleTemplate(agents: Agent[], rules: WorkRule[]) {
       "Week Off": r.weekOff.map((d) => WEEKDAYS[d]).join(", "),
       "Week Off Type": r.weekOffMode === "rotating" ? "Rotating" : "Fixed",
       "Usual Start": r.defaultStart,
+      "No Break First (min)": r.noBreakStartMinutes ?? 0,
+      "No Break Last (min)": r.noBreakEndMinutes ?? 0,
       "Worked (info)": `${fmtDuration(r.shiftMinutes - r.breaks.reduce((t, b) => t + b.minutes, 0))} · ${describeBreaks(r.breaks)}`,
     })),
   )
-  ruleSheet["!cols"] = [{ wch: 38 }, { wch: 11 }, { wch: 32 }, { wch: 14 }, { wch: 14 }, { wch: 11 }, { wch: 36 }]
+  ruleSheet["!cols"] = [{ wch: 38 }, { wch: 11 }, { wch: 32 }, { wch: 14 }, { wch: 14 }, { wch: 11 }, { wch: 18 }, { wch: 18 }, { wch: 36 }]
   const agentSheet = XLSX.utils.json_to_sheet(
     agents.map((a) => {
       const ref = parseWorkRulePatternId(a.shiftPatternId)
@@ -275,6 +284,7 @@ export function downloadWorkRuleTemplate(agents: Agent[], rules: WorkRule[]) {
   const help = XLSX.utils.json_to_sheet([
     { Column: "Shift Hours", Example: "8 or 8.5", Notes: "Shift length including breaks, 1–16 hours" },
     { Column: "Breaks", Example: "Break 15; Lunch 30; Break 15", Notes: 'In the order taken. Also "15, 30L, 15", "2x15 + 1h lunch". Spread evenly through the shift' },
+    { Column: "No Break First / Last (min)", Example: "30", Notes: "Minutes after the shift starts / before it ends where no break may be placed (0–240)" },
     { Column: "Week Off", Example: "Sat, Sun", Notes: 'Days or a range ("Fri-Sun"), a preset ("Fixed Sat–Sun"), or "none"' },
     { Column: "Week Off Type", Example: "Fixed", Notes: "Fixed = same days every week · Rotating = the days move one day later each week" },
     { Column: "Work Rule (Agents)", Example: "9h · 1h lunch + 2×15m breaks", Notes: 'A rule name from the Work rules sheet or the app; "none" takes the agent off their rule' },

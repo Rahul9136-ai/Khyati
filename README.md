@@ -107,7 +107,7 @@ The repo is a monorepo with two independently runnable halves:
   their channels in My schedule. API: `GET/PUT /scheduling/channel-drafts`,
   `POST /channel-drafts/publish` (`schedule:publish`), `POST /channel-drafts/discard`, full rows
   via `GET /scheduling/day-plans/range`.
-- **Work rules** (`/work-rules`) — reusable shift + break patterns (e.g. *8h · 30m lunch + 2×15m
+- **Work rules** (`/work-rules`) — reusable shift + break patterns with optional **no-break time** (no breaks in the first / last N minutes of the shift, enforced on the timeline and by the API) (e.g. *8h · 30m lunch + 2×15m
   breaks*, *9h · 1h lunch + 2×15m breaks*, 10h × 4 days, part-time 6h / 4h; breaks are spread so
   the work splits into equal stretches) assigned to agents at a start time, each with their own
   **week off** — *Fixed* (same days every week, e.g. the "Fixed Sat–Sun" preset) or *Rotating*
@@ -186,6 +186,31 @@ The repo is a monorepo with two independently runnable halves:
 - A policy (`manual` / `assisted` / `autonomous` + auto-apply confidence threshold) governs
   whether a proposal auto-applies or waits for a human approve/reject.
 - Full run history and a decision audit trail, exposed on the **Autonomous Agents** page.
+
+### Performance reports
+- Reports → **Performance reports**: pick a period (up to 92 days) and **an LOB (or all)** or **a
+  selected person**, preview, and export to Excel / CSV. Person: status per day, scheduled and
+  planned work hours, breaks, overtime, time off, compliance issues and recorded attendance. LOB:
+  the same rolled up by primary skill, per day and per agent, with recorded queue actuals
+  (`GET /reports/performance-actuals`) and clearly labelled forecast figures. Adherence and
+  per-agent calls / AHT are left out until a phone-system (ACD) feed is connected.
+
+### Scheduled report emails
+- **Scheduled Reports** page: name a report, pick **daily** (yesterday), **weekly** (last 7 days) or
+  **MTD** (the 1st to yesterday), the days and time (in a chosen time zone), an LOB or all, and
+  **To** and **CC**: email addresses and/or distribution lists kept in the tool. Preview the
+  dashboard, send now, pause, and see every send and failure.
+- The dashboard is built on the server from published schedules, attendance and queue actuals as
+  email-safe HTML, with totals only and no named individuals. Set `EMAIL_FROM` plus either
+  `RESEND_API_KEY` or `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_SECURITY`.
+
+### Agent self-service
+- An agent's home shows **My performance** (their own hours, time off, compliance and recorded
+  attendance, this week / last week / last 30 days) and **My schedule**, each with Excel / CSV
+  export. Their data comes from "me" endpoints (`GET /reports/my-performance`,
+  `GET /scheduling/my-schedule`) that take no person.
+- The server enforces it: anyone who can neither read employees nor edit schedules only gets their
+  own attendance, requests, approvals, schedules and work-rule entry, and no team reports.
 
 ### Shared settings, API keys & webhooks (connect a CRM)
 - **Saved for everyone** — work rules, compliance limits, shift patterns and each agent's rule /

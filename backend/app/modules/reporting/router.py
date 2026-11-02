@@ -19,6 +19,7 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 Reader = Annotated[User, Depends(require_permission("report:read"))]
 Exporter = Annotated[User, Depends(require_permission("report:export"))]
+SelfReader = Annotated[User, Depends(require_permission("schedule:read"))]
 
 
 def _respond(result: dict, fmt: str):
@@ -70,6 +71,24 @@ async def sla(
     format: str = Query("json", pattern="^(json|csv)$"),
 ):
     return _respond(await service.sla_report(db, queue_id, start, end), format)
+
+
+@router.get("/my-performance")
+async def my_performance(
+    db: DbSession, user: SelfReader, start: date = Query(...), end: date = Query(...)
+):
+    """The signed-in person's own attendance for their My performance card.
+    There's deliberately no way to ask for anyone else."""
+    return ApiResponse(data=await service.my_attendance(db, user, start, end))
+
+
+@router.get("/performance-actuals")
+async def performance_actuals(
+    db: DbSession, user: Reader, start: date = Query(...), end: date = Query(...)
+):
+    """Recorded attendance per person and contact actuals per queue, for the
+    Performance reports (LOB and selected person)."""
+    return ApiResponse(data=await service.performance_actuals(db, org_scope(user), start, end))
 
 
 @router.get("/agent-performance")

@@ -166,9 +166,12 @@ async def list_records(
 
 
 async def summarize(
-    db: AsyncSession, org_id: uuid.UUID, start: date, end: date
+    db: AsyncSession, org_id: uuid.UUID, start: date, end: date,
+    employee_id: uuid.UUID | None = None,
 ) -> AttendanceSummary:
-    rows, _ = await list_records(db, org_id, start=start, end=end, limit=100_000)
+    rows, _ = await list_records(
+        db, org_id, employee_id=employee_id, start=start, end=end, limit=100_000
+    )
     total = len(rows)
     by_category: dict[str, int] = {}
     absent = late = shrink = 0

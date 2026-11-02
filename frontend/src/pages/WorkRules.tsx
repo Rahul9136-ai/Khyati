@@ -111,7 +111,7 @@ export function WeekOffEditor({
 
 /** The rule's day drawn to scale: work stretches (red when longer than the
  *  hours-in-a-row limit), breaks and lunches. */
-function RuleBar({ rule, start, maxRun }: { rule: Pick<WorkRule, "shiftMinutes" | "breaks">; start: number; maxRun: number | null }) {
+function RuleBar({ rule, start, maxRun }: { rule: Pick<WorkRule, "shiftMinutes" | "breaks" | "noBreakStartMinutes" | "noBreakEndMinutes">; start: number; maxRun: number | null }) {
   const placed = placeBreaks(rule)
   const pieces: { kind: "work" | "break" | "lunch"; from: number; to: number }[] = []
   let at = 0
@@ -183,6 +183,7 @@ function RuleEditor({ initial, onClose, onSave }: { initial: Draft; onClose: () 
     if (d.shiftMinutes < 60 || d.shiftMinutes > 16 * 60) return setError("Shift length must be between 1 and 16 hours.")
     if (d.breaks.some((b) => b.minutes < 5)) return setError("Each break needs at least 5 minutes.")
     if (d.breaks.reduce((t, b) => t + b.minutes, 0) >= d.shiftMinutes) return setError("Breaks can't take up the whole shift.")
+    if (d.breaks.length && d.breaks.reduce((t, b) => t + b.minutes, 0) + (d.noBreakStartMinutes ?? 0) + (d.noBreakEndMinutes ?? 0) > d.shiftMinutes) return setError("The breaks don't fit between the no-break times.")
     onSave({ ...d, name: d.name.trim() || autoName() })
   }
 
@@ -253,6 +254,24 @@ function RuleEditor({ initial, onClose, onSave }: { initial: Draft; onClose: () 
         </div>
 
         <div>
+          <span className="mb-1 block text-xs font-medium text-muted-foreground">No-break time — schedulers can't place a break here</span>
+          <div className="flex flex-wrap gap-3">
+            <label className="flex items-center gap-1.5 text-xs">
+              First
+              <Input type="number" min={0} max={240} step={5} aria-label="No breaks in the first minutes" className="h-8 w-20" value={d.noBreakStartMinutes ?? 0}
+                onChange={(e) => { setD({ ...d, noBreakStartMinutes: Math.min(240, Math.max(0, Number(e.target.value) || 0)) }); setError("") }} />
+              min of the shift
+            </label>
+            <label className="flex items-center gap-1.5 text-xs">
+              Last
+              <Input type="number" min={0} max={240} step={5} aria-label="No breaks in the last minutes" className="h-8 w-20" value={d.noBreakEndMinutes ?? 0}
+                onChange={(e) => { setD({ ...d, noBreakEndMinutes: Math.min(240, Math.max(0, Number(e.target.value) || 0)) }); setError("") }} />
+              min of the shift
+            </label>
+          </div>
+        </div>
+
+        <div>
           <span className="mb-1 block text-xs font-medium text-muted-foreground">Preview</span>
           <RuleBar rule={d} start={toMins(d.defaultStart)} maxRun={compliance.maxContinuousWorkHours} />
           <div className="mt-2"><IssueList issues={issues} /></div>
@@ -315,6 +334,9 @@ function RulesTab() {
                   {!r.breaks.length && <span className="text-xs text-muted-foreground">No breaks</span>}
                 </div>
                 <RuleBar rule={r} start={toMins(r.defaultStart)} maxRun={workCompliance.maxContinuousWorkHours} />
+                {(r.noBreakStartMinutes || r.noBreakEndMinutes) ? (
+                  <p className="text-xs text-muted-foreground">No breaks: first {r.noBreakStartMinutes ?? 0} min · last {r.noBreakEndMinutes ?? 0} min of the shift</p>
+                ) : null}
                 <IssueList issues={issues} />
                 <PermissionGate module="shiftPatterns">
                   <div className="flex justify-end gap-2 pt-1">
@@ -339,7 +361,7 @@ function RulesTab() {
       </div>
       {editing && (
         <RuleEditor
-          initial={editing === "new" ? blankRule() : { name: editing.name, shiftMinutes: editing.shiftMinutes, breaks: editing.breaks, weekOff: editing.weekOff, weekOffMode: editing.weekOffMode ?? "fixed", defaultStart: editing.defaultStart }}
+          initial={editing === "new" ? blankRule() : { name: editing.name, shiftMinutes: editing.shiftMinutes, breaks: editing.breaks, weekOff: editing.weekOff, weekOffMode: editing.weekOffMode ?? "fixed", noBreakStartMinutes: editing.noBreakStartMinutes ?? 0, noBreakEndMinutes: editing.noBreakEndMinutes ?? 0, defaultStart: editing.defaultStart }}
           onClose={() => setEditing(null)}
           onSave={(d) => {
             if (editing === "new") addWorkRule(d)

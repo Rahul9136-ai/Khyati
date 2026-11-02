@@ -499,6 +499,8 @@ class WorkRuleIn(_Loose):
     breaks: list[BreakStepIn] = []
     weekOff: list[int] = []
     weekOffMode: WeekOffMode | None = None
+    noBreakStartMinutes: int = Field(0, ge=0, le=240)
+    noBreakEndMinutes: int = Field(0, ge=0, le=240)
     defaultStart: str = _HHMM
 
 

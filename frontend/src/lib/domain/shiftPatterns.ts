@@ -21,6 +21,9 @@ export interface ShiftPattern {
   start: string // "HH:MM"
   end: string // "HH:MM"
   breaks: BreakSegment[]
+  /** No breaks this close to the shift's start / end (from its work rule). */
+  noBreakStartMinutes?: number
+  noBreakEndMinutes?: number
 }
 
 const DASH = "–" // en-dash — matches planning.ts's shift string parser

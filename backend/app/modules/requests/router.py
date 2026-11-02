@@ -6,7 +6,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import DbSession, require_permission
+from app.api.deps import DbSession, own_employee_id, require_permission, self_only
+from app.core.exceptions import NotFoundError
 from app.modules.identity.models import User
 from app.modules.requests import service
 from app.modules.requests.schemas import (
@@ -45,6 +46,8 @@ async def list_requests(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
 ):
+    if self_only(user):
+        employee_id = own_employee_id(user)
     rows, total = await service.list_requests(
         db, org_scope(user), status=status, category=category, employee_id=employee_id,
         overdue_only=overdue_only, offset=(page - 1) * size, limit=size,
@@ -58,6 +61,10 @@ async def list_requests(
 @router.get("/{request_id}", response_model=ApiResponse[RequestDetailOut])
 async def get_request(request_id: uuid.UUID, db: DbSession, user: Reader):
     request = await service.get_request(db, request_id)
+    if request.organization_id != org_scope(user) or (
+        self_only(user) and request.employee_id != own_employee_id(user)
+    ):
+        raise NotFoundError("Request not found")
     return ApiResponse(data=RequestDetailOut.model_validate(request))
 
 

@@ -53,7 +53,7 @@ export function localSettings(): Record<Key, unknown> {
     work_compliance: s.workCompliance,
     shift_patterns: s.shiftPatterns.filter((p) => !parseWorkRulePatternId(p.id)),
     agent_rules: Object.fromEntries(
-      s.agents.map((a) => [a.id, { shiftPatternId: a.shiftPatternId ?? null, weekOff: a.weekOff ?? null, weekOffMode: a.weekOffMode ?? null }]),
+      s.agents.map((a) => [a.id, { shiftPatternId: a.shiftPatternId ?? null, weekOff: a.weekOff ?? null, weekOffMode: a.weekOffMode ?? null, lob: s.queues.find((q) => q.id === a.skills[0])?.name ?? null }]),
     ),
   }
 }

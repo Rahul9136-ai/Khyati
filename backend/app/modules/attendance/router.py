@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import DbSession, require_permission
+from app.api.deps import DbSession, own_employee_id, require_permission, self_only
 from app.modules.attendance import service
 from app.modules.attendance.models import AttendanceCode
 from app.modules.attendance.schemas import (
@@ -81,6 +81,8 @@ async def list_records(
     page: int = Query(1, ge=1),
     size: int = Query(100, ge=1, le=500),
 ):
+    if self_only(user):
+        employee_id = own_employee_id(user)
     rows, total = await service.list_records(
         db, org_scope(user), employee_id=employee_id, start=start, end=end,
         offset=(page - 1) * size, limit=size,
@@ -115,4 +117,7 @@ async def update_record(
 async def summary(
     db: DbSession, user: Reader, start: date = Query(...), end: date = Query(...)
 ):
-    return ApiResponse(data=await service.summarize(db, org_scope(user), start, end))
+    employee_id = own_employee_id(user) if self_only(user) else None
+    return ApiResponse(
+        data=await service.summarize(db, org_scope(user), start, end, employee_id=employee_id)
+    )

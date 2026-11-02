@@ -4,6 +4,7 @@ import { SeriesChart } from "@/components/charts/series-chart"
 import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
+import { PerformanceReports } from "@/components/performance-reports"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -75,6 +76,8 @@ export function Reports() {
           </>
         }
       />
+
+      <PerformanceReports />
 
       <Card className="glass mb-4">
         <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-3 pt-5 text-sm">

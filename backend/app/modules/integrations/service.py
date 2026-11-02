@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -485,6 +485,7 @@ async def list_approvals(
     *,
     status: str | None = None,
     source: str | None = None,
+    own: tuple[uuid.UUID, uuid.UUID] | None = None,
     offset: int = 0,
     limit: int = 50,
 ) -> tuple[list[ApprovalRequest], int]:
@@ -495,6 +496,10 @@ async def list_approvals(
         query = query.where(ApprovalRequest.status == status)
     if source:
         query = query.where(ApprovalRequest.source == source)
+    if own:  # (user id, employee id): only approvals they raised or that are about them
+        query = query.where(
+            or_(ApprovalRequest.requested_by == own[0], ApprovalRequest.employee_id == own[1])
+        )
     total = (
         await db.execute(select(sa_func.count()).select_from(query.subquery()))
     ).scalar_one()

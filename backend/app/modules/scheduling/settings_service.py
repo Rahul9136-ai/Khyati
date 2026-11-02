@@ -64,10 +64,36 @@ def _check(key: str, value: Any) -> None:
         ids = [r.id for r in parsed]
         if len(ids) != len(set(ids)):
             raise ValidationError("Work rule ids must be unique")
+        for r in parsed:
+            used = sum(b.minutes for b in r.breaks) + r.noBreakStartMinutes + r.noBreakEndMinutes
+            if r.breaks and used > r.shiftMinutes:
+                raise ValidationError(f"{r.name}: the breaks don't fit between the no-break times")
     elif key == "agent_rules":
         days = [a.weekOff for a in parsed.values()]
     if any(d < 0 or d > 6 for ds in days if ds for d in ds):
         raise ValidationError("Week-off days are 0 (Monday) to 6 (Sunday)")
+
+
+async def break_zones(
+    db: AsyncSession, org_id: uuid.UUID, keys: list[str]
+) -> dict[str, tuple[int, int]]:
+    """agent_key → (no-break minutes after shift start, before shift end), for
+    agents whose work rule sets them."""
+    agents = await _get(db, org_id, "agent_rules")
+    rules = await _get(db, org_id, "work_rules")
+    if agents is None or rules is None or not isinstance(agents.value, dict):
+        return {}
+    by_id = {r.get("id"): r for r in rules.value if isinstance(r, dict)}
+    out: dict[str, tuple[int, int]] = {}
+    for key in keys:
+        pattern = (agents.value.get(key) or {}).get("shiftPatternId") or ""
+        if not pattern.startswith("wr:"):
+            continue
+        rule = by_id.get(pattern[3:].split("@")[0]) or {}
+        zones = (rule.get("noBreakStartMinutes") or 0, rule.get("noBreakEndMinutes") or 0)
+        if any(zones):
+            out[key] = zones
+    return out
 
 
 async def _get(db: AsyncSession, org_id: uuid.UUID, key: str) -> WorkspaceSetting | None:
@@ -78,6 +104,11 @@ async def _get(db: AsyncSession, org_id: uuid.UUID, key: str) -> WorkspaceSettin
             )
         )
     ).scalar_one_or_none()
+
+
+async def get_value(db: AsyncSession, org_id: uuid.UUID, key: str) -> Any:
+    row = await _get(db, org_id, key)
+    return row.value if row else None
 
 
 async def list_settings(db: AsyncSession, org_id: uuid.UUID) -> list[WorkspaceSetting]:

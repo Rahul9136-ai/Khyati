@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     # Web app base used for deep links in Slack/Teams cards ("Open in FlowForce").
     APP_WEB_URL: str = "http://localhost:5173"
 
+    # --- Email for scheduled reports (Resend API if a key is set, else SMTP) ---
+    EMAIL_FROM: str = ""
+    RESEND_API_KEY: str = ""
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_SECURITY: str = "starttls"  # starttls | ssl | none
+
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
     def _split_origins(cls, v: str | list[str]) -> list[str]:

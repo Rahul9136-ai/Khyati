@@ -13,15 +13,18 @@ from datetime import UTC, date, datetime, time, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.modules.attendance.models import AttendanceRecord
 from app.modules.attendance.service import summarize as attendance_summary
 from app.modules.forecasting.models import Forecast, ForecastPoint
+from app.modules.identity.models import User
 from app.modules.intraday.models import IntervalActual
 from app.modules.planning.models import CapacityPlan, CapacityPlanWeek
 from app.modules.requests.models import ChangeRequest
 from app.modules.scheduling.models import Schedule, ScheduleShift
-from app.modules.workforce.models import Employee
+from app.modules.workforce.models import Employee, Lob, Queue, Team
+
+MAX_REPORT_DAYS = 190
 
 
 def rows_to_csv(rows: list[dict]) -> str:
@@ -223,6 +226,126 @@ async def agent_performance(
         for emp_id, days, late, early in rows.all()
     ]
     return {"start": start.isoformat(), "end": end.isoformat(), "rows": out}
+
+
+async def performance_actuals(
+    db: AsyncSession, org_id: uuid.UUID, start: date, end: date
+) -> dict:
+    """Recorded (not forecast) performance data for the Performance reports:
+    attendance per employee-day and contact-centre actuals per queue-day."""
+    if end < start:
+        raise ValidationError("end must be on or after start")
+    if (end - start).days + 1 > MAX_REPORT_DAYS:
+        raise ValidationError(f"A report can cover at most {MAX_REPORT_DAYS} days")
+    lobs = {
+        lob.id: lob.name
+        for lob in (await db.execute(select(Lob).where(Lob.organization_id == org_id))).scalars()
+    }
+    team_rows = await db.execute(select(Team).where(Team.organization_id == org_id))
+    teams = {t.id: t for t in team_rows.scalars()}
+    records = await db.execute(
+        select(AttendanceRecord, Employee)
+        .join(Employee, AttendanceRecord.employee_id == Employee.id)
+        .where(
+            AttendanceRecord.organization_id == org_id,
+            AttendanceRecord.day >= start,
+            AttendanceRecord.day <= end,
+        )
+        .order_by(AttendanceRecord.day)
+    )
+    attendance = []
+    for rec, emp in records.all():
+        team = teams.get(emp.team_id) if emp.team_id else None
+        attendance.append(
+            {
+                "employee_code": emp.employee_code,
+                "employee_name": emp.full_name,
+                "team": team.name if team else "",
+                "lob": lobs.get(emp.lob_id or (team.lob_id if team else None), ""),
+                "date": rec.day.isoformat(),
+                "code": rec.code.name,
+                "category": rec.code.category,
+                "minutes_late": rec.minutes_late,
+                "minutes_early_logout": rec.minutes_early_logout,
+            }
+        )
+    start_ts = datetime.combine(start, time.min, tzinfo=UTC)
+    end_ts = datetime.combine(end + timedelta(days=1), time.min, tzinfo=UTC)
+    intervals = await db.execute(
+        select(IntervalActual, Queue)
+        .join(Queue, IntervalActual.queue_id == Queue.id)
+        .where(
+            IntervalActual.organization_id == org_id,
+            IntervalActual.ts >= start_ts,
+            IntervalActual.ts < end_ts,
+        )
+    )
+    days: dict[tuple[uuid.UUID, date], dict] = {}
+    for act, queue in intervals.all():
+        agg = days.setdefault(
+            (queue.id, act.ts.date()),
+            {"queue": queue, "offered": 0.0, "handled": 0.0, "aht": 0.0,
+             "sl": 0.0, "sl_n": 0.0, "occ": 0.0, "occ_n": 0},
+        )
+        agg["offered"] += act.offered
+        agg["handled"] += act.handled
+        agg["aht"] += act.aht_seconds * act.handled
+        if act.service_level is not None and act.offered > 0:
+            agg["sl"] += act.service_level * act.offered
+            agg["sl_n"] += act.offered
+        if act.occupancy is not None:
+            agg["occ"] += act.occupancy
+            agg["occ_n"] += 1
+    queues = [
+        {
+            "lob": lobs.get(a["queue"].lob_id, ""),
+            "queue": a["queue"].name,
+            "channel": a["queue"].channel,
+            "date": day.isoformat(),
+            "offered": round(a["offered"], 1),
+            "handled": round(a["handled"], 1),
+            "aht_seconds": round(a["aht"] / a["handled"]) if a["handled"] else None,
+            "service_level_pct": round(a["sl"] / a["sl_n"] * 100, 1) if a["sl_n"] else None,
+            "sl_target_pct": round(a["queue"].sla_target_pct * 100, 1),
+            "occupancy_pct": round(a["occ"] / a["occ_n"] * 100, 1) if a["occ_n"] else None,
+        }
+        for (_, day), a in sorted(days.items(), key=lambda kv: (kv[0][1], kv[1]["queue"].name))
+    ]
+    return {"start": start.isoformat(), "end": end.isoformat(),
+            "attendance": attendance, "queues": queues}
+
+
+async def my_attendance(db: AsyncSession, user: User, start: date, end: date) -> dict:
+    """The signed-in person's own attendance: never anyone else's, by construction."""
+    if end < start:
+        raise ValidationError("end must be on or after start")
+    if (end - start).days + 1 > MAX_REPORT_DAYS:
+        raise ValidationError(f"A report can cover at most {MAX_REPORT_DAYS} days")
+    rows: list[dict] = []
+    emp = await db.get(Employee, user.employee_id) if user.employee_id else None
+    if emp is not None:
+        records = await db.execute(
+            select(AttendanceRecord)
+            .where(
+                AttendanceRecord.employee_id == emp.id,
+                AttendanceRecord.day >= start,
+                AttendanceRecord.day <= end,
+            )
+            .order_by(AttendanceRecord.day)
+        )
+        rows = [
+            {
+                "employee_code": emp.employee_code,
+                "employee_name": emp.full_name,
+                "date": r.day.isoformat(),
+                "code": r.code.name,
+                "category": r.code.category,
+                "minutes_late": r.minutes_late,
+                "minutes_early_logout": r.minutes_early_logout,
+            }
+            for r in records.scalars()
+        ]
+    return {"start": start.isoformat(), "end": end.isoformat(), "attendance": rows}
 
 
 async def dashboard(db: AsyncSession, org_id: uuid.UUID) -> dict:

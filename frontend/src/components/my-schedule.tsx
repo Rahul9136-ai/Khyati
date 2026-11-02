@@ -1,17 +1,41 @@
 import { useQuery } from "@tanstack/react-query"
 import { CalendarCheck } from "lucide-react"
 
+import { ExportButton } from "@/components/export-button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { api } from "@/lib/api"
 import { lanes } from "@/lib/domain/channelPlanner"
 import { ACTIVITY_BY_ID, CHANNEL_BY_ID, fmtHM } from "@/lib/domain/channels"
 import { fmtDay, localISODate, scheduleHorizon, weekStart } from "@/lib/domain/horizon"
+import type { Row } from "@/lib/export"
+import { dayStatus } from "@/lib/performanceReport"
 import type { ServerDayPlan } from "@/lib/scheduleSync"
-import { useScheduleSync } from "@/lib/scheduleSync"
+import { dayFromServer, useScheduleSync } from "@/lib/scheduleSync"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/store/auth"
 
 export type PublishedDay = ServerDayPlan & { plan_date: string }
+
+/** One row per published day, for the agent's own export. */
+export function scheduleExportRows(days: PublishedDay[]): Row[] {
+  return days.map((d) => {
+    const day = dayFromServer(d)
+    const status = dayStatus(day)
+    const off = status !== "Working"
+    const blocks = (xs: { start: number; end: number }[], label: (x: never) => string) =>
+      xs.map((x) => `${label(x as never)} ${fmtHM(x.start)}–${fmtHM(x.end)}`).join("; ")
+    return {
+      Date: d.plan_date,
+      Status: status,
+      "Shift start": off ? "" : fmtHM(d.shift_start),
+      "Shift end": off ? "" : fmtHM(d.shift_end),
+      Channels: off ? "" : lanes(d.channels).map(([c, s, e]) => `${CHANNEL_BY_ID[c].label} ${fmtHM(s)}–${fmtHM(e)}`).join("; "),
+      Breaks: off ? "" : blocks(d.breaks, (b: { label: string; type: string }) => b.label || b.type),
+      Activities: blocks(d.activities, (a: { type: keyof typeof ACTIVITY_BY_ID }) => ACTIVITY_BY_ID[a.type]?.label ?? a.type),
+      Overtime: blocks(d.overtime, (o: { channel: keyof typeof CHANNEL_BY_ID }) => CHANNEL_BY_ID[o.channel].label),
+    }
+  })
+}
 
 /** An agent's published days for the next 3 months: a signed-in agent's own
  *  (GET /scheduling/my-schedule), or — for staff previewing the Agent view —
@@ -44,10 +68,15 @@ export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDat
   return (
     <Card className="glass mb-4">
       <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2"><CalendarCheck className="h-4 w-4 text-primary" /> My schedule — next 3 months</CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {fmtDay(start)} – {fmtDay(end)} · published shifts only. You get a pop-up whenever one of them changes.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2"><CalendarCheck className="h-4 w-4 text-primary" /> My schedule — next 3 months</CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {fmtDay(start)} – {fmtDay(end)} · published shifts only. You get a pop-up whenever one of them changes.
+            </p>
+          </div>
+          {!!data?.length && <ExportButton label="Export my schedule" filename="my-schedule" sheets={() => [{ name: "My schedule", rows: scheduleExportRows(data) }]} />}
+        </div>
       </CardHeader>
       <CardContent>
         {!online ? (

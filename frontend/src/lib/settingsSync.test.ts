@@ -63,7 +63,7 @@ describe("shared work rules & week offs", () => {
     const [url, body] = put.mock.calls[0] as [string, { value: Record<string, unknown>; base_version: number }]
     expect(url).toBe("/scheduling/settings/agent_rules")
     expect(body.base_version).toBe(1)
-    expect(body.value[b.id]).toEqual({ shiftPatternId: "wr:wr-9h@08:00", weekOff: [5, 6], weekOffMode: "fixed" })
+    expect(body.value[b.id]).toMatchObject({ shiftPatternId: "wr:wr-9h@08:00", weekOff: [5, 6], weekOffMode: "fixed" })
   })
 
   it("someone else saved first: loads theirs and says so", async () => {

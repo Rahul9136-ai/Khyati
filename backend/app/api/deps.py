@@ -47,6 +47,20 @@ async def get_current_user(
 CurrentUser = Annotated["object", Depends(get_current_user)]
 
 
+#: Matches no employee: scopes a self-only user with no linked employee to nothing.
+NO_EMPLOYEE = uuid.UUID(int=0)
+
+
+def self_only(user) -> bool:  # noqa: ANN001 - a User or an API-key actor
+    """Agents may only see their own records: anyone who can neither read employees
+    nor edit schedules. (A CRM's API key with schedule:write isn't an agent.)"""
+    return not user.is_superuser and not {"employee:read", "schedule:write"} & user.permission_codes
+
+
+def own_employee_id(user) -> uuid.UUID:  # noqa: ANN001
+    return user.employee_id or NO_EMPLOYEE
+
+
 def require_permission(*codes: str):
     """Dependency factory: the current user must hold ANY of `codes`.
 

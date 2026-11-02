@@ -14,7 +14,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from app.api.deps import DbSession, require_permission
+from app.api.deps import DbSession, own_employee_id, require_permission, self_only
+from app.core.exceptions import NotFoundError
 from app.modules.identity.models import User
 from app.modules.integrations import automation, service
 from app.modules.integrations.models import IntegrationConfig
@@ -126,6 +127,7 @@ async def list_approvals(
 ):
     rows, total = await service.list_approvals(
         db, org_scope(user), status=status, source=source,
+        own=(user.id, own_employee_id(user)) if self_only(user) else None,
         offset=(page - 1) * size, limit=size,
     )
     return ApiResponse(
@@ -137,6 +139,12 @@ async def list_approvals(
 @router.get("/approvals/{approval_id}", response_model=ApiResponse[ApprovalDetailOut])
 async def get_approval(approval_id: uuid.UUID, db: DbSession, user: ApprovalReader):
     approval = await service.get_approval(db, approval_id)
+    if approval.organization_id != org_scope(user) or (
+        self_only(user)
+        and user.id != approval.requested_by
+        and own_employee_id(user) != approval.employee_id
+    ):
+        raise NotFoundError("Approval not found")
     return ApiResponse(data=ApprovalDetailOut.model_validate(approval))
 
 

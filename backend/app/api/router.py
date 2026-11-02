@@ -21,6 +21,7 @@ from app.modules.intraday.router import router as intraday_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.planning.router import router as planning_router
 from app.modules.reporting.router import router as reports_router
+from app.modules.reporting.scheduled_router import router as scheduled_reports_router
 from app.modules.requests.router import router as requests_router
 from app.modules.scheduling.router import router as scheduling_router
 from app.modules.workforce.router import employees_router, org_router
@@ -44,6 +45,7 @@ api_router.include_router(integrations_router)
 api_router.include_router(connect_router)
 api_router.include_router(hcplanning_router)
 api_router.include_router(attendance_router)
+api_router.include_router(scheduled_reports_router)
 api_router.include_router(reports_router)
 api_router.include_router(notifications_router)
 api_router.include_router(ai_router)

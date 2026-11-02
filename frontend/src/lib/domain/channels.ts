@@ -151,6 +151,14 @@ export interface AgentDay {
   channels: ChannelSegment[]
   ot: ChannelSegment[]
   activities: ActivitySegment[]
+  /** Minutes at the start / end of the shift where no break may be placed (work rule). */
+  noBreak?: [number, number]
+}
+
+/** The no-break zones of the pattern an agent is on, if any. */
+export function noBreakFor(agent: Agent, patterns: ShiftPattern[]): [number, number] | undefined {
+  const p = agent.shiftPatternId ? patterns.find((x) => x.id === agent.shiftPatternId) : undefined
+  return p && (p.noBreakStartMinutes || p.noBreakEndMinutes) ? [p.noBreakStartMinutes ?? 0, p.noBreakEndMinutes ?? 0] : undefined
 }
 
 export function agentDay(
@@ -167,6 +175,7 @@ export function agentDay(
     channels: effectiveChannelSegments(agent, channelPlan).map((c) => ({ ...c })).sort((a, b) => a.start - b.start),
     ot: (otPlan[agent.id] ?? []).map((o) => ({ ...o })).sort((a, b) => a.start - b.start),
     activities: (activityPlan[agent.id] ?? []).map((x) => ({ ...x })).sort((a, b) => a.start - b.start),
+    ...(noBreakFor(agent, patterns) ? { noBreak: noBreakFor(agent, patterns) } : {}),
   }
 }
 
@@ -193,17 +202,19 @@ export function editValue(day: AgentDay, op: EditOp): number {
 export function editBounds(day: AgentDay, op: EditOp): [number, number] {
   const [s, e] = day.shift
   const v = editValue(day, op)
+  const [guardStart, guardEnd] = day.noBreak ?? [0, 0]
 
   if (op.kind === "shift-resize") {
     // Breaks and activities must stay inside the shift; OT stays outside it.
     const inner = [...day.breaks, ...day.activities]
     if (op.edge === "start") {
       const otBefore = day.ot.filter((o) => o.end <= s).map((o) => o.end)
-      const firstInner = Math.min(e, ...inner.map((b) => b.start))
+      // Moving the start later can't bring a break into the no-break zone.
+      const firstInner = Math.max(s, Math.min(e, ...inner.map((b) => b.start), ...day.breaks.map((b) => b.start - guardStart)))
       return [Math.max(0, ...otBefore), Math.min(firstInner, e - MIN_LEN.shift)]
     }
     const otAfter = day.ot.filter((o) => o.start >= e).map((o) => o.start)
-    const lastInner = Math.max(s, ...inner.map((b) => b.end))
+    const lastInner = Math.min(e, Math.max(s, ...inner.map((b) => b.end), ...day.breaks.map((b) => b.end + guardEnd)))
     return [Math.max(lastInner, s + MIN_LEN.shift), Math.min(24 * 60, ...otAfter)]
   }
 
@@ -214,8 +225,13 @@ export function editBounds(day: AgentDay, op: EditOp): [number, number] {
     const me = list.find((b) => b.id === op.segId)
     if (!me) return [v, v]
     const others = list.filter((b) => b.id !== op.segId)
-    const prevEnd = Math.max(s, ...others.filter((b) => b.end <= me.start).map((b) => b.end))
-    const nextStart = Math.min(e, ...others.filter((b) => b.start >= me.end).map((b) => b.start))
+    // A break stays out of the work rule's no-break zones (one already inside
+    // can only move out, not further in).
+    const isBreak = op.kind === "aux-move" || op.kind === "aux-resize"
+    const floor = isBreak ? Math.min(s + guardStart, me.start) : s
+    const ceil = isBreak ? Math.max(e - guardEnd, me.end) : e
+    const prevEnd = Math.max(floor, ...others.filter((b) => b.end <= me.start).map((b) => b.end))
+    const nextStart = Math.min(ceil, ...others.filter((b) => b.start >= me.end).map((b) => b.start))
     if (op.kind === "aux-move" || op.kind === "activity-move") return [prevEnd, nextStart - (me.end - me.start)]
     return op.edge === "start" ? [prevEnd, me.end - MIN_LEN.aux] : [me.start + MIN_LEN.aux, nextStart]
   }
@@ -257,6 +273,7 @@ export function applyEdit(day: AgentDay, op: EditOp, value: number): AgentDay {
     channels: day.channels.map((c) => ({ ...c })),
     ot: day.ot.map((o) => ({ ...o })),
     activities: day.activities.map((x) => ({ ...x })),
+    ...(day.noBreak ? { noBreak: day.noBreak } : {}),
   }
 
   if (op.kind === "shift-resize") {
@@ -320,6 +337,7 @@ export function moveDay(day: AgentDay, delta: number): AgentDay {
     channels: day.channels.map(mv),
     ot: day.ot.map(mv),
     activities: day.activities.map(mv),
+    ...(day.noBreak ? { noBreak: day.noBreak } : {}),
   }
 }
 
@@ -387,6 +405,9 @@ export function markAux(day: AgentDay, kind: AuxKind, start: number, length: num
   if (from < s || to > e) return { ok: false, reason: `Outside shift ${fmtHM(s)}–${fmtHM(e)}` }
   const next: AgentDay = { ...day, breaks: [...day.breaks], activities: [...day.activities] }
   if (kind === "break" || kind === "lunch") {
+    const [first, last] = day.noBreak ?? [0, 0]
+    if (first && from < s + first) return { ok: false, reason: `No breaks in the first ${first} min of this shift (work rule)` }
+    if (last && to > e - last) return { ok: false, reason: `No breaks in the last ${last} min of this shift (work rule)` }
     const clash = day.breaks.find((b) => from < b.end && to > b.start)
     if (clash) return { ok: false, reason: `Clashes with ${clash.label} ${fmtHM(clash.start)}–${fmtHM(clash.end)}` }
     next.breaks = [...day.breaks, { id, type: kind, label: kind === "lunch" ? "Lunch" : "Break", start: from, end: to }].sort((a, b) => a.start - b.start)

@@ -31,7 +31,7 @@ from app.core.exceptions import (
 from app.modules.identity.models import User
 from app.modules.identity.service import record_audit
 from app.modules.scheduling import dayplan as dp
-from app.modules.scheduling import events, labour_law, schedule_notify
+from app.modules.scheduling import events, labour_law, schedule_notify, settings_service
 from app.modules.scheduling.models import DaySchedulePlan, SchedulingPolicy
 from app.modules.scheduling.schemas import (
     DayAddOvertimeIn,
@@ -194,6 +194,17 @@ async def save_day_plans(
         )
 
     existing = await _rows_by_key(db, org_id, plan_date, keys, require_all=False)
+    # Breaks moved into a work rule's no-break time are refused for saved days.
+    zones = await settings_service.break_zones(db, org_id, keys)
+    blocked = {
+        k: errs for k, z in zones.items() if k in existing
+        and (errs := dp.break_zone_errors(days[k], z, _row_to_day(existing[k])))
+    }
+    if blocked:
+        raise ValidationError(
+            f"{len(blocked)} schedule(s) put a break in the work rule's no-break time",
+            details=[{"agent_key": k, "errors": v} for k, v in blocked.items()],
+        )
     stale = [
         i.agent_key
         for i in payload.items
@@ -278,6 +289,7 @@ async def _apply_each(
     """Run `fn(index, key, day)` over each agent's current day. A string result
     skips that agent with a reason; otherwise the new day is validated + saved."""
     rows = await _rows_by_key(db, org_id, plan_date, keys, require_all=True)
+    zones = await settings_service.break_zones(db, org_id, list(rows))
     saved, skipped = [], []
     changes: list[tuple[DaySchedulePlan, str]] = []
     for i, key in enumerate(dict.fromkeys(keys)):  # de-duplicate, keep order
@@ -288,6 +300,9 @@ async def _apply_each(
             skipped.append({"agent_key": key, "reason": result})
             continue
         if errs := dp.validate_day(result):
+            skipped.append({"agent_key": key, "reason": "; ".join(errs)})
+            continue
+        if key in zones and (errs := dp.break_zone_errors(result, zones[key], before)):
             skipped.append({"agent_key": key, "reason": "; ".join(errs)})
             continue
         if row.published_at is not None and before != result.sorted():

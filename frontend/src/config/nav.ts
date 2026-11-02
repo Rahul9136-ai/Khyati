@@ -13,6 +13,7 @@ import {
   Gauge,
   History,
   LayoutDashboard,
+  Mail,
   Repeat,
   type LucideIcon,
   PlaneTakeoff,
@@ -78,6 +79,7 @@ export const NAV: NavGroup[] = [
     group: "Insights",
     items: [
       { to: "/reports", label: "Reports & KPIs", icon: BarChart3, module: "reports" },
+      { to: "/scheduled-reports", label: "Scheduled Reports", icon: Mail, module: "reports" },
       { to: "/copilot", label: "AI Copilot", icon: Sparkles, module: "copilot" },
       { to: "/help", label: "Methodology", icon: BookOpenText, module: "help" },
     ],

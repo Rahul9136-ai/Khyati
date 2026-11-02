@@ -523,6 +523,32 @@ def with_overtime_added(day: AgentDay, seg: ChannelSeg) -> AgentDay:
     return nxt
 
 
+def break_zone_errors(
+    day: AgentDay, zones: tuple[int, int], before: AgentDay | None = None
+) -> list[str]:
+    """Breaks inside the work rule's no-break zones (minutes after the shift's
+    start / before its end). A break that was already there — same place in the
+    shift — is left alone, so tightening a rule doesn't block unrelated saves."""
+    first, last = zones
+
+    def inside(d: AgentDay) -> list[BreakSeg]:
+        return [
+            b for b in d.breaks
+            if (first and b.start < d.shift_start + first) or (last and b.end > d.shift_end - last)
+        ]
+
+    known = (
+        {(b.start - before.shift_start, b.end - before.shift_start) for b in inside(before)}
+        if before else set()
+    )
+    return [
+        f"{b.label} {fmt_hm(b.start)}–{fmt_hm(b.end)}: the work rule allows no breaks in the "
+        f"first {first} / last {last} min of the shift"
+        for b in inside(day)
+        if (b.start - day.shift_start, b.end - day.shift_start) not in known
+    ]
+
+
 def mark_aux(
     day: AgentDay,
     kind: AuxKind,

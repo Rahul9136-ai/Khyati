@@ -161,6 +161,8 @@ export function optimiseBreaks(
     for (const a of agents) {
       const [ss, se] = shiftRange(a.shift)
       const shiftLen = se - ss
+      const rule = resolvePatternForAgent(a, patterns)
+      const [minStart, minEnd] = [Math.max(30, rule.noBreakStartMinutes ?? 0), Math.max(30, rule.noBreakEndMinutes ?? 0)]
       for (const seg of segs[a.id]) {
         const oldIdx = idxForOffset(ss, seg.offsetMinutes, seg.durationMinutes)
         const otherIdx = new Set(
@@ -171,8 +173,8 @@ export function optimiseBreaks(
         for (let k = -3; k <= 3; k++) {
           if (k === 0) continue
           const cand = seg.offsetMinutes + k * 30
-          // keep a 30-min buffer from both shift edges, stay inside the shift
-          if (cand < 30 || cand + seg.durationMinutes > shiftLen - 30) continue
+          // keep a 30-min buffer (or the work rule's no-break zone) from both shift edges
+          if (cand < minStart || cand + seg.durationMinutes > shiftLen - minEnd) continue
           const newIdx = idxForOffset(ss, cand, seg.durationMinutes)
           if (newIdx.some((i) => otherIdx.has(i)) || newIdx.length === 0) continue
           let delta = 0
