@@ -4,6 +4,7 @@
 // adherence sheets are point-in-time snapshots.
 import { backtest } from "@/lib/domain/forecast"
 import { fmtDay, parseYMD } from "@/lib/domain/dates"
+import { liveSecs } from "@/lib/domain/liveState"
 import { fmtPct } from "@/lib/domain/planning"
 import { agentAdherencePct, AUX_BY_CODE, inAdherence } from "@/lib/domain/seed"
 import type { RtaEntry } from "@/lib/domain/types"
@@ -90,7 +91,7 @@ export function allReportSheets(
       "Scheduled state": AUX_BY_CODE[r.scheduled]?.label ?? r.scheduled,
       Adherence: inAdherence(r.actual, r.scheduled) ? "In" : "Out",
       "Adherence %": fmtPct(agentAdherencePct(r)),
-      "Time in state (s)": r.secs,
+      "Time in state (s)": liveSecs(r),
     }
   })
 

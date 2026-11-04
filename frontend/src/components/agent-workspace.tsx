@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { CalendarClock, Clock3, PlaneTakeoff, Plus, ShieldCheck, Star } from "lucide-react"
 import { Link, useNavigate } from "react-router-dom"
 
@@ -15,7 +15,8 @@ import { DAY_END, DAY_START, fmtMin, type RequestKind } from "@/lib/domain/adher
 import { effectiveSegments } from "@/lib/domain/breaks"
 import { workedMinutes } from "@/lib/domain/labourLaw"
 import { addDays, localISODate } from "@/lib/domain/horizon"
-import { AUX, AUX_BY_CODE } from "@/lib/domain/seed"
+import { liveSecs } from "@/lib/domain/liveState"
+import { AUX, AUX_BY_CODE, inAdherence } from "@/lib/domain/seed"
 import { dayFromServer } from "@/lib/scheduleSync"
 import type { BreakType } from "@/lib/domain/shiftPatterns"
 import { useWfm } from "@/store/wfm"
@@ -131,6 +132,8 @@ export function AgentWorkspace({ agentId }: { agentId: string }) {
           })}
         </div>
       </div>
+
+      <LiveNow agentId={agent.id} />
 
       <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiCard label="Today's shift" value={agent.shift} hint={primarySkill?.name ?? "unassigned"} icon={Clock3} />
@@ -314,5 +317,31 @@ export function AgentWorkspace({ agentId }: { agentId: string }) {
         </div>
       </Dialog>
     </>
+  )
+}
+
+/** The agent's own state on the real-time board, ticking — the same entry
+ *  team leaders and the RTA see. */
+function LiveNow({ agentId }: { agentId: string }) {
+  const entry = useWfm((s) => s.rta.find((r) => r.id === agentId))
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  if (!entry) return null
+  const actual = AUX_BY_CODE[entry.actual]
+  const scheduled = AUX_BY_CODE[entry.scheduled]
+  const onPlan = inAdherence(entry.actual, entry.scheduled)
+  const secs = liveSecs(entry, now)
+  return (
+    <div role="status" aria-label="Your live state" className="glass mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border px-4 py-3 text-sm">
+      <span className="flex items-center gap-2 font-semibold">
+        <span className="h-2.5 w-2.5 rounded-full" style={{ background: actual?.color }} /> Right now: {actual?.label ?? entry.actual}
+      </span>
+      <span className="tabular-nums text-muted-foreground">{Math.floor(secs / 60)}:{String(secs % 60).padStart(2, "0")} in state</span>
+      <span className="text-muted-foreground">Scheduled: <b className="text-foreground">{scheduled?.label ?? entry.scheduled}</b></span>
+      <Badge variant={onPlan ? "success" : "warning"}>{onPlan ? "On plan" : "Off plan"}</Badge>
+    </div>
   )
 }

@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ArrowRight, Activity, ClipboardCheck, PhoneCall, Radar, RefreshCw, Siren, UserX, Zap } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { buildAgentDay, DAY_START, escalationFor, scoreAgentDay, type EscalationLevel } from "@/lib/domain/adherence"
+import { liveSecs } from "@/lib/domain/liveState"
 import { agentAdherencePct, AUX, AUX_BY_CODE, inAdherence } from "@/lib/domain/seed"
 import { buildPlan, fmtPct } from "@/lib/domain/planning"
 import { CAN_APPROVE_SKILL_CHANGE_OPS, CAN_APPROVE_SKILL_CHANGE_WFM } from "@/lib/domain/roles"
@@ -32,9 +33,11 @@ export function Rta() {
   } = useWfm()
   const byId = useMemo(() => Object.fromEntries(agents.map((a) => [a.id, a])), [agents])
 
-  const [tick, setTick] = useState(0)
+  // Time in state counts from each agent's state timestamp, so it matches
+  // every other page and keeps going when you leave and come back.
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const t = setInterval(() => setTick((x) => x + 1), 1000)
+    const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [])
 
@@ -84,7 +87,7 @@ export function Rta() {
     () =>
       rta
         .map((r) => {
-          const live = r.recalled ? tick : r.secs + tick
+          const live = liveSecs(r, now)
           const off = !inAdherence(r.actual, r.scheduled)
           return {
             ...r,
@@ -96,7 +99,7 @@ export function Rta() {
           }
         })
         .filter((r) => r.agent),
-    [rta, byId, tick, thresholds.graceMins, thresholds.escalateMins],
+    [rta, byId, now, thresholds.graceMins, thresholds.escalateMins],
   )
 
   // Escalation ladder: grace → flagged → escalated-to-TL, per configured windows.

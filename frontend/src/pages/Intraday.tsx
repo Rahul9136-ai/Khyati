@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react"
+import { Link } from "react-router-dom"
 
 import { SeriesChart } from "@/components/charts/series-chart"
 import { ExportButton } from "@/components/export-button"
@@ -12,6 +13,7 @@ import { CheckCircle2, Gauge, LineChart, Target, Timer, Zap } from "lucide-react
 import { buildPlan, fmtPct } from "@/lib/domain/planning"
 import { actualsFor, INTERVALS } from "@/lib/domain/seed"
 import { cn } from "@/lib/utils"
+import { useLiveInterval } from "@/lib/useLiveInterval"
 import { useWfm } from "@/store/wfm"
 
 export function Intraday() {
@@ -19,6 +21,8 @@ export function Intraday() {
   // Proposals approved this session (per queue and interval), so each is approved once and shows it.
   const [approved, setApproved] = useState<Set<string>>(new Set())
   const queue = queues.find((q) => q.id === queueId)!
+  // The floor right now, from the Real-Time Monitor — same figures as the Dashboard and Scheduling.
+  const live = useLiveInterval(queue)
   const volume = forecasts[queue.id]
   const actuals = useMemo(() => actualsFor(queue.id, nowIdx), [queue.id, nowIdx])
 
@@ -141,6 +145,26 @@ export function Intraday() {
             <span className="font-semibold tabular-nums">{INTERVALS[nowIdx].label}</span>
           </div>
           <input type="range" min={0} max={INTERVALS.length - 1} value={nowIdx} onChange={(e) => setNowIdx(+e.target.value)} className="w-full accent-primary" />
+        </CardContent>
+      </Card>
+
+      <Card className="glass mb-4">
+        <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2 py-3 text-sm">
+          <span className="flex items-center gap-2 font-semibold">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+            </span>
+            Live floor · {INTERVALS[nowIdx].label}
+          </span>
+          <span>On queue <b className={cn("tabular-nums", live.liveHeads >= live.requiredNet ? "text-emerald-500" : "text-amber-500")}>{live.liveHeads}</b> <span className="text-muted-foreground">/ need {live.requiredNet} · planned {live.plannedNet}</span></span>
+          <span>Offered <b className="tabular-nums">{live.row?.offered ?? 0}</b></span>
+          <span>Handled <b className="tabular-nums">{live.row?.handled ?? 0}</b></span>
+          <span>Abandoned <b className={cn("tabular-nums", (live.row?.abandonRate ?? 0) > 0.05 && "text-destructive")}>{live.row?.abandoned ?? 0}</b></span>
+          <span>ASA <b className="tabular-nums">{Math.round(live.row?.asa ?? 0)}s</b></span>
+          <span>SL <b className={cn("tabular-nums", (live.row?.sl ?? 0) >= queue.slTarget ? "text-emerald-500" : "text-destructive")}>{fmtPct(live.row?.sl ?? 0)}</b></span>
+          <span>Adherence <b className="tabular-nums">{fmtPct(live.adherence)}</b> <span className="text-muted-foreground">({live.onPlan}/{live.boardSize})</span></span>
+          <Link to="/rta" className="ml-auto text-xs text-primary hover:underline">Real-Time Monitor →</Link>
         </CardContent>
       </Card>
 

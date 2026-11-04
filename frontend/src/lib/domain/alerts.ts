@@ -7,6 +7,7 @@ import { recommendActions } from "./heal"
 import { inAdherence } from "./seed"
 import type { Agent, Queue, RtaEntry } from "./types"
 import type { Thresholds } from "./automation"
+import { liveSecs } from "./liveState"
 
 export type AlertSeverity = "info" | "warning" | "critical"
 
@@ -49,7 +50,7 @@ export function computeAlerts(inp: AlertInputs): WfmAlert[] {
   }
 
   const escalated = inp.rta.filter(
-    (r) => escalationFor(!inAdherence(r.actual, r.scheduled), r.secs, inp.thresholds.graceMins, inp.thresholds.escalateMins) === "escalated",
+    (r) => escalationFor(!inAdherence(r.actual, r.scheduled), liveSecs(r), inp.thresholds.graceMins, inp.thresholds.escalateMins) === "escalated",
   )
   if (escalated.length > 0) {
     out.push({

@@ -76,7 +76,7 @@ export function agentAdherencePct(r: RtaEntry, elapsedSecs = 6 * 3600): number {
   const h = [...r.id].reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) >>> 0, 7)
   const scrambled = Math.imul(h, 2654435761) >>> 0 // spread consecutive ids apart
   const priorOffSecs = 60 + (scrambled % 540) // 1–10 min of earlier exceptions
-  const offNowSecs = inAdherence(r.actual, r.scheduled) ? 0 : r.secs
+  const offNowSecs = inAdherence(r.actual, r.scheduled) ? 0 : r.since ? Math.max(0, (Date.now() - r.since) / 1000) : r.secs
   return Math.max(0.4, 1 - (priorOffSecs + offNowSecs) / elapsedSecs)
 }
 
@@ -140,7 +140,7 @@ export function makeRTA(agents: Agent[]): RtaEntry[] {
       else if (r === 3) actual = "ACW"
     }
     const secs = ((i * 53 + 17) % 1100) + 40
-    return { id: a.id, actual, scheduled: sched, secs }
+    return { id: a.id, actual, scheduled: sched, secs, since: Date.now() - secs * 1000 }
   })
 }
 

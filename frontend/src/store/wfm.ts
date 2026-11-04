@@ -40,6 +40,7 @@ import {
 import { effectiveSegments, optimiseBreaks, type BreakOverrides } from "@/lib/domain/breaks"
 import {
   ACTIVITY_BY_ID,
+  agentDay,
   fmtHM,
   toMins,
   withOvertimeAdded,
@@ -50,6 +51,7 @@ import {
   type OvertimePlan,
 } from "@/lib/domain/channels"
 import { addDays, localISODate } from "@/lib/domain/horizon"
+import { liveMinute, liveSecs, scheduledAux } from "@/lib/domain/liveState"
 import { LABOUR_LAW_BY_CODE, type LawOverrides } from "@/lib/domain/labourLaw"
 import { buildPlan, summarisePlan } from "@/lib/domain/planning"
 import type { Scenario } from "@/lib/domain/scenario"
@@ -193,7 +195,7 @@ function settle(s: EmploymentSlices, today: string, by: string): Partial<Employm
   ]
   return {
     agents: [...s.agents.filter((a) => !gone.has(a.id)), ...returning],
-    rta: [...s.rta.filter((r) => !gone.has(r.id)), ...returning.map((a) => ({ id: a.id, actual: "OFFLINE", scheduled: "AVAIL", secs: 0 }))],
+    rta: [...s.rta.filter((r) => !gone.has(r.id)), ...returning.map((a) => ({ id: a.id, actual: "OFFLINE", scheduled: "AVAIL", secs: 0, since: Date.now() }))],
     formerEmployees,
     employeeChanges: [...changes, ...s.employeeChanges].slice(0, MAX_CHANGES),
     auditLog: [...changes.map((c) => entry(by, "Employee", c.action === "Exited" ? "Employee exited" : "Employee rehired", `${c.name} · ${c.detail}`)), ...s.auditLog],
@@ -438,6 +440,11 @@ interface WfmState {
   setAgentSkills: (agentId: string, skills: string[]) => void
   recallAgent: (id: string) => void
   recallMany: (ids: string[]) => void
+  /** Keep the real-time board in step with today's schedule: each agent's
+   *  scheduled state is read from their day on the timeline at the live minute;
+   *  anyone following the plan moves into its next state. Runs on a timer and
+   *  whenever the schedule or the Intraday clock changes. */
+  syncRealTime: () => void
 
   // Global shift + break patterns, reused across agents.
   shiftPatterns: ShiftPattern[]
@@ -665,7 +672,7 @@ export const useWfm = create<WfmState>()(
           const skills = agent.skills.map((sk) => skillLabel(sk, s.queues)).join(" > ")
           return {
             agents: [...s.agents, agent],
-            rta: [...s.rta, { id, actual: "AVAIL", scheduled: "AVAIL", secs: 0 }],
+            rta: [...s.rta, { id, actual: "AVAIL", scheduled: "AVAIL", secs: 0, since: Date.now() }],
             employeeChanges: [changeEntry(s.currentUser, agent, "Onboarded", `${agent.team} team · ${skills}`), ...s.employeeChanges].slice(0, MAX_CHANGES),
             auditLog: [
               entry(s.currentUser, "Employee", "Added employee", `${agent.name} · ${agent.team} · ${skills} · ${pattern?.name ?? agent.shift}`),
@@ -774,7 +781,7 @@ export const useWfm = create<WfmState>()(
                 tl: TEAMS[team]?.tl ?? "Unassigned",
               }
               newAgents.push(agent)
-              newRta.push({ id, actual: "AVAIL", scheduled: "AVAIL", secs: 0 })
+              newRta.push({ id, actual: "AVAIL", scheduled: "AVAIL", secs: 0, since: Date.now() })
             }
           })
           const queueName = skillLabel(queueId, s.queues)
@@ -976,7 +983,7 @@ export const useWfm = create<WfmState>()(
         set((s) => {
           const a = s.agents.find((x) => x.id === id)
           return {
-            rta: s.rta.map((r) => (r.id === id ? { ...r, actual: "AVAIL", secs: 0, recalled: true } : r)),
+            rta: s.rta.map((r) => (r.id === id ? { ...r, actual: "AVAIL", secs: 0, since: Date.now(), recalled: true } : r)),
             auditLog: [entry(s.currentUser, "Real-Time", "Recalled agent", `${a?.name ?? id} pulled back to Available`), ...s.auditLog],
           }
         }),
@@ -984,9 +991,37 @@ export const useWfm = create<WfmState>()(
         set((s) => {
           const set2 = new Set(ids)
           return {
-            rta: s.rta.map((r) => (set2.has(r.id) ? { ...r, actual: "AVAIL", secs: 0, recalled: true } : r)),
+            rta: s.rta.map((r) => (set2.has(r.id) ? { ...r, actual: "AVAIL", secs: 0, since: Date.now(), recalled: true } : r)),
             auditLog: [entry(s.currentUser, "Real-Time", "Recalled agents", `${ids.length} agents recalled from break`), ...s.auditLog],
           }
+        }),
+      syncRealTime: () =>
+        set((s) => {
+          const today = localISODate()
+          const now = Date.now()
+          const minute = liveMinute(s.nowIdx)
+          const day = scheduleForDate(s, today) // today's schedule, whichever day the Scheduling page shows
+          const byId = new Map(s.rta.map((r) => [r.id, r]))
+          let changed = s.rta.length !== day.agents.length
+          const rta = day.agents.map((a): RtaEntry => {
+            const sched = scheduledAux(agentDay(a, s.shiftPatterns, day.breakOverrides, day.channelPlan, day.overtimePlan, day.activityPlan), minute)
+            const prev = byId.get(a.id)
+            if (!prev) {
+              changed = true
+              return { id: a.id, actual: sched, scheduled: sched, secs: 0, since: now }
+            }
+            const since = prev.since ?? now - prev.secs * 1000
+            if (prev.scheduled === sched && prev.since) return prev
+            changed = true
+            if (prev.scheduled !== sched && inAdherence(prev.actual, prev.scheduled)) {
+              // On plan: they move with the schedule (break, lunch, back on queue…).
+              const actual = sched === "AVAIL" && prev.actual === "ACW" ? "ACW" : sched
+              return { ...prev, scheduled: sched, actual, secs: 0, since: now, recalled: false }
+            }
+            // Off plan: still the same exception, now measured against the right plan.
+            return { ...prev, scheduled: sched, since }
+          })
+          return changed ? { rta } : s
         }),
 
       shrinkage: SHRINKAGE,
@@ -1505,7 +1540,7 @@ export const useWfm = create<WfmState>()(
 
           if (jobId === "rta") {
             const escalated = s.rta.filter(
-              (r) => !inAdherence(r.actual, r.scheduled) && r.secs >= s.thresholds.escalateMins * 60,
+              (r) => !inAdherence(r.actual, r.scheduled) && liveSecs(r) >= s.thresholds.escalateMins * 60,
             ).length
             return {
               auditLog: [

@@ -43,8 +43,13 @@ export interface AuxCode {
 export interface RtaEntry {
   id: string
   actual: string
+  /** What the schedule says they should be in right now (kept in step with
+   *  the Scheduling timeline — see lib/domain/liveState.ts). */
   scheduled: string
+  /** Seconds in the current state when `since` isn't known (older data). */
   secs: number
+  /** When they entered the current state (epoch ms); time in state is counted from here. */
+  since?: number
   recalled?: boolean
 }
 

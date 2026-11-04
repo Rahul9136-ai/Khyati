@@ -9,12 +9,14 @@ import { KpiCard } from "@/components/kpi-card"
 import { LiveKpis } from "@/components/live-kpis"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { actualsFor, INTERVALS, inAdherence } from "@/lib/domain/seed"
+import { trafficIntensity } from "@/lib/domain/erlang"
+import { actualsFor, INTERVALS } from "@/lib/domain/seed"
 import { buildPlan, fmtPct, fmtSec, summarisePlan } from "@/lib/domain/planning"
+import { useLiveInterval } from "@/lib/useLiveInterval"
 import { useWfm } from "@/store/wfm"
 
 export function Dashboard() {
-  const { forecasts, shrinkage, nowIdx, agents, rta, queueId, queues, currentRole, currentAgentId } = useWfm()
+  const { forecasts, shrinkage, nowIdx, agents, queueId, queues, currentRole, currentAgentId } = useWfm()
   const queue = queues.find((q) => q.id === queueId)!
   const volume = forecasts[queue.id]
 
@@ -23,8 +25,15 @@ export function Dashboard() {
   const actuals = useMemo(() => actualsFor(queue.id, nowIdx), [queue.id, nowIdx])
   const now = plan[nowIdx]
 
-  const adhCount = rta.filter((r) => inAdherence(r.actual, r.scheduled)).length
-  const adherence = rta.length ? adhCount / rta.length : 0
+  // The current interval from the floor — the same figures as Scheduling →
+  // Coverage & SL and Intraday: agents on queue right now on the Real-Time
+  // Monitor, actual volume, adherence against today's schedule.
+  const live = useLiveInterval(queue)
+  const liveSL = live.row?.sl ?? 0
+  const liveAsa = live.row?.asa ?? 0
+  const liveOcc = live.liveHeads ? Math.min(1, trafficIntensity(live.row?.handled ?? 0, queue.aht) / live.liveHeads) : (live.row?.offered ? 1 : 0)
+  const adherence = live.adherence
+  const adhCount = live.onPlan
 
   const intradayData = INTERVALS.map((iv, i) => ({ label: iv.label, Forecast: volume[i], Actual: actuals[i] }))
   const coverageData = plan.map((p) => ({ label: p.label, Required: p.requiredGross, Scheduled: p.scheduled }))
@@ -41,10 +50,10 @@ export function Dashboard() {
       : `${queue.name} is fully covered today — projected day SL ${fmtPct(sum.wSL)}.`,
     bullets: [
       `${sum.totalVol.toLocaleString()} forecast contacts · ${sum.reqHours.toFixed(0)} required agent-hrs vs ${sum.schedHours.toFixed(0)} scheduled.`,
-      `Centre adherence ${fmtPct(adherence)} (${adhCount}/${rta.length} agents on plan).`,
-      now.projSL >= queue.slTarget
-        ? `Current interval (${now.label}) is healthy at ${fmtPct(now.projSL)} SL.`
-        : `Current interval (${now.label}) is at risk — ${fmtPct(now.projSL)} SL, add cover.`,
+      `Centre adherence ${fmtPct(adherence)} (${adhCount}/${live.boardSize} agents on plan).`,
+      liveSL >= queue.slTarget
+        ? `Current interval (${now.label}) is healthy at ${fmtPct(liveSL)} SL with ${live.liveHeads} on queue.`
+        : `Current interval (${now.label}) is at risk — ${fmtPct(liveSL)} SL with ${live.liveHeads} on queue (need ${live.requiredNet}); add cover.`,
     ],
     tone: sum.underIntervals > 6 ? ("bad" as const) : sum.underIntervals ? ("warn" as const) : ("good" as const),
   }
@@ -57,15 +66,16 @@ export function Dashboard() {
     <>
       <PageHeader
         title="Operations Dashboard"
-        subtitle={`Live view · ${queue.name} · interval ${now.label}`}
+        subtitle={`Live view · ${queue.name} · interval ${now.label} · ${live.liveHeads} on queue now`}
         actions={
           <ExportButton
             filename={`dashboard-${queue.id}`}
             sheets={() => [
               { name: "KPIs", rows: [
-                { Metric: "Service Level", Value: fmtPct(now.projSL) },
-                { Metric: "ASA", Value: fmtSec(now.asa) },
-                { Metric: "Occupancy", Value: fmtPct(now.occupancy) },
+                { Metric: "Service Level", Value: fmtPct(liveSL) },
+                { Metric: "ASA", Value: fmtSec(liveAsa) },
+                { Metric: "Occupancy", Value: fmtPct(liveOcc) },
+                { Metric: "On queue now", Value: live.liveHeads },
                 { Metric: "Adherence", Value: fmtPct(adherence) },
                 { Metric: "Forecast volume", Value: sum.totalVol },
                 { Metric: "Required agent-hrs", Value: sum.reqHours.toFixed(0) },
@@ -83,10 +93,10 @@ export function Dashboard() {
       <LiveKpis />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <KpiCard label="Service Level" value={fmtPct(now.projSL)} hint={`target ${fmtPct(queue.slTarget)} in ${queue.targetTime}s`} tone={now.projSL >= queue.slTarget ? "good" : "bad"} icon={Gauge} />
-        <KpiCard label="ASA" value={fmtSec(now.asa)} hint="avg speed of answer" tone={now.asa <= queue.targetTime ? "good" : "warn"} icon={Activity} />
-        <KpiCard label="Occupancy" value={fmtPct(now.occupancy)} hint="agent utilisation" tone={now.occupancy <= 0.9 ? "good" : "warn"} icon={Percent} />
-        <KpiCard label="Adherence" value={fmtPct(adherence)} hint={`${adhCount}/${rta.length} on plan`} tone={adherence >= 0.9 ? "good" : adherence >= 0.8 ? "warn" : "bad"} icon={Users} />
+        <KpiCard label="Service Level" value={fmtPct(liveSL)} hint={`live · target ${fmtPct(queue.slTarget)} in ${queue.targetTime}s`} tone={liveSL >= queue.slTarget ? "good" : "bad"} icon={Gauge} />
+        <KpiCard label="ASA" value={fmtSec(liveAsa)} hint={`live · ${live.liveHeads} on queue, need ${live.requiredNet}`} tone={liveAsa <= queue.targetTime ? "good" : "warn"} icon={Activity} />
+        <KpiCard label="Occupancy" value={fmtPct(liveOcc)} hint="live · agents on queue" tone={liveOcc <= 0.9 ? "good" : "warn"} icon={Percent} />
+        <KpiCard label="Adherence" value={fmtPct(adherence)} hint={`${adhCount}/${live.boardSize} on plan · vs today's schedule`} tone={adherence >= 0.9 ? "good" : adherence >= 0.8 ? "warn" : "bad"} icon={Users} />
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
