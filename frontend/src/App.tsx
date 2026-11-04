@@ -15,6 +15,7 @@ import { Dashboard } from "@/pages/Dashboard"
 import { EmployeeProfile } from "@/pages/EmployeeProfile"
 import { Employees } from "@/pages/Employees"
 import { Forecasting } from "@/pages/Forecasting"
+import { HcTracker } from "@/pages/HcTracker"
 import { Help } from "@/pages/Help"
 import { Intraday } from "@/pages/Intraday"
 import { Planning } from "@/pages/Planning"
@@ -54,6 +55,7 @@ export default function App() {
         <Route path="/help" element={<RoleGuard module="help"><Help /></RoleGuard>} />
         <Route path="/employees" element={<RoleGuard module="employees"><Employees /></RoleGuard>} />
         <Route path="/employees/:id" element={<RoleGuard module="employees"><EmployeeProfile /></RoleGuard>} />
+        <Route path="/hc-tracker" element={<RoleGuard module="employees"><HcTracker /></RoleGuard>} />
         <Route path="/skills" element={<RoleGuard module="skills"><Skills /></RoleGuard>} />
         <Route path="/pto" element={<RoleGuard module="pto"><Pto /></RoleGuard>} />
         <Route path="/reports" element={<RoleGuard module="reports"><Reports /></RoleGuard>} />

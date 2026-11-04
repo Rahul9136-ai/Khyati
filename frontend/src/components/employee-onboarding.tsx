@@ -87,7 +87,7 @@ export function OnboardingDialog({ open, onClose, onCreated }: { open: boolean; 
       qualityScore: [{ value: 0, from, to: null }],
       rank: [{ value: 1, from, to: null }],
       organization: [{ value: f.organization.trim() || f.team, from, to: null }],
-    })
+    }, { onboarding: true })
     setF(blank())
     onCreated(id, openProfile)
   }

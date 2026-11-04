@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
 import { ChevronDown, ChevronRight } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 
 import { ACTIVITY_BY_ID, fmtHM, shiftBounds } from "@/lib/domain/channels"
+import { employedOn } from "@/lib/domain/employeeProfile"
 import { datesBetween, fmtDay, isWeekend, localISODate, parseISODate, scheduleHorizon } from "@/lib/domain/horizon"
 import type { Agent } from "@/lib/domain/types"
 import { fetchRange, useScheduleHorizon, type DaySummary } from "@/lib/schedulePublish"
@@ -44,7 +45,12 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
     staleTime: 30_000,
     refetchInterval: 60_000,
   })
-  const { scheduleDate, dayStore, shiftPatterns, overtimePlan, activityPlan, agents: roster, breakOverrides, channelPlan } = useWfm()
+  const { scheduleDate, dayStore, shiftPatterns, overtimePlan, activityPlan, agents: roster, breakOverrides, channelPlan, employeeProfiles } = useWfm()
+  /** Not on the books that day — before they join or after their last working day. */
+  const outside = useCallback((agentId: string, date: string) => {
+    const p = employeeProfiles[agentId]
+    return !!p && !employedOn(p, date)
+  }, [employeeProfiles])
 
   const cells = useMemo(() => {
     const byKey = new Map<string, DaySummary>((server ?? []).map((r) => [`${r.plan_date}|${r.agent_key}`, r]))
@@ -54,6 +60,10 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
       let local: ReturnType<typeof scheduleForDate> | null = null
       for (const a of agents) {
         const key = `${date}|${a.id}`
+        if (outside(a.id, date)) {
+          out.set(key, null)
+          continue
+        }
         const srv = byKey.get(key)
         if (date === scheduleDate) {
           // The selected day comes from the live timeline so edits show at once.
@@ -76,7 +86,7 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
       }
     }
     return out
-  }, [dates, agents, server, scheduleDate, dayStore, shiftPatterns, overtimePlan, activityPlan, serverAgents, canWrite, online, roster, breakOverrides, channelPlan])
+  }, [dates, agents, server, scheduleDate, dayStore, shiftPatterns, overtimePlan, activityPlan, serverAgents, canWrite, online, roster, breakOverrides, channelPlan, outside])
 
   // Days off / leave / absence per agent and in total over the period.
   const counts = useMemo(() => {
@@ -197,7 +207,9 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
                           (others.length ? ` · ${others.map((t) => ACTIVITY_BY_ID[t as keyof typeof ACTIVITY_BY_ID]?.label ?? t).join(", ")}` : "") +
                           (c.ot ? ` · OT ${(c.ot / 60).toFixed(c.ot % 60 ? 1 : 0)}h` : "") +
                           ` · ${c.state === "published" ? "published" : "draft"}`
-                        : `${a.name} · ${fmtDay(d)} · not published`
+                        : outside(a.id, d)
+                          ? `${a.name} · ${fmtDay(d)} · not employed`
+                          : `${a.name} · ${fmtDay(d)} · not published`
                       return (
                         <td key={d} className={cn("border-b border-l p-0.5", isWeekend(d) && "bg-muted/40", d === scheduleDate && "bg-primary/10")}>
                           <button
@@ -213,10 +225,11 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
                               status && "font-bold text-white",
                               status && c?.state !== "published" && "border border-dashed border-white/70 opacity-75",
                               !c && "text-muted-foreground/50",
+                              !c && outside(a.id, d) && "cursor-default bg-[repeating-linear-gradient(135deg,transparent,transparent_3px,hsl(var(--muted))_3px,hsl(var(--muted))_5px)]",
                             )}
                             style={status ? { background: ACTIVITY_BY_ID[status].color } : undefined}
                           >
-                            {status ? ACTIVITY_BY_ID[status].short : c ? fmtHM(c.start) : "–"}
+                            {status ? ACTIVITY_BY_ID[status].short : c ? fmtHM(c.start) : outside(a.id, d) ? "" : "–"}
                             {c?.ot ? <b className="absolute -top-px right-0 text-[7px] leading-none text-amber-600">OT</b> : null}
                             {others.length ? (
                               <span className="absolute bottom-px left-1/2 flex -translate-x-1/2 gap-px">

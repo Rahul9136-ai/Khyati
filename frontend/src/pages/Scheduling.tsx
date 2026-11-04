@@ -27,6 +27,7 @@ import { computeAbsenceRisk } from "@/lib/domain/absenceRisk"
 import { breakAwareCoverage, optimiseBreaks } from "@/lib/domain/breaks"
 import { activityCoverageLoss, overtimeAgents, toMins } from "@/lib/domain/channels"
 import { intervalOutcomes, liveAgentStates, PATIENCE_SECS, soFar, type IntervalPhase } from "@/lib/domain/liveCoverage"
+import { employedOn } from "@/lib/domain/employeeProfile"
 import { actualsFor, AUX, INTERVALS } from "@/lib/domain/seed"
 import { planAutoSchedule, type AutoScheduleResult } from "@/lib/domain/autoschedule"
 import { occupancy, trafficIntensity } from "@/lib/domain/erlang"
@@ -86,7 +87,7 @@ function occupancyOf(heads: number, intensity: number): number {
 const fmtSecs = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, "0")}s` : `${Math.round(s)}s`)
 
 export function Scheduling() {
-  const { queueId, forecasts, shrinkage, agents: roster, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule, currentRole, currentAgentId, overtimePlan, activityPlan, scheduleDate, rta, nowIdx } = useWfm()
+  const { queueId, forecasts, shrinkage, agents: roster, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule, currentRole, currentAgentId, overtimePlan, activityPlan, scheduleDate, rta, nowIdx, employeeProfiles } = useWfm()
   const canEditSchedule = useWfm((s) => s.can("scheduling", "edit"))
   const user = useAuth((s) => s.user)
   const canPublish = !!user && (user.is_superuser || user.permission_codes.includes("schedule:publish"))
@@ -113,9 +114,16 @@ export function Scheduling() {
   // once the server has answered, unpublished agents drop off their roster.
   const { canWrite: syncCanWrite, serverAgents } = useScheduleSync()
   const publishedOnly = !syncCanWrite && serverAgents !== null
+  // Only people on the books that day: a future day after someone's last
+  // working day (or before they join) leaves them out of the plan and coverage.
   const agents = useMemo(
-    () => (publishedOnly ? roster.filter((a) => serverAgents![a.id]?.published) : roster),
-    [roster, publishedOnly, serverAgents],
+    () =>
+      roster.filter((a) => {
+        const p = employeeProfiles[a.id]
+        if (p && !employedOn(p, scheduleDate)) return false
+        return !publishedOnly || serverAgents![a.id]?.published
+      }),
+    [roster, publishedOnly, serverAgents, employeeProfiles, scheduleDate],
   )
   // Agents only ever see their own row — everyone else sees the full roster.
   const isAgent = currentRole === "Agent"

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { SquareUser, Star, UserCheck, UserPlus, Users } from "lucide-react"
+import { ClipboardList, Star, UserCheck, UserPlus, Users } from "lucide-react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 
 import { AgentSkillsDialog } from "@/components/agent-skills-dialog"
@@ -74,6 +74,9 @@ export function Employees() {
                 },
               ]}
             />
+            <Button variant="outline" asChild>
+              <Link to="/hc-tracker"><ClipboardList className="h-4 w-4" /> HC tracker</Link>
+            </Button>
             <PermissionGate module="employees">
               <Button onClick={() => setOpen(true)}>
                 <UserPlus className="h-4 w-4" /> Add employee
@@ -124,7 +127,7 @@ export function Employees() {
                 return (
                 <TableRow key={a.id}>
                   <TableCell className="text-left">
-                    <Link to={`/employees/${a.id}`} className="font-medium hover:text-primary hover:underline">{a.name}</Link>
+                    <Link to={`/employees/${a.id}`} title="Open profile" className="font-medium hover:text-primary hover:underline">{a.name}</Link>
                     <div className="text-xs text-muted-foreground">{email(a.name)}</div>
                   </TableCell>
                   <TableCell>{profile.jobTitle}</TableCell>
@@ -148,16 +151,11 @@ export function Employees() {
                     )}
                   </TableCell>
                   <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="sm" asChild>
-                        <Link to={`/employees/${a.id}`}><SquareUser className="h-3.5 w-3.5" /> Profile</Link>
+                    <PermissionGate module="skills" fallback={<span className="text-xs text-muted-foreground">—</span>}>
+                      <Button variant="ghost" size="sm" onClick={() => setSkillsAgent(a)}>
+                        <Star className="h-3.5 w-3.5" /> Skills
                       </Button>
-                      <PermissionGate module="skills">
-                        <Button variant="ghost" size="sm" onClick={() => setSkillsAgent(a)}>
-                          <Star className="h-3.5 w-3.5" /> Skills
-                        </Button>
-                      </PermissionGate>
-                    </div>
+                    </PermissionGate>
                   </TableCell>
                 </TableRow>
                 )

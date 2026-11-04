@@ -164,7 +164,62 @@ export function setEffective<T>(history: Dated<T>[], value: T, from: string): Da
   return [...before, { value, from, to: null }].sort((a, b) => a.from.localeCompare(b.from))
 }
 
-export const isTerminated = (p: EmployeeProfile, asOf: string) => p.endDate !== null && p.endDate <= asOf
+/** Gone: the end date is the last working day, so they've left from the day after. */
+export const isTerminated = (p: EmployeeProfile, asOf: string) => p.endDate !== null && p.endDate < asOf
+
+/** On the books that day: joined, and not past their last working day. */
+export const employedOn = (p: EmployeeProfile, date: string) => p.startDate <= date && (p.endDate === null || date <= p.endDate)
+
+export type HcStatus = "Active" | "Notice period" | "Exited" | "Joining"
+
+/** Headcount status on `today`. */
+export function hcStatus(p: EmployeeProfile, today: string): HcStatus {
+  if (isTerminated(p, today)) return "Exited"
+  if (p.startDate > today) return "Joining"
+  return p.endDate ? "Notice period" : "Active"
+}
+
+/** One entry in an employee's change log (who changed what, when). */
+export interface EmployeeChange {
+  id: string
+  agentId: string
+  name: string
+  /** epoch ms */
+  at: number
+  by: string
+  action: "Onboarded" | "Updated" | "Exited" | "Rehired" | "Deleted"
+  detail: string
+}
+
+/** What changed between two versions of a profile, in words. */
+export function describeChanges(before: EmployeeProfile, after: EmployeeProfile): string[] {
+  const out: string[] = []
+  const show = (v: unknown) => (v === null || v === undefined || v === "" ? "—" : String(v))
+  const field = (label: string, a: unknown, b: unknown) => {
+    if (show(a) !== show(b)) out.push(`${label} ${show(a)} → ${show(b)}`)
+  }
+  field("Job title", before.jobTitle, after.jobTitle)
+  field("Join date", before.startDate, after.startDate)
+  field("Last working day", before.endDate, after.endDate)
+  field("Employee type", before.employeeType, after.employeeType)
+  field("Employee number", before.employeeNumber, after.employeeNumber)
+  field("Supervisor", before.supervisor, after.supervisor)
+  field("Team lead", before.teamLead, after.teamLead)
+  field("Is supervisor", before.isSupervisor ? "Yes" : "No", after.isSupervisor ? "Yes" : "No")
+  field("Is team lead", before.isTeamLead ? "Yes" : "No", after.isTeamLead ? "Yes" : "No")
+  if (before.taxId !== after.taxId) out.push("Tax ID updated")
+  for (const [label, key] of [["Wage", "wage"], ["Quality score", "qualityScore"], ["Rank", "rank"], ["Organization", "organization"]] as const) {
+    const a = before[key] as Dated<unknown>[]
+    const b = after[key] as Dated<unknown>[]
+    if (JSON.stringify(a) === JSON.stringify(b)) continue
+    const added = b.filter((x) => !a.some((y) => y.from === x.from && y.value === x.value))
+    out.push(added.length ? added.map((x) => `${label} → ${show(x.value)} from ${x.from}`).join("; ") : `${label} history edited`)
+  }
+  if (JSON.stringify(before.address) !== JSON.stringify(after.address)) out.push("Home address updated")
+  if (JSON.stringify(before.sources) !== JSON.stringify(after.sources)) out.push("Data-source IDs updated")
+  if (JSON.stringify(before.userFields) !== JSON.stringify(after.userFields)) out.push("User defined fields updated")
+  return out
+}
 
 /** "123-45-6789" → "•••-••-6789". */
 export function maskTaxId(taxId: string): string {

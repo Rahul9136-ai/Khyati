@@ -1,10 +1,12 @@
 import { fireEvent, render, screen, within } from "@testing-library/react"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { defaultProfile } from "@/lib/domain/employeeProfile"
+import { addDays, localISODate } from "@/lib/domain/horizon"
 import { AGENTS } from "@/lib/domain/seed"
-import { localISODate } from "@/lib/domain/horizon"
+import { missingDays } from "@/lib/schedulePublish"
+import { HcTracker } from "@/pages/HcTracker"
 import { EmployeeProfile } from "@/pages/EmployeeProfile"
 import { Employees } from "@/pages/Employees"
 import { useWfm } from "@/store/wfm"
@@ -17,13 +19,17 @@ function renderAt(url: string) {
       <Routes>
         <Route path="/employees" element={<Employees />} />
         <Route path="/employees/:id" element={<EmployeeProfile />} />
+        <Route path="/hc-tracker" element={<HcTracker />} />
       </Routes>
     </MemoryRouter>,
   )
 }
 
 beforeEach(() => {
-  useWfm.setState({ currentRole: "Super Admin", agents: AGENTS.slice(0, 3), employeeProfiles: {} })
+  useWfm.setState({
+    currentRole: "Super Admin", currentUser: "Priya Admin", agents: AGENTS.slice(0, 3), rta: AGENTS.slice(0, 3).map((a) => ({ id: a.id, actual: "AVAIL", scheduled: "AVAIL", secs: 1 })),
+    employeeProfiles: {}, formerEmployees: {}, employeeChanges: [],
+  })
 })
 
 describe("employee profile page", () => {
@@ -71,16 +77,70 @@ describe("employee profile page", () => {
     expect(screen.getByLabelText("Tax ID (SSN)")).toHaveTextContent("—")
   })
 
-  it("terminates, then deletes an employee", () => {
+  it("keeps someone on the roster through their last working day", () => {
     renderAt(`/employees/${liam.id}`)
-    expect(screen.getByRole("button", { name: /Delete/ })).toBeDisabled()
     fireEvent.click(screen.getByRole("button", { name: /Terminate/ }))
-    fireEvent.click(screen.getAllByRole("button", { name: /Terminate/ }).at(-1)!)
-    expect(useWfm.getState().employeeProfiles[liam.id].endDate).toBe(localISODate())
+    fireEvent.click(screen.getAllByRole("button", { name: /Terminate/ }).at(-1)!) // last working day = today
+    const s = useWfm.getState()
+    expect(s.employeeProfiles[liam.id].endDate).toBe(localISODate())
+    expect(s.agents.some((a) => a.id === liam.id)).toBe(true) // still working today
+    expect(screen.getByRole("status")).toHaveTextContent(/comes off the roster, schedules and the real-time board after/)
+    expect(screen.getByRole("button", { name: /Delete/ })).toBeDisabled()
+  })
 
+  it("takes a leaver off the campaign after their last working day, and brings them back if it's cleared", () => {
+    const yesterday = addDays(localISODate(), -1)
+    renderAt(`/employees/${liam.id}`)
+    fireEvent.change(screen.getByLabelText("End date"), { target: { value: yesterday } })
+    fireEvent.click(screen.getByRole("button", { name: /Save/ }))
+
+    let s = useWfm.getState()
+    expect(s.agents.some((a) => a.id === liam.id)).toBe(false) // off the roster / scheduling
+    expect(s.rta.some((r) => r.id === liam.id)).toBe(false) // off the real-time board
+    expect(s.formerEmployees[liam.id]?.name).toBe(liam.name)
+    expect(s.employeeChanges.map((c) => [c.action, c.by])).toEqual([["Exited", "Priya Admin"], ["Updated", "Priya Admin"]])
+    expect(s.employeeChanges[0].detail).toMatch(new RegExp(`^Removed from ${liam.team} · .* after last working day ${yesterday}$`))
+    expect(s.employeeChanges[1].detail).toBe(`Last working day — → ${yesterday}`)
+    expect(screen.getByRole("note")).toHaveTextContent(`${liam.name} left after`)
+    expect(screen.getByRole("button", { name: /Delete/ })).toBeEnabled()
+
+    fireEvent.change(screen.getByLabelText("End date"), { target: { value: "" } })
+    fireEvent.click(screen.getByRole("button", { name: /Save/ }))
+    s = useWfm.getState()
+    expect(s.agents.some((a) => a.id === liam.id)).toBe(true)
+    expect(s.formerEmployees[liam.id]).toBeUndefined()
+    expect(s.employeeChanges[0].action).toBe("Rehired")
+  })
+
+  it("settles a future end date once it has passed", () => {
+    const lastDay = addDays(localISODate(), 3)
+    useWfm.getState().saveEmployeeProfile(liam.id, { ...defaultProfile(liam, localISODate()), endDate: lastDay })
+    expect(useWfm.getState().agents.some((a) => a.id === liam.id)).toBe(true) // still serving notice
+    // No schedules are generated for them after their last day.
+    const days = missingDays(addDays(lastDay, -1), addDays(lastDay, 2), new Set()).filter((d) => d.agent_key === liam.id)
+    expect(days.map((d) => d.plan_date)).toEqual([addDays(lastDay, -1), lastDay])
+
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date(`${addDays(lastDay, 1)}T09:00:00`))
+    try {
+      useWfm.getState().settleEmployment()
+    } finally {
+      vi.useRealTimers()
+    }
+    const s = useWfm.getState()
+    expect(s.agents.some((a) => a.id === liam.id)).toBe(false)
+    expect(s.employeeChanges[0]).toMatchObject({ action: "Exited", by: "System" })
+  })
+
+  it("deletes a former employee's record", () => {
+    useWfm.getState().saveEmployeeProfile(liam.id, { ...defaultProfile(liam, localISODate()), endDate: addDays(localISODate(), -2) })
+    renderAt(`/employees/${liam.id}`)
     fireEvent.click(screen.getByRole("button", { name: /Delete/ }))
     fireEvent.click(screen.getAllByRole("button", { name: /Delete/ }).at(-1)!)
-    expect(useWfm.getState().agents.some((a) => a.id === liam.id)).toBe(false)
+    const s = useWfm.getState()
+    expect(s.formerEmployees[liam.id]).toBeUndefined()
+    expect(s.employeeProfiles[liam.id]).toBeUndefined()
+    expect(s.employeeChanges[0].action).toBe("Deleted")
     expect(screen.getByText("Roster directory · skills · teams")).toBeInTheDocument() // back on Employees
   })
 
@@ -100,8 +160,9 @@ describe("employees list", () => {
     renderAt("/employees")
     expect(screen.getByRole("option", { name: "Trainer" })).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText("Job title filter"), { target: { value: "Quality Analyst" } })
-    expect(screen.getAllByRole("link", { name: /Profile/ })).toHaveLength(1)
     expect(screen.getByRole("link", { name: ava.name })).toHaveAttribute("href", `/employees/${ava.id}`)
+    expect(screen.queryByRole("link", { name: liam.name })).not.toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: /^Profile$/ })).not.toBeInTheDocument() // the separate Profile button is gone
   })
 
   it("onboards an employee with their administrative details, then opens the profile", () => {
@@ -157,3 +218,29 @@ describe("profile dates", () => {
   })
 })
 
+
+describe("HC tracker", () => {
+  it("lists past and present employees with status, campaign, last working day, supervisor and who changed them", () => {
+    const today = localISODate()
+    const wfm = useWfm.getState()
+    wfm.saveEmployeeProfile(ava.id, { ...defaultProfile(ava, today), endDate: addDays(today, 10), supervisor: "Elena Faro", organization: [{ value: "Travel Helpdesk - IND", from: "2024-01-01", to: null }] })
+    wfm.saveEmployeeProfile(liam.id, { ...defaultProfile(liam, today), endDate: addDays(today, -5) })
+    renderAt("/hc-tracker")
+
+    const row = (name: string) => screen.getByRole("link", { name }).closest("tr")!
+    expect(row(ava.name)).toHaveTextContent("Notice period")
+    expect(row(ava.name)).toHaveTextContent("Travel Helpdesk - IND")
+    expect(row(ava.name)).toHaveTextContent("Elena Faro")
+    expect(row(liam.name)).toHaveTextContent("Exited")
+    expect(row(liam.name)).toHaveTextContent("by Priya Admin")
+    expect(row(AGENTS[2].name)).toHaveTextContent("Active")
+
+    fireEvent.change(screen.getByLabelText("Status filter"), { target: { value: "Exited" } })
+    expect(screen.queryByRole("link", { name: ava.name })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: `Show ${liam.name}'s changes` }))
+    expect(within(screen.getByRole("list", { name: `${liam.name} changes` })).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      expect.stringMatching(/Exited.*after last working day.*by Priya Admin$/),
+      expect.stringMatching(/Updated.*Last working day — → .*by Priya Admin$/),
+    ])
+  })
+})

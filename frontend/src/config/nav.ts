@@ -6,6 +6,7 @@ import {
   CalendarCheck,
   CalendarClock,
   CheckCheck,
+  ClipboardList,
   CalendarRange,
   ClipboardCheck,
   Clock,
@@ -71,6 +72,7 @@ export const NAV: NavGroup[] = [
     group: "Workforce",
     items: [
       { to: "/employees", label: "Employees", icon: UsersRound, module: "employees" },
+      { to: "/hc-tracker", label: "HC Tracker", icon: ClipboardList, module: "employees" },
       { to: "/skills", label: "Skills", icon: Star, module: "skills" },
       { to: "/pto", label: "PTO & Leave", icon: PlaneTakeoff, module: "pto" },
     ],

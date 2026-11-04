@@ -12,6 +12,7 @@ import { useQuery } from "@tanstack/react-query"
 
 import { api, type ApiError } from "@/lib/api"
 import { agentDay } from "@/lib/domain/channels"
+import { employedOn } from "@/lib/domain/employeeProfile"
 import { datesBetween, isISODate, localISODate, scheduleHorizon } from "@/lib/domain/horizon"
 import { flush, pull, toServerPlan, useScheduleSync, type ServerDayPlan } from "@/lib/scheduleSync"
 import { scheduleForDate, useWfm } from "@/store/wfm"
@@ -84,6 +85,8 @@ export function missingDays(start: string, end: string, saved: Set<string>): (Se
     const d = scheduleForDate(s, date)
     for (const a of d.agents) {
       if (saved.has(`${date}|${a.id}`)) continue
+      const p = s.employeeProfiles[a.id]
+      if (p && !employedOn(p, date)) continue // past their last working day, or not joined yet
       const day = agentDay(a, s.shiftPatterns, d.breakOverrides, d.channelPlan, d.overtimePlan, d.activityPlan)
       out.push({ ...toServerPlan(a, day), plan_date: date })
     }

@@ -53,10 +53,11 @@ const KIND_ICON: Record<DataSourceKind, LucideIcon> = {
 export function EmployeeProfile() {
   const { id = "" } = useParams()
   const navigate = useNavigate()
-  const { agents, employeeProfiles, saveEmployeeProfile, deleteEmployee, dataSources, addDataSource } = useWfm()
+  const { agents, formerEmployees, employeeProfiles, employeeChanges, saveEmployeeProfile, deleteEmployee, dataSources, addDataSource } = useWfm()
   const canEdit = useWfm((s) => s.can("employees", "edit"))
   const today = localISODate()
-  const agent = agents.find((a) => a.id === id)
+  // Former employees (past their last working day) still have a profile.
+  const agent = agents.find((a) => a.id === id) ?? formerEmployees[id]
   const saved = useMemo(
     () => (agent ? employeeProfiles[agent.id] ?? defaultProfile(agent, today) : null),
     [agent, employeeProfiles, today],
@@ -67,6 +68,7 @@ export function EmployeeProfile() {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [showAddress, setShowAddress] = useState(false)
   const [showUdf, setShowUdf] = useState(false)
+  const [showLog, setShowLog] = useState(false)
   const [terminating, setTerminating] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -100,18 +102,28 @@ export function EmployeeProfile() {
     setMsg(null)
   }
   const terminated = isTerminated(saved, today)
+  const history = employeeChanges.filter((c) => c.agentId === agent.id)
   const status = terminated
-    ? { label: `Terminated ${fmtDay(saved.endDate!)}`, variant: "destructive" as const }
+    ? { label: `Exited · last day ${fmtDay(saved.endDate!)}`, variant: "destructive" as const }
     : saved.startDate > today
-      ? { label: `Starts ${fmtDay(saved.startDate)}`, variant: "warning" as const }
+      ? { label: `Joins ${fmtDay(saved.startDate)}`, variant: "warning" as const }
       : saved.endDate
-        ? { label: `Leaving ${fmtDay(saved.endDate)}`, variant: "warning" as const }
+        ? { label: `Notice period · last day ${fmtDay(saved.endDate)}`, variant: "warning" as const }
         : { label: "Active", variant: "success" as const }
+
+  /** What saving this end date does to the roster, in words. */
+  const exitNote = (p: Profile) =>
+    !p.endDate
+      ? ""
+      : p.endDate < today
+        ? ` ${agent!.name} is off the roster, schedules and the real-time board from today.`
+        : ` ${agent!.name} comes off the roster, schedules and the real-time board after ${fmtDay(p.endDate)}.`
 
   function save() {
     if (draft!.endDate && draft!.endDate < draft!.startDate) return setMsg({ ok: false, text: "End date can't be before the start date." })
+    const rehired = terminated && !isTerminated(draft!, today)
     saveEmployeeProfile(agent!.id, draft!)
-    setMsg({ ok: true, text: "Profile saved." })
+    setMsg({ ok: true, text: `Profile saved.${rehired ? ` ${agent!.name} is back on the roster.` : saved!.endDate !== draft!.endDate ? exitNote(draft!) : ""}` })
   }
 
   async function onImport(e: React.ChangeEvent<HTMLInputElement>) {
@@ -272,6 +284,13 @@ export function EmployeeProfile() {
           </Card>
         </div>
 
+        {terminated && (
+          <div role="note" className="rounded-lg border border-destructive/40 px-4 py-2.5 text-sm text-destructive">
+            {agent.name} left after {fmtDay(saved.endDate!)} and is off the roster, schedules and the real-time board.
+            <span className="text-muted-foreground"> Clear or move the end date and save to bring them back.</span>
+          </div>
+        )}
+
         <Section title="User Defined Fields" open={showUdf} onToggle={() => setShowUdf(!showUdf)} count={draft.userFields.length}>
           <div className="space-y-2">
             {draft.userFields.map((f, i) => (
@@ -296,6 +315,23 @@ export function EmployeeProfile() {
           </div>
         </Section>
 
+        <Section title="Change history" open={showLog} onToggle={() => setShowLog(!showLog)} count={history.length}>
+          {history.length ? (
+            <ul className="space-y-1.5 text-sm" aria-label="Change history">
+              {history.map((c) => (
+                <li key={c.id} className="flex flex-wrap gap-x-3 border-b pb-1.5 last:border-0">
+                  <span className="tabular-nums text-muted-foreground">{new Date(c.at).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</span>
+                  <Badge variant={c.action === "Exited" || c.action === "Deleted" ? "destructive" : c.action === "Updated" ? "secondary" : "success"}>{c.action}</Badge>
+                  <span className="flex-1">{c.detail}</span>
+                  <span className="text-muted-foreground">by {c.by}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">No changes recorded yet.</p>
+          )}
+        </Section>
+
         {msg && (
           <div role="status" className={cn("rounded-lg border px-4 py-2.5 text-sm", msg.ok ? "border-emerald-500/40 text-emerald-500" : "border-destructive/40 text-destructive")}>
             {msg.ok ? "✓ " : "✕ "}{msg.text}
@@ -312,7 +348,7 @@ export function EmployeeProfile() {
           <ExportButton filename={`profile-${agent.id}`} sheets={() => profileSheets(agent, draft, dataSources, asOf)} />
           <Button variant="outline" size="sm" disabled={ro} onClick={() => navigate("/employees?add=1")}><UserPlus className="h-4 w-4" /> Create</Button>
           <Button variant="outline" size="sm" disabled={ro || terminated} onClick={() => setTerminating(true)}><UserMinus className="h-4 w-4" /> Terminate</Button>
-          <Button variant="outline" size="sm" disabled={ro || !terminated} title={terminated ? undefined : "Terminate the employee first"} onClick={() => setDeleting(true)}><Trash2 className="h-4 w-4" /> Delete</Button>
+          <Button variant="outline" size="sm" disabled={ro || !terminated} title={terminated ? undefined : "Available after their last working day"} onClick={() => setDeleting(true)}><Trash2 className="h-4 w-4" /> Delete</Button>
           <Button variant="ghost" size="sm" disabled={!dirty} onClick={() => { setDraft(saved); setMsg(null) }}><RotateCcw className="h-4 w-4" /> Revert</Button>
           <Button size="sm" disabled={ro || !dirty} onClick={save}><Save className="h-4 w-4" /> Save</Button>
         </div>
@@ -329,7 +365,7 @@ export function EmployeeProfile() {
             setDraft(next)
             saveEmployeeProfile(agent.id, next)
             setTerminating(false)
-            setMsg({ ok: true, text: `${agent.name} terminated effective ${fmtDay(endDate)}.` })
+            setMsg({ ok: true, text: `Last working day set to ${fmtDay(endDate)}.${exitNote(next)}` })
           }}
         />
       )}
@@ -337,7 +373,7 @@ export function EmployeeProfile() {
         open={deleting}
         onClose={() => setDeleting(false)}
         title={`Delete ${agent.name}?`}
-        description="Removes them from the roster, schedules and the real-time board. This can't be undone."
+        description="Removes their record altogether, including from the HC tracker. The change log keeps a note. This can't be undone."
         footer={
           <>
             <Button variant="outline" onClick={() => setDeleting(false)}>Cancel</Button>
@@ -506,7 +542,7 @@ function TerminateDialog({ name, defaultDate, minDate, onClose, onConfirm }: { n
       open
       onClose={onClose}
       title={`Terminate ${name}`}
-      description="Sets their end date. After it they show as terminated and can be deleted."
+      description="Sets their last working day. The day after, they come off the campaign: the roster, schedules and the real-time board. The HC tracker keeps their record."
       footer={
         <>
           <Button variant="outline" onClick={onClose}>Cancel</Button>

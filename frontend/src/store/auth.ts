@@ -22,6 +22,8 @@ interface AuthState {
 function applyIdentity(user: SessionUser) {
   const role = designationFor(user)
   useWfm.getState().setCurrentRole(role)
+  // Changes (audit trail, employee change log) are recorded under the signed-in person.
+  useWfm.setState({ currentUser: user.full_name.trim() || user.email })
   if (role === "Agent" && !user.is_superuser) void linkRosterAgent()
 }
 

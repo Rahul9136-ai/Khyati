@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest"
 import {
   DEFAULT_DATA_SOURCES,
   defaultProfile,
+  describeChanges,
+  employedOn,
+  hcStatus,
   isTerminated,
   JOB_TITLES,
   lastFirst,
@@ -12,6 +15,7 @@ import {
   valueAsOf,
   type Dated,
 } from "@/lib/domain/employeeProfile"
+import { addDays } from "@/lib/domain/horizon"
 import { AGENTS } from "@/lib/domain/seed"
 import { applyProfileRows } from "@/lib/profileImport"
 
@@ -52,7 +56,20 @@ describe("employee profile", () => {
     expect(maskTaxId("")).toBe("")
     expect(lastFirst("Siro Sothing")).toBe("Sothing, Siro")
     const p = { ...defaultProfile(agent, TODAY), endDate: "2026-11-10" }
-    expect([isTerminated(p, TODAY), isTerminated(p, "2026-11-10")]).toEqual([false, true])
+    // The end date is the last working day: still employed on it, gone the day after.
+    expect([isTerminated(p, TODAY), isTerminated(p, "2026-11-10"), isTerminated(p, "2026-11-11")]).toEqual([false, false, true])
+    expect([employedOn(p, "2026-11-10"), employedOn(p, "2026-11-11"), employedOn(p, addDays(p.startDate, -1))]).toEqual([true, false, false])
+    expect([hcStatus(p, TODAY), hcStatus(p, "2026-11-11"), hcStatus({ ...p, endDate: null }, TODAY), hcStatus({ ...p, startDate: "2027-01-01" }, TODAY)])
+      .toEqual(["Notice period", "Exited", "Active", "Joining"])
+  })
+
+  it("describes what changed between two versions of a profile", () => {
+    const before = defaultProfile(agent, TODAY)
+    const after = { ...before, jobTitle: "Trainer" as const, endDate: "2026-12-31", teamLead: "Elena Faro", wage: setEffective(before.wage, 18, "2026-11-01"), taxId: "123" }
+    expect(describeChanges(before, after)).toEqual([
+      "Job title Agent → Trainer", "Last working day — → 2026-12-31", `Team lead ${agent.tl} → Elena Faro`, "Tax ID updated", "Wage → 18 from 2026-11-01",
+    ])
+    expect(describeChanges(before, before)).toEqual([])
   })
 
   it("round-trips through the export layout on import", () => {

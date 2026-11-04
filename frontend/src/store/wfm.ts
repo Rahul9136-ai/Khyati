@@ -14,7 +14,17 @@ import {
 } from "@/lib/domain/roles"
 import { seedExceptions, type AdherenceException, type ExceptionStatus } from "@/lib/domain/adherence"
 import { computeAlerts, type WfmAlert } from "@/lib/domain/alerts"
-import { DEFAULT_DATA_SOURCES, type DataSource, type DataSourceKind, type EmployeeProfile } from "@/lib/domain/employeeProfile"
+import {
+  DEFAULT_DATA_SOURCES,
+  defaultProfile,
+  describeChanges,
+  isTerminated,
+  valueAsOf,
+  type DataSource,
+  type DataSourceKind,
+  type EmployeeChange,
+  type EmployeeProfile,
+} from "@/lib/domain/employeeProfile"
 import type { ExternalFactor, NewFactor } from "@/lib/domain/externalFactors"
 import type { ScheduleAddition } from "@/lib/domain/autoschedule"
 import { evaluatePtoRequest } from "@/lib/domain/ptoRules"
@@ -147,6 +157,48 @@ export interface SkillChangeRecommendation {
 }
 
 const skillLabel = (id: string, queues: Queue[]) => queues.find((q) => q.id === id)?.name ?? id
+
+const MAX_CHANGES = 3000
+const changeEntry = (by: string, agent: Agent, action: EmployeeChange["action"], detail: string): EmployeeChange => ({
+  id: uid(), agentId: agent.id, name: agent.name, at: Date.now(), by, action, detail,
+})
+
+type EmploymentSlices = Pick<WfmState, "agents" | "rta" | "employeeProfiles" | "formerEmployees" | "employeeChanges" | "auditLog" | "queues">
+
+/** Takes everyone past their last working day off the roster and the real-time
+ *  board (they move to formerEmployees), and puts back anyone whose end date
+ *  was cleared or moved later. Returns only the slices that changed. */
+function settle(s: EmploymentSlices, today: string, by: string): Partial<EmploymentSlices> {
+  const leaving = s.agents.filter((a) => {
+    const p = s.employeeProfiles[a.id]
+    return p && isTerminated(p, today)
+  })
+  const returning = Object.values(s.formerEmployees).filter((a) => {
+    const p = s.employeeProfiles[a.id]
+    return !p || !isTerminated(p, today)
+  })
+  if (!leaving.length && !returning.length) return {}
+  const gone = new Set(leaving.map((a) => a.id))
+  const formerEmployees = { ...s.formerEmployees }
+  for (const a of returning) delete formerEmployees[a.id]
+  for (const a of leaving) formerEmployees[a.id] = a
+  const campaign = (a: Agent) => {
+    const p = s.employeeProfiles[a.id]
+    const org = p ? valueAsOf(p.organization, p.endDate ?? today)?.value : undefined
+    return `${org ?? a.team} · ${a.skills.map((sk) => skillLabel(sk, s.queues)).join(", ")}`
+  }
+  const changes = [
+    ...leaving.map((a) => changeEntry(by, a, "Exited", `Removed from ${campaign(a)} after last working day ${s.employeeProfiles[a.id]!.endDate}`)),
+    ...returning.map((a) => changeEntry(by, a, "Rehired", `Back on ${campaign(a)}`)),
+  ]
+  return {
+    agents: [...s.agents.filter((a) => !gone.has(a.id)), ...returning],
+    rta: [...s.rta.filter((r) => !gone.has(r.id)), ...returning.map((a) => ({ id: a.id, actual: "OFFLINE", scheduled: "AVAIL", secs: 0 }))],
+    formerEmployees,
+    employeeChanges: [...changes, ...s.employeeChanges].slice(0, MAX_CHANGES),
+    auditLog: [...changes.map((c) => entry(by, "Employee", c.action === "Exited" ? "Employee exited" : "Employee rehired", `${c.name} · ${c.detail}`)), ...s.auditLog],
+  }
+}
 
 // Exchange two agents' shifts (and their linked break patterns) on the roster.
 function swapShifts(agents: Agent[], idA: string, idB: string): Agent[] {
@@ -365,11 +417,20 @@ interface WfmState {
   /** Auto-scheduler: mint new agents from the recommended pattern additions. */
   applyAutoSchedule: (queueId: string, additions: ScheduleAddition[]) => void
   setAgents: (agents: Agent[], detail: string) => void
-  /** HR profiles by agent id (lib/domain/employeeProfile.ts); absent = the default. */
+  /** HR profiles by agent id (lib/domain/employeeProfile.ts); absent = the default. Kept after they leave. */
   employeeProfiles: Record<string, EmployeeProfile>
-  /** Saves the profile; its team lead becomes the agent's team lead everywhere. */
-  saveEmployeeProfile: (agentId: string, profile: EmployeeProfile) => void
-  /** Removes a (terminated) employee from the roster altogether. */
+  /** Employees past their last working day — off the roster, schedules and the
+   *  real-time board, kept here for the HC tracker. */
+  formerEmployees: Record<string, Agent>
+  /** Who changed what on each employee, newest first (the HC tracker's log). */
+  employeeChanges: EmployeeChange[]
+  /** Saves the profile; its team lead becomes the agent's team lead everywhere.
+   *  Past the end date they come off the roster; clearing it brings them back.
+   *  `onboarding` folds the details into the "Onboarded" log entry. */
+  saveEmployeeProfile: (agentId: string, profile: EmployeeProfile, opts?: { onboarding?: boolean }) => void
+  /** Takes everyone past their last working day off the roster (runs on a timer). */
+  settleEmployment: () => void
+  /** Removes an employee — current or former — altogether; the change log keeps a record. */
   deleteEmployee: (agentId: string) => void
   /** Systems an employee can have an ID in (ACD, screens, WFM, adherence, quality). */
   dataSources: DataSource[]
@@ -601,11 +662,13 @@ export const useWfm = create<WfmState>()(
             team: a.team,
             tl: TEAMS[a.team]?.tl ?? "Unassigned",
           }
+          const skills = agent.skills.map((sk) => skillLabel(sk, s.queues)).join(" > ")
           return {
             agents: [...s.agents, agent],
             rta: [...s.rta, { id, actual: "AVAIL", scheduled: "AVAIL", secs: 0 }],
+            employeeChanges: [changeEntry(s.currentUser, agent, "Onboarded", `${agent.team} team · ${skills}`), ...s.employeeChanges].slice(0, MAX_CHANGES),
             auditLog: [
-              entry(s.currentUser, "Employee", "Added employee", `${agent.name} · ${agent.team} · ${agent.skills.map((sk) => skillLabel(sk, s.queues)).join(" > ")} · ${pattern?.name ?? agent.shift}`),
+              entry(s.currentUser, "Employee", "Added employee", `${agent.name} · ${agent.team} · ${skills} · ${pattern?.name ?? agent.shift}`),
               ...s.auditLog,
             ],
           }
@@ -614,27 +677,59 @@ export const useWfm = create<WfmState>()(
       },
 
       employeeProfiles: {},
-      saveEmployeeProfile: (agentId, profile) =>
+      formerEmployees: {},
+      employeeChanges: [],
+      saveEmployeeProfile: (agentId, profile, opts = {}) =>
         set((s) => {
-          const agent = s.agents.find((a) => a.id === agentId)
+          const agent = s.agents.find((a) => a.id === agentId) ?? s.formerEmployees[agentId]
           if (!agent) return s
+          const today = localISODate()
+          const before = s.employeeProfiles[agentId] ?? defaultProfile(agent, today)
           const tl = profile.teamLead.trim() || agent.tl
-          return {
-            employeeProfiles: { ...s.employeeProfiles, [agentId]: profile },
-            agents: tl === agent.tl ? s.agents : s.agents.map((a) => (a.id === agentId ? { ...a, tl } : a)),
-            auditLog: [entry(s.currentUser, "Employee", "Updated profile", `${agent.name} · ${profile.jobTitle}${profile.endDate ? ` · ends ${profile.endDate}` : ""}`), ...s.auditLog],
+          const updated = tl === agent.tl ? agent : { ...agent, tl }
+          const changes = describeChanges(before, profile)
+          let employeeChanges = s.employeeChanges
+          if (opts.onboarding) {
+            // Fold the onboarding details into the "Onboarded" entry addAgent wrote.
+            const i = employeeChanges.findIndex((c) => c.agentId === agentId && c.action === "Onboarded")
+            const extra = `${profile.jobTitle} · joins ${profile.startDate}${profile.endDate ? ` · last day ${profile.endDate}` : ""} · ${valueAsOf(profile.organization, today)?.value ?? agent.team}`
+            employeeChanges = i < 0
+              ? [changeEntry(s.currentUser, updated, "Onboarded", extra), ...employeeChanges]
+              : employeeChanges.map((c, j) => (j === i ? { ...c, detail: `${c.detail} · ${extra}` } : c))
+          } else if (changes.length) {
+            employeeChanges = [changeEntry(s.currentUser, updated, "Updated", changes.join("; ")), ...employeeChanges]
           }
+          const next = {
+            ...s,
+            employeeProfiles: { ...s.employeeProfiles, [agentId]: profile },
+            agents: s.agents.map((a) => (a.id === agentId ? updated : a)),
+            formerEmployees: s.formerEmployees[agentId] ? { ...s.formerEmployees, [agentId]: updated } : s.formerEmployees,
+            employeeChanges: employeeChanges.slice(0, MAX_CHANGES),
+            auditLog: changes.length || opts.onboarding
+              ? [entry(s.currentUser, "Employee", "Updated profile", `${agent.name} · ${changes.join("; ") || profile.jobTitle}`), ...s.auditLog]
+              : s.auditLog,
+          }
+          return { ...next, ...settle(next, today, s.currentUser) }
+        }),
+      settleEmployment: () =>
+        set((s) => {
+          const res = settle(s, localISODate(), "System")
+          return Object.keys(res).length ? res : s
         }),
       deleteEmployee: (agentId) =>
         set((s) => {
-          const agent = s.agents.find((a) => a.id === agentId)
+          const agent = s.agents.find((a) => a.id === agentId) ?? s.formerEmployees[agentId]
           if (!agent) return s
           const employeeProfiles = { ...s.employeeProfiles }
           delete employeeProfiles[agentId]
+          const formerEmployees = { ...s.formerEmployees }
+          delete formerEmployees[agentId]
           return {
             agents: s.agents.filter((a) => a.id !== agentId),
             rta: s.rta.filter((r) => r.id !== agentId),
             employeeProfiles,
+            formerEmployees,
+            employeeChanges: [changeEntry(s.currentUser, agent, "Deleted", `${agent.team} team · record removed`), ...s.employeeChanges].slice(0, MAX_CHANGES),
             auditLog: [entry(s.currentUser, "Employee", "Deleted employee", `${agent.name} · ${agent.team}`), ...s.auditLog],
           }
         }),
@@ -1688,6 +1783,8 @@ export const useWfm = create<WfmState>()(
         queueId: s.queueId,
         agents: s.agents,
         employeeProfiles: s.employeeProfiles,
+        formerEmployees: s.formerEmployees,
+        employeeChanges: s.employeeChanges,
         dataSources: s.dataSources,
         rta: s.rta,
         shiftPatterns: s.shiftPatterns,
