@@ -527,6 +527,12 @@ class AgentRuleIn(_Loose):
     weekOffMode: WeekOffMode | None = None
 
 
+class ScheduleHorizonIn(BaseModel):
+    #: Last day schedules have been generated through; the scheduling window
+    #: (date bar, overview, My schedule) runs to here when it's past 3 months.
+    through: date
+
+
 class WorkComplianceIn(_Loose):
     breakRequiredAfterHours: float | None = None
     maxContinuousWorkHours: float | None = None

@@ -19,14 +19,19 @@ export const addDays = (iso: string, n: number) => {
 export const isISODate = (s: string | null | undefined): s is string =>
   !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && localISODate(parseISODate(s)) === s
 
+/** How far ahead schedules can be generated (backend: MAX_GENERATE_WEEKS). */
+export const MAX_GENERATE_WEEKS = 52
+
 /** The next three months: today through the same day three months on, minus
- *  one (≈ 13 weeks). Matches the backend's `default_horizon`. */
-export function scheduleHorizon(today = localISODate()): { start: string; end: string } {
+ *  one (≈ 13 weeks). Matches the backend's `default_horizon`. When schedules
+ *  have been generated further ahead (`through`), the window runs to there. */
+export function scheduleHorizon(today = localISODate(), through?: string | null): { start: string; end: string } {
   const t = parseISODate(today)
   const [y, m] = [t.getFullYear(), t.getMonth() + 3]
   // Clamp to the target month's last day (e.g. 30 Nov → 28 Feb) before stepping back a day.
   const last = new Date(y, m + 1, 0, 12).getDate()
-  return { start: today, end: addDays(localISODate(new Date(y, m, Math.min(t.getDate(), last), 12)), -1) }
+  const end = addDays(localISODate(new Date(y, m, Math.min(t.getDate(), last), 12)), -1)
+  return { start: today, end: through && through > end ? through : end }
 }
 
 export function datesBetween(start: string, end: string): string[] {

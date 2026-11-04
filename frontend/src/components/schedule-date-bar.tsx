@@ -1,29 +1,32 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Loader2, Send } from "lucide-react"
+import { CalendarDays, CalendarPlus, CheckCircle2, ChevronLeft, ChevronRight, Loader2, Send } from "lucide-react"
 import { useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { addDays, fmtDay, fmtDayLong, localISODate, scheduleHorizon, weekStart } from "@/lib/domain/horizon"
-import { publishSchedules, type PublishResult } from "@/lib/schedulePublish"
+import { addDays, fmtDay, fmtDayLong, localISODate, MAX_GENERATE_WEEKS, scheduleHorizon, weekStart } from "@/lib/domain/horizon"
+import { generateSchedules, publishSchedules, useScheduleHorizon, type GenerateResult, type PublishResult } from "@/lib/schedulePublish"
 import { switchScheduleDate, useScheduleSync } from "@/lib/scheduleSync"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
 
-/** How far back the date picker goes (the rest of the range is the next 3 months). */
+/** How far back the date picker goes (the rest of the range is the next 3 months,
+ *  or as far as schedules have been generated). */
 export const LOOK_BACK_DAYS = 14
 
-/** Pick the day shown on the Scheduling page (within the 3-month horizon),
- *  see whether it's published, and publish schedules to agents. */
+/** Pick the day shown on the Scheduling page (within the scheduling window),
+ *  see whether it's published, generate future weeks and publish schedules to agents. */
 export function ScheduleDateBar({ canPublish }: { canPublish: boolean }) {
   const date = useWfm((s) => s.scheduleDate)
   const agentCount = useWfm((s) => s.agents.length)
   const { status, canWrite, serverAgents } = useScheduleSync()
-  const [publishing, setPublishing] = useState(false)
+  const [publishing, setPublishing] = useState<{ start: string; end: string } | boolean>(false)
+  const [generating, setGenerating] = useState(false)
   const today = localISODate()
-  const horizon = scheduleHorizon(today)
+  const horizon = useScheduleHorizon()
+  const extended = horizon.end !== scheduleHorizon(today).end
   const min = addDays(today, -LOOK_BACK_DAYS)
   const go = (d: string) => void switchScheduleDate(d < min ? min : d > horizon.end ? horizon.end : d)
   const online = status !== "idle" && status !== "offline" && serverAgents !== null
@@ -51,7 +54,7 @@ export function ScheduleDateBar({ canPublish }: { canPublish: boolean }) {
       <span className="text-sm font-semibold">{fmtDayLong(date)}</span>
       {online && canWrite && (
         published === 0 ? (
-          <Badge variant="warning" title="Agents and team leaders can't see this day until it's published">Draft</Badge>
+          <Badge variant="warning" title="Agents, team leaders and operations can't see this day until it's published">Draft</Badge>
         ) : published >= agentCount ? (
           <Badge variant="success"><CheckCircle2 className="h-3 w-3" /> Published</Badge>
         ) : (
@@ -60,8 +63,20 @@ export function ScheduleDateBar({ canPublish }: { canPublish: boolean }) {
       )}
       {online && !canWrite && <Badge variant="secondary">Published schedules</Badge>}
       <span className="ml-auto text-xs text-muted-foreground">
-        Next 3 months: {fmtDay(horizon.start)} – {fmtDay(horizon.end)}
+        {extended ? "Generated through" : "Next 3 months"}: {fmtDay(horizon.start)} – {fmtDay(horizon.end)}
       </span>
+      {canWrite && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8"
+          disabled={!online}
+          title={online ? "Create draft schedules for future weeks — only schedulers see them until they're published" : "Generating needs the server connection"}
+          onClick={() => setGenerating(true)}
+        >
+          <CalendarPlus className="h-3.5 w-3.5" /> Generate
+        </Button>
+      )}
       {canPublish && (
         <Button
           size="sm"
@@ -73,26 +88,143 @@ export function ScheduleDateBar({ canPublish }: { canPublish: boolean }) {
           <Send className="h-3.5 w-3.5" /> Publish
         </Button>
       )}
-      {publishing && <PublishDialog date={date} onClose={() => setPublishing(false)} />}
+      {generating && (
+        <GenerateDialog
+          canPublish={canPublish}
+          onClose={() => setGenerating(false)}
+          onPublish={(range) => {
+            setGenerating(false)
+            setPublishing(range)
+          }}
+        />
+      )}
+      {publishing && <PublishDialog date={date} initial={publishing === true ? undefined : publishing} onClose={() => setPublishing(false)} />}
     </div>
+  )
+}
+
+const GENERATE_WEEKS = [4, 8, 13, 26, MAX_GENERATE_WEEKS]
+
+/** Generate draft schedules from today through a chosen number of weeks or date. */
+function GenerateDialog({ canPublish, onClose, onPublish }: { canPublish: boolean; onClose: () => void; onPublish: (range: { start: string; end: string }) => void }) {
+  const queryClient = useQueryClient()
+  const today = localISODate()
+  const max = addDays(today, MAX_GENERATE_WEEKS * 7 - 1)
+  const [choice, setChoice] = useState<number | "until">(13)
+  const [until, setUntil] = useState(addDays(today, 13 * 7 - 1))
+  const [step, setStep] = useState<string | null>(null)
+  const [result, setResult] = useState<GenerateResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const end = choice === "until" ? until : addDays(today, choice * 7 - 1)
+  const valid = !!end && end >= today && end <= max
+
+  async function run() {
+    setError(null)
+    try {
+      setResult(await generateSchedules(today, end, { onProgress: setStep }))
+      void queryClient.invalidateQueries({ queryKey: ["schedule-horizon"] })
+      void queryClient.invalidateQueries({ queryKey: ["schedule-range"] })
+    } catch (e) {
+      setError((e as { message?: string }).message ?? "Generating failed")
+    } finally {
+      setStep(null)
+    }
+  }
+
+  return (
+    <Dialog
+      open
+      onClose={step ? () => {} : onClose}
+      title="Generate schedules"
+      description="Creates a draft schedule for every agent and day from their shift patterns and work rules (week offs included). Drafts are only visible to schedulers — agents, team leaders and operations see them once they're published."
+      footer={
+        result ? (
+          <>
+            <Button variant="outline" onClick={onClose}>Done</Button>
+            {canPublish && (
+              <Button onClick={() => onPublish({ start: result.start, end: result.end })}>
+                <Send className="h-4 w-4" /> Publish these…
+              </Button>
+            )}
+          </>
+        ) : (
+          <>
+            <Button variant="outline" onClick={onClose} disabled={!!step}>Cancel</Button>
+            <Button onClick={() => void run()} disabled={!valid || !!step}>
+              {step ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarPlus className="h-4 w-4" />} Generate
+            </Button>
+          </>
+        )
+      }
+    >
+      {result ? (
+        <div role="status" className="space-y-1 rounded-lg border border-emerald-500/40 p-3 text-sm">
+          <p className="flex items-center gap-1.5 font-semibold text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="h-4 w-4" /> Generated {fmtDay(result.start)} – {fmtDay(result.end)}
+          </p>
+          <p>
+            {result.created
+              ? `${result.created.toLocaleString()} draft schedule${result.created === 1 ? "" : "s"} created.`
+              : "Every day in this range already had a schedule — nothing new to create."}{" "}
+            Days that already had a schedule were kept as they are.
+          </p>
+          <p className="text-muted-foreground">
+            Agents, team leaders and operations can't see the drafts yet{canPublish ? " — publish them when they're ready." : " — a scheduler with publish rights needs to publish them."}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3 text-sm">
+          <fieldset className="space-y-1.5">
+            <legend className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Generate until</legend>
+            {GENERATE_WEEKS.map((w) => (
+              <label key={w} className={cn("flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2", choice === w && "border-primary/60 bg-primary/5")}>
+                <input type="radio" name="generate-range" className="accent-primary" checked={choice === w} onChange={() => setChoice(w)} />
+                Next {w} weeks · {fmtDay(today)} – {fmtDay(addDays(today, w * 7 - 1))}
+              </label>
+            ))}
+            <label className={cn("flex cursor-pointer flex-wrap items-center gap-2 rounded-md border px-3 py-2", choice === "until" && "border-primary/60 bg-primary/5")}>
+              <input type="radio" name="generate-range" className="accent-primary" checked={choice === "until"} onChange={() => setChoice("until")} />
+              Until a date
+              <Input
+                type="date"
+                aria-label="Generate until"
+                className="ml-auto h-8 w-[150px]"
+                min={today}
+                max={max}
+                value={until}
+                onFocus={() => setChoice("until")}
+                onChange={(e) => {
+                  setChoice("until")
+                  setUntil(e.target.value)
+                }}
+              />
+            </label>
+          </fieldset>
+          {!valid && <p role="alert" className="text-xs text-destructive">Pick a date from today up to {fmtDay(max)} ({MAX_GENERATE_WEEKS} weeks ahead).</p>}
+          {step && <p role="status" className="flex items-center gap-1.5 text-xs text-primary"><Loader2 className="h-3 w-3 animate-spin" /> {step}</p>}
+          {error && <p role="alert" className="text-xs text-destructive">✕ {error}</p>}
+        </div>
+      )}
+    </Dialog>
   )
 }
 
 type RangeId = "day" | "week" | "4w" | "all" | "custom"
 
-function PublishDialog({ date, onClose }: { date: string; onClose: () => void }) {
+function PublishDialog({ date, initial, onClose }: { date: string; initial?: { start: string; end: string }; onClose: () => void }) {
   const queryClient = useQueryClient()
   const today = localISODate()
-  const horizon = scheduleHorizon(today)
+  const horizon = useScheduleHorizon()
+  const extended = horizon.end !== scheduleHorizon(today).end
   const ws = weekStart(date)
   const ranges: { id: RangeId; label: string; start: string; end: string }[] = [
     { id: "day", label: `This day · ${fmtDay(date)}`, start: date, end: date },
     { id: "week", label: `This week · ${fmtDay(ws)} – ${fmtDay(addDays(ws, 6))}`, start: ws, end: addDays(ws, 6) },
     { id: "4w", label: `Next 4 weeks · ${fmtDay(today)} – ${fmtDay(addDays(today, 27))}`, start: today, end: addDays(today, 27) },
-    { id: "all", label: `All 3 months · ${fmtDay(horizon.start)} – ${fmtDay(horizon.end)}`, start: horizon.start, end: horizon.end },
+    { id: "all", label: `${extended ? "Everything generated" : "All 3 months"} · ${fmtDay(horizon.start)} – ${fmtDay(horizon.end)}`, start: horizon.start, end: horizon.end },
   ]
-  const [choice, setChoice] = useState<RangeId>("all")
-  const [custom, setCustom] = useState({ start: date, end: addDays(date, 6) })
+  const [choice, setChoice] = useState<RangeId>(initial ? "custom" : "all")
+  const [custom, setCustom] = useState(initial ?? { start: date, end: addDays(date, 6) })
   const [note, setNote] = useState("")
   const [step, setStep] = useState<string | null>(null)
   const [result, setResult] = useState<PublishResult | null>(null)
@@ -106,6 +238,7 @@ function PublishDialog({ date, onClose }: { date: string; onClose: () => void })
       const res = await publishSchedules(range.start, range.end, { note, onProgress: setStep })
       setResult(res)
       void queryClient.invalidateQueries({ queryKey: ["schedule-range"] })
+      void queryClient.invalidateQueries({ queryKey: ["my-schedule"] })
     } catch (e) {
       setError((e as { message?: string }).message ?? "Publishing failed")
     } finally {
@@ -118,7 +251,7 @@ function PublishDialog({ date, onClose }: { date: string; onClose: () => void })
       open
       onClose={step ? () => {} : onClose}
       title="Publish schedules"
-      description="Agents see their own published schedule and their team leaders see the team's. Once published, every change pops up on their screens."
+      description="Once published, agents see their own schedule and team leaders and operations see the team's. Every later change pops up on their screens."
       footer={
         result ? (
           <Button onClick={onClose}>Done</Button>

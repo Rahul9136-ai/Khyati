@@ -7,6 +7,8 @@ Keys:
   shift_patterns    [{id, name, start, end,
                      breaks[{id, type, label, offsetMinutes, durationMinutes}]}]
   agent_rules       {agent_key: {shiftPatternId, weekOff[0-6], weekOffMode}}
+  schedule_horizon  {through: "YYYY-MM-DD"} — how far ahead schedules have been
+                    generated (at most MAX_GENERATE_WEEKS from today)
 
 Every browser loads these on sign-in and saves its changes back, so a change
 made anywhere — in the app or by a connected tool through the API — shows up
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import date, timedelta
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -32,6 +35,7 @@ from app.modules.identity.service import record_audit
 from app.modules.scheduling.models import WorkspaceSetting
 from app.modules.scheduling.schemas import (
     AgentRuleIn,
+    ScheduleHorizonIn,
     ShiftPatternIn,
     WorkComplianceIn,
     WorkRuleIn,
@@ -42,8 +46,11 @@ KEYS: dict[str, TypeAdapter[Any]] = {
     "work_compliance": TypeAdapter(WorkComplianceIn),
     "shift_patterns": TypeAdapter(list[ShiftPatternIn]),
     "agent_rules": TypeAdapter(dict[str, AgentRuleIn]),
+    "schedule_horizon": TypeAdapter(ScheduleHorizonIn),
 }
 MAX_BYTES = 1_000_000
+#: How far ahead schedules can be generated.
+MAX_GENERATE_WEEKS = 52
 
 
 def _check(key: str, value: Any) -> None:
@@ -70,6 +77,11 @@ def _check(key: str, value: Any) -> None:
                 raise ValidationError(f"{r.name}: the breaks don't fit between the no-break times")
     elif key == "agent_rules":
         days = [a.weekOff for a in parsed.values()]
+    elif key == "schedule_horizon":
+        if parsed.through > date.today() + timedelta(weeks=MAX_GENERATE_WEEKS):
+            raise ValidationError(
+                f"Schedules can be generated at most {MAX_GENERATE_WEEKS} weeks ahead"
+            )
     if any(d < 0 or d > 6 for ds in days if ds for d in ds):
         raise ValidationError("Week-off days are 0 (Monday) to 6 (Sunday)")
 

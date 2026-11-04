@@ -48,8 +48,9 @@ from app.modules.scheduling.schemas import (
 )
 from app.modules.workforce.models import Employee
 
-#: Longest range one overview / publish call covers (a little over 6 months).
-MAX_RANGE_DAYS = 190
+#: Longest range one overview / generate / publish call covers: 52 weeks of
+#: generated schedules plus the date bar's two-week look-back, with a little slack.
+MAX_RANGE_DAYS = 380
 
 # ---------------------------------------------------------------- visibility
 

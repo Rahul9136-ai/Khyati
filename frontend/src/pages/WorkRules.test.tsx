@@ -127,7 +127,7 @@ describe("Work Rules page", () => {
   it("reports compliance and highlights who breaks a rule", async () => {
     get.mockResolvedValue({ data: { data: [] } }) // nothing saved: the roster's own patterns
     renderPage()
-    fireEvent.click(screen.getByRole("button", { name: "Compliance" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Compliance" }))
     // Nobody has a week off yet → every agent works 7 days in a row.
     const table = await screen.findByRole("table", { name: "Compliance report" })
     expect(screen.getByText("3 of 3 agents break a rule")).toBeInTheDocument()
@@ -145,7 +145,7 @@ describe("Work Rules page", () => {
 
   it("sets no-break time on a rule, flags breaks that can't fit, and passes it to agents", () => {
     renderPage()
-    fireEvent.click(screen.getByRole("button", { name: "Shift & break patterns" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Shift & break patterns" }))
     fireEvent.click(within(screen.getByTestId("rule-wr-8h")).getByRole("button", { name: /Edit/ }))
     const dialog = screen.getByRole("dialog")
     fireEvent.change(within(dialog).getByLabelText("No breaks in the first minutes"), { target: { value: "240" } })
@@ -165,7 +165,7 @@ describe("Work Rules page", () => {
 
   it("builds a new rule and flags it when it breaks compliance", () => {
     renderPage()
-    fireEvent.click(screen.getByRole("button", { name: "Shift & break patterns" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Shift & break patterns" }))
     fireEvent.click(screen.getByRole("button", { name: /New work rule/ }))
     const dialog = screen.getByRole("dialog")
     fireEvent.change(within(dialog).getByLabelText("Shift length in hours"), { target: { value: "4" } })

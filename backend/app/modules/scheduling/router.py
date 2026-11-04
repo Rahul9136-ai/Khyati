@@ -506,8 +506,8 @@ async def get_setting(key: str, db: DbSession, user: Reader):
 
 @router.put("/settings/{key}", response_model=ApiResponse[SettingOut])
 async def put_setting(key: str, body: SettingIn, db: DbSession, actor: Writer):
-    """Save one setting (work_rules, work_compliance, shift_patterns or
-    agent_rules). Pass the `base_version` you read to avoid overwriting a newer
+    """Save one setting (work_rules, work_compliance, shift_patterns,
+    agent_rules or schedule_horizon). Pass the `base_version` you read to avoid overwriting a newer
     change (409). Every browser and connected tool picks it up."""
     row = await settings_service.put_setting(
         db, org_scope(actor), key, body.value, body.base_version, actor=actor

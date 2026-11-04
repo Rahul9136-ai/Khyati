@@ -5,7 +5,7 @@ import { useMemo, useState } from "react"
 import { ACTIVITY_BY_ID, fmtHM, shiftBounds } from "@/lib/domain/channels"
 import { datesBetween, fmtDay, isWeekend, localISODate, parseISODate, scheduleHorizon } from "@/lib/domain/horizon"
 import type { Agent } from "@/lib/domain/types"
-import { fetchRange, type DaySummary } from "@/lib/schedulePublish"
+import { fetchRange, useScheduleHorizon, type DaySummary } from "@/lib/schedulePublish"
 import { useScheduleSync } from "@/lib/scheduleSync"
 import { cn } from "@/lib/utils"
 import { scheduleForDate, useWfm } from "@/store/wfm"
@@ -27,12 +27,13 @@ interface Cell {
   state: "published" | "draft" | "local"
 }
 
-/** Every agent's shift for every day of the next 3 months: published days are
- *  solid, drafts dashed. Click a day (or a cell) to open it on the timeline. */
+/** Every agent's shift for every day of the next 3 months (or as far as
+ *  schedules have been generated): published days are solid, drafts dashed. Click a day (or a cell) to open it on the timeline. */
 export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOpenDate: (date: string) => void }) {
   const [open, setOpen] = useState(true)
   const today = localISODate()
-  const { start, end } = scheduleHorizon(today)
+  const { start, end } = useScheduleHorizon()
+  const extended = end !== scheduleHorizon(today).end
   const dates = useMemo(() => datesBetween(start, end), [start, end])
   const { status, canWrite, serverAgents } = useScheduleSync()
   const online = status !== "idle" && status !== "offline"
@@ -115,7 +116,7 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
         onClick={() => setOpen((v) => !v)}
       >
         {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-        <span className="font-semibold">Schedules — next 3 months</span>
+        <span className="font-semibold">Schedules — {extended ? `through ${fmtDay(end)}` : "next 3 months"}</span>
         <span className="text-xs text-muted-foreground">
           {fmtDay(start)} – {fmtDay(end)} · {dates.length} days · {agents.length} agents
         </span>
@@ -185,7 +186,7 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
                   <tr key={a.id}>
                     <th scope="row" className="sticky left-0 z-10 border-b bg-card px-2 py-0.5 text-left font-medium">
                       <span className="block max-w-[150px] truncate text-[11px]">{a.name}</span>
-                      {tally && <span className="block text-[9px] font-normal text-muted-foreground" title="Days off / leave / absence in these 3 months">{tally}</span>}
+                      {tally && <span className="block text-[9px] font-normal text-muted-foreground" title="Days off / leave / absence in these dates">{tally}</span>}
                     </th>
                     {dates.map((d) => {
                       const c = cells.get(`${d}|${a.id}`)

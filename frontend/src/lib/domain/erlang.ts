@@ -30,6 +30,42 @@ export function asa(agents: number, intensity: number, aht: number): number {
   return (c * aht) / (agents - intensity)
 }
 
+/** Erlang A (M/M/N+M): Erlang C plus callers who hang up after an
+ *  exponentially distributed wait with mean `patience` seconds. Solved exactly
+ *  as a birth–death chain (arrivals λ; departures min(n, N)·μ + max(n − N, 0)·θ),
+ *  so it stays finite when the queue is overloaded or nobody is on.
+ *  `abandon` = share of offered contacts that hang up; `wait` = mean seconds in
+ *  queue per offered contact; `waitProb` = share that wait at all. */
+export function erlangA(
+  agents: number,
+  volume: number,
+  aht: number,
+  patience: number,
+  interval = 1800,
+): { abandon: number; wait: number; waitProb: number } {
+  if (volume <= 0 || interval <= 0) return { abandon: 0, wait: 0, waitProb: 0 }
+  const n = Math.max(0, Math.floor(agents))
+  const lambda = volume / interval
+  const mu = 1 / aht
+  const theta = 1 / patience
+  let p = 1 // unnormalised P(state k), starting at k = 0
+  let total = 1
+  let queued = 0 // Σ (k − N)·p_k for k > N
+  let waiting = n === 0 ? 1 : 0 // Σ p_k for k ≥ N
+  for (let k = 1; k < n + 20_000; k++) {
+    p *= lambda / (Math.min(k, n) * mu + Math.max(k - n, 0) * theta)
+    total += p
+    if (k >= n) waiting += p
+    if (k > n) queued += (k - n) * p
+    if (total > 1e250) { // rescale — very busy queues with many agents
+      p /= 1e250; total /= 1e250; queued /= 1e250; waiting /= 1e250
+    }
+    if (k > n && p < total * 1e-13) break
+  }
+  const lq = queued / total
+  return { abandon: Math.min(1, (theta * lq) / lambda), wait: lq / lambda, waitProb: waiting / total }
+}
+
 export function occupancy(agents: number, intensity: number): number {
   if (agents <= 0) return 0
   return Math.min(1, intensity / agents)

@@ -3,7 +3,7 @@ team leaders get when published schedules change."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from httpx import AsyncClient
 
@@ -256,7 +256,7 @@ async def test_fill_and_range_summary(client: AsyncClient, admin: dict) -> None:
     bad = await client.get(f"{API}/day-plans", headers=h, params={"start": D3, "end": D1})
     assert bad.status_code == 422
     too_long = await client.post(f"{API}/day-plans/publish", headers=h,
-                                 json={"start": "2026-01-01", "end": "2026-12-31"})
+                                 json={"start": "2026-01-01", "end": "2027-03-31"})
     assert too_long.status_code == 422
 
 
@@ -287,3 +287,59 @@ async def test_my_schedule_and_permissions(client: AsyncClient, admin: dict) -> 
     agent_fill = await client.post(f"{API}/day-plans/fill", headers=who["agent"],
                                    json={"items": [{**plan_json("a01"), "plan_date": D3}]})
     assert agent_fill.status_code == 403
+
+
+async def test_generate_future_weeks_hidden_from_operations_until_published(
+    client: AsyncClient, admin: dict
+) -> None:
+    """Generating weeks ahead = filling drafts and recording how far they go;
+    agents, team leaders and operations only see them once published."""
+    h = admin["headers"]
+    who = await setup_people(client, h)
+    r = await client.post("/api/v1/users", headers=h, json={
+        "email": "omar@test.dev", "password": "Demo@12345", "full_name": "Omar Ops",
+        "role_names": ["Operations Manager"],
+    })
+    assert r.status_code == 201, r.text
+    ops = await login(client, "omar@test.dev", "Demo@12345")
+
+    start = date.today()
+    end = start + timedelta(weeks=52) - timedelta(days=1)
+    far = (end - timedelta(days=1)).isoformat()
+    fill = await client.post(f"{API}/day-plans/fill", headers=h, json={"items": [
+        {**plan_json("a01"), "plan_date": start.isoformat()},
+        {**plan_json("a01"), "plan_date": far},
+    ]})
+    assert fill.status_code == 200, fill.text
+    horizon = await client.put(f"{API}/settings/schedule_horizon", headers=h,
+                               json={"value": {"through": end.isoformat()}})
+    assert horizon.status_code == 200, horizon.text
+
+    # Everyone reads how far schedules go, so their window reaches it …
+    for viewer in (ops, who["agent"]):
+        got = await client.get(f"{API}/settings/schedule_horizon", headers=viewer)
+        assert got.json()["data"]["value"] == {"through": end.isoformat()}
+    # … but only schedulers see the drafts.
+    rng = {"start": start.isoformat(), "end": end.isoformat()}
+    assert len((await client.get(f"{API}/day-plans", headers=h, params=rng)).json()["data"]) == 2
+    for viewer in (ops, who["team_lead"], who["agent"]):
+        assert (await client.get(f"{API}/day-plans", headers=viewer, params=rng)).json()["data"] == []
+        assert (await client.get(f"{API}/day-plans/{far}", headers=viewer)).json()["data"] == []
+
+    pub = await client.post(f"{API}/day-plans/publish", headers=h, json=rng)
+    assert pub.status_code == 200, pub.text
+    assert pub.json()["data"]["published"] == 2
+    for viewer in (ops, who["team_lead"]):
+        rows = (await client.get(f"{API}/day-plans", headers=viewer, params=rng)).json()["data"]
+        assert [x["plan_date"] for x in rows] == [start.isoformat(), far]
+    mine = (await client.get(f"{API}/my-schedule", headers=who["agent"], params=rng)).json()
+    assert [d["plan_date"] for d in mine["data"]["days"]] == [start.isoformat(), far]
+
+    # Only schedulers move the horizon, and not past 52 weeks.
+    denied = await client.put(f"{API}/settings/schedule_horizon", headers=ops,
+                              json={"value": {"through": end.isoformat()}})
+    assert denied.status_code == 403
+    too_far = await client.put(f"{API}/settings/schedule_horizon", headers=h, json={
+        "value": {"through": (start + timedelta(weeks=53)).isoformat()}
+    })
+    assert too_far.status_code == 422

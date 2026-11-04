@@ -12,6 +12,7 @@ import { Automation } from "@/pages/Automation"
 import { Autonomy } from "@/pages/Autonomy"
 import { Copilot } from "@/pages/Copilot"
 import { Dashboard } from "@/pages/Dashboard"
+import { EmployeeProfile } from "@/pages/EmployeeProfile"
 import { Employees } from "@/pages/Employees"
 import { Forecasting } from "@/pages/Forecasting"
 import { Help } from "@/pages/Help"
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="/autonomy" element={<RoleGuard module="automation"><Autonomy /></RoleGuard>} />
         <Route path="/help" element={<RoleGuard module="help"><Help /></RoleGuard>} />
         <Route path="/employees" element={<RoleGuard module="employees"><Employees /></RoleGuard>} />
+        <Route path="/employees/:id" element={<RoleGuard module="employees"><EmployeeProfile /></RoleGuard>} />
         <Route path="/skills" element={<RoleGuard module="skills"><Skills /></RoleGuard>} />
         <Route path="/pto" element={<RoleGuard module="pto"><Pto /></RoleGuard>} />
         <Route path="/reports" element={<RoleGuard module="reports"><Reports /></RoleGuard>} />

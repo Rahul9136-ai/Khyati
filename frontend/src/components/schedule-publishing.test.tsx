@@ -177,6 +177,51 @@ describe("date bar", () => {
     renderWith(<ScheduleDateBar canPublish={false} />)
     expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument()
   })
+
+  it("generates future weeks as drafts, then offers to publish them", async () => {
+    const put = vi.mocked(api.put)
+    put.mockReset()
+    put.mockResolvedValue({ data: { data: {} } })
+    get.mockImplementation(async (url: string) => {
+      if (url.endsWith("/schedule_horizon")) throw { status: 404, message: "not saved" }
+      return { data: { data: [] } }
+    })
+    post.mockImplementation(async (url: string, body: unknown) => {
+      if (url.endsWith("/fill")) return { data: { data: { created: (body as { items: unknown[] }).items.length, existing: 0 } } }
+      return { data: { data: {} } }
+    })
+    renderWith(<ScheduleDateBar canPublish />)
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }))
+    const dialog = screen.getByRole("dialog")
+    const end = addDays(today, 26 * 7 - 1)
+    fireEvent.click(within(dialog).getByLabelText(/^Next 26 weeks/))
+    fireEvent.click(within(dialog).getByRole("button", { name: "Generate" }))
+
+    expect(await within(dialog).findByText(`${(AGENTS.length * 26 * 7).toLocaleString()} draft schedules created.`, { exact: false })).toBeInTheDocument()
+    expect(within(dialog).getByText(/can't see the drafts yet/)).toBeInTheDocument()
+    expect(put).toHaveBeenCalledWith("/scheduling/settings/schedule_horizon", { value: { through: end } })
+    expect(post).not.toHaveBeenCalledWith("/scheduling/day-plans/publish", expect.anything())
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /Publish these/ }))
+    const publish = screen.getByRole("dialog")
+    expect(within(publish).getByLabelText("Custom range")).toBeChecked()
+    expect(within(publish).getByLabelText("Publish from")).toHaveValue(today)
+    expect(within(publish).getByLabelText("Publish to")).toHaveValue(end)
+  })
+
+  it("lets the date bar reach the generated weeks", async () => {
+    const through = addDays(today, 200)
+    get.mockImplementation(async (url: string) => ({ data: { data: url.endsWith("/schedule_horizon") ? { key: "schedule_horizon", value: { through }, version: 1 } : [] } }))
+    renderWith(<ScheduleDateBar canPublish />)
+    await waitFor(() => expect(screen.getByLabelText("Schedule date")).toHaveAttribute("max", through))
+    expect(screen.getByText(/^Generated through/)).toBeInTheDocument()
+  })
+
+  it("hides Generate from people who can't edit schedules", () => {
+    useScheduleSync.setState({ canWrite: false })
+    renderWith(<ScheduleDateBar canPublish={false} />)
+    expect(screen.queryByRole("button", { name: "Generate" })).not.toBeInTheDocument()
+  })
 })
 
 describe("my schedule (agent view)", () => {
@@ -197,7 +242,7 @@ describe("my schedule (agent view)", () => {
     expect(row).toHaveTextContent("Lunch 11:00")
     expect(row).toHaveTextContent("Training 13:00–14:00")
     expect(row).toHaveTextContent("OT Chat 15:30–16:30")
-    expect(get.mock.calls[0][0]).toBe("/scheduling/my-schedule")
+    expect(get.mock.calls.map((c) => c[0])).toContain("/scheduling/my-schedule")
     fireEvent.click(row)
     expect(onOpen).toHaveBeenCalledWith(tomorrow)
   })
@@ -220,6 +265,6 @@ describe("my schedule (agent view)", () => {
     get.mockResolvedValue({ data: { data: [] } })
     renderWith(<MySchedule agentId={a01.id} onOpenDate={() => {}} />)
     expect(await screen.findByText(/No published schedule yet/)).toBeInTheDocument()
-    expect(get.mock.calls[0][0]).toBe(`/scheduling/agent-schedule/${a01.id}`)
+    expect(get.mock.calls.map((c) => c[0])).toContain(`/scheduling/agent-schedule/${a01.id}`)
   })
 })

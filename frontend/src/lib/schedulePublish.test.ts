@@ -4,7 +4,7 @@ import { api } from "@/lib/api"
 import { toMins } from "@/lib/domain/channels"
 import { addDays, datesBetween, isISODate, localISODate, scheduleHorizon, weekStart } from "@/lib/domain/horizon"
 import { AGENTS } from "@/lib/domain/seed"
-import { missingDays, publishSchedules } from "@/lib/schedulePublish"
+import { generateSchedules, missingDays, publishSchedules } from "@/lib/schedulePublish"
 import { startScheduleSync, stopScheduleSync, switchScheduleDate, useScheduleSync, type ServerDayPlan } from "@/lib/scheduleSync"
 import { scheduleForDate, useWfm } from "@/store/wfm"
 
@@ -81,6 +81,12 @@ describe("calendar helpers", () => {
     expect(addDays("2026-03-28", 2)).toBe("2026-03-30") // across a DST change
     expect([isISODate("2026-02-30"), isISODate("2026-02-28"), isISODate(null)]).toEqual([false, true, false])
   })
+
+  it("runs to the generated weeks when they reach past three months", () => {
+    expect(scheduleHorizon("2026-10-24", "2027-06-30")).toEqual({ start: "2026-10-24", end: "2027-06-30" })
+    expect(scheduleHorizon("2026-10-24", "2026-12-01").end).toBe("2027-01-23") // never shorter
+    expect(scheduleHorizon("2026-10-24", null).end).toBe("2027-01-23")
+  })
 })
 
 describe("per-date schedules", () => {
@@ -132,6 +138,29 @@ describe("syncing across dates", () => {
     await startScheduleSync({ canWrite: false })
     expect(useScheduleSync.getState()).toMatchObject({ status: "readonly", canWrite: false, serverAgents: { [a01]: { published: true } } })
     expect(put).not.toHaveBeenCalled()
+  })
+})
+
+describe("generating", () => {
+  it("creates draft days from shift patterns without publishing, and extends the window", async () => {
+    await startScheduleSync({ canWrite: true })
+    const end = addDays(D1, 13)
+    const horizonPuts: unknown[] = []
+    const dayPut = put.getMockImplementation()!
+    put.mockImplementation(async (url: string, body: unknown) => {
+      if (url === "/scheduling/settings/schedule_horizon") {
+        horizonPuts.push(body)
+        return { data: { data: { key: "schedule_horizon", value: (body as { value: unknown }).value, version: 1 } } }
+      }
+      return dayPut(url, body)
+    })
+    const res = await generateSchedules(D1, end)
+
+    expect(res).toEqual({ start: D1, end, created: AGENTS.length * 13 }) // D1 was already saved by the sync
+    expect(datesBetween(D1, end).every((d) => rowsOn(d).size === AGENTS.length)).toBe(true)
+    expect([...rowsOn(end).values()].every((r) => r.published_at === null)).toBe(true) // drafts
+    expect(post).not.toHaveBeenCalledWith("/scheduling/day-plans/publish", expect.anything())
+    expect(horizonPuts).toEqual([{ value: { through: end } }])
   })
 })
 

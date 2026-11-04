@@ -1,20 +1,21 @@
-import { useMemo, useState } from "react"
-import { Star, UserCheck, UserPlus, Users } from "lucide-react"
-import { Link } from "react-router-dom"
+import { useEffect, useMemo, useState } from "react"
+import { SquareUser, Star, UserCheck, UserPlus, Users } from "lucide-react"
+import { Link, useNavigate, useSearchParams } from "react-router-dom"
 
 import { AgentSkillsDialog } from "@/components/agent-skills-dialog"
+import { OnboardingDialog } from "@/components/employee-onboarding"
 import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { PageHeader } from "@/components/page-header"
 import { PermissionGate } from "@/components/permission-gate"
-import { SkillPriorityEditor } from "@/components/skill-priority-editor"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Dialog } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { defaultProfile, isTerminated, JOB_TITLES } from "@/lib/domain/employeeProfile"
+import { fmtDay, localISODate } from "@/lib/domain/horizon"
 import { TEAMS } from "@/lib/domain/seed"
 import type { Agent } from "@/lib/domain/types"
 import { useWfm } from "@/store/wfm"
@@ -23,40 +24,36 @@ const email = (name: string) => `${name.toLowerCase().replace(/[^a-z ]/g, "").re
 const TEAM_NAMES = Object.keys(TEAMS)
 
 export function Employees() {
-  const { agents, addAgent, shiftPatterns, queues } = useWfm()
+  const { agents, queues, employeeProfiles } = useWfm()
   const skillName = (id: string) => queues.find((q) => q.id === id)?.name ?? id
+  const today = localISODate()
+  const profileOf = (a: Agent) => employeeProfiles[a.id] ?? defaultProfile(a, today)
   const [q, setQ] = useState("")
+  const [title, setTitle] = useState("")
   const [open, setOpen] = useState(false)
+  const navigate = useNavigate()
+  // ?add=1 (the profile page's Create) opens the add-employee form.
+  const [params, setParams] = useSearchParams()
+  useEffect(() => {
+    if (params.get("add") !== "1") return
+    setOpen(true)
+    setParams((p) => {
+      p.delete("add")
+      return p
+    }, { replace: true })
+  }, [params, setParams])
   const [skillsAgent, setSkillsAgent] = useState<Agent | null>(null)
 
-  // add-employee form state
-  const [name, setName] = useState("")
-  const [team, setTeam] = useState(TEAM_NAMES[0])
-  const [shiftPatternId, setShiftPatternId] = useState(shiftPatterns[0]?.id ?? "")
-  const [skills, setSkills] = useState<string[]>([queues[0].id])
-  const [error, setError] = useState("")
-
   const rows = useMemo(
-    () => agents.filter((a) => a.name.toLowerCase().includes(q.toLowerCase()) || a.team.toLowerCase().includes(q.toLowerCase())),
-    [agents, q],
+    () =>
+      agents.filter((a) => {
+        const p = employeeProfiles[a.id] ?? defaultProfile(a, today)
+        const text = q.toLowerCase()
+        return (!title || p.jobTitle === title) && (a.name.toLowerCase().includes(text) || a.team.toLowerCase().includes(text) || p.jobTitle.toLowerCase().includes(text))
+      }),
+    [agents, q, title, employeeProfiles, today],
   )
   const teams = new Set(agents.map((a) => a.team)).size
-
-  function reset() {
-    setName("")
-    setTeam(TEAM_NAMES[0])
-    setShiftPatternId(shiftPatterns[0]?.id ?? "")
-    setSkills([queues[0].id])
-    setError("")
-  }
-
-  function submit() {
-    if (!name.trim()) return setError("Name is required.")
-    if (skills.length === 0) return setError("Select at least one skill.")
-    addAgent({ name, team, shiftPatternId, skills })
-    reset()
-    setOpen(false)
-  }
 
   return (
     <>
@@ -71,14 +68,14 @@ export function Employees() {
                 {
                   name: "Employees",
                   rows: agents.map((a) => ({
-                    "Agent ID": a.id, Name: a.name, Email: email(a.name), Team: a.team, "Team Lead": a.tl, Shift: a.shift,
+                    "Agent ID": a.id, Name: a.name, "Job Title": profileOf(a).jobTitle, Email: email(a.name), Team: a.team, "Team Lead": a.tl, Shift: a.shift,
                     "Skills (priority order)": a.skills.map((s, i) => `${i + 1}. ${skillName(s)}`).join(", "),
                   })),
                 },
               ]}
             />
             <PermissionGate module="employees">
-              <Button onClick={() => { reset(); setOpen(true) }}>
+              <Button onClick={() => setOpen(true)}>
                 <UserPlus className="h-4 w-4" /> Add employee
               </Button>
             </PermissionGate>
@@ -87,7 +84,7 @@ export function Employees() {
       />
 
       <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <KpiCard label="Headcount" value={agents.length} hint="active agents" icon={Users} />
+        <KpiCard label="Headcount" value={agents.filter((a) => !isTerminated(profileOf(a), today)).length} hint="active employees" icon={Users} />
         <KpiCard label="Teams" value={teams} hint={TEAM_NAMES.join(" · ")} icon={Users} />
         <KpiCard label="Multi-skilled" value={agents.filter((a) => a.skills.length > 1).length} hint="2+ skills" tone="good" icon={UserCheck} />
         <KpiCard label="Avg skills" value={(agents.reduce((s, a) => s + a.skills.length, 0) / agents.length).toFixed(1)} hint="per agent" icon={UserCheck} />
@@ -96,7 +93,13 @@ export function Employees() {
       <Card className="glass">
         <CardContent className="pt-5">
           <div className="mb-4 flex flex-wrap items-center gap-3">
-            <Input placeholder="Search by name or team…" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-xs" />
+            <Input placeholder="Search by name, team or job title…" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-xs" />
+            <Select
+              aria-label="Job title filter"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              options={[{ value: "", label: "All job titles" }, ...JOB_TITLES.map((t) => ({ value: t, label: t }))]}
+            />
             <span className="ml-auto text-xs text-muted-foreground">
               Shift breaks come from <Link to="/shift-patterns" className="text-primary hover:underline">shift patterns</Link>.
             </span>
@@ -105,6 +108,7 @@ export function Employees() {
             <TableHeader>
               <TableRow>
                 <TableHead>Employee</TableHead>
+                <TableHead>Job title</TableHead>
                 <TableHead>Team</TableHead>
                 <TableHead>Team Lead</TableHead>
                 <TableHead>Shift</TableHead>
@@ -114,12 +118,16 @@ export function Employees() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((a) => (
+              {rows.map((a) => {
+                const profile = profileOf(a)
+                const gone = isTerminated(profile, today)
+                return (
                 <TableRow key={a.id}>
                   <TableCell className="text-left">
-                    <div className="font-medium">{a.name}</div>
+                    <Link to={`/employees/${a.id}`} className="font-medium hover:text-primary hover:underline">{a.name}</Link>
                     <div className="text-xs text-muted-foreground">{email(a.name)}</div>
                   </TableCell>
+                  <TableCell>{profile.jobTitle}</TableCell>
                   <TableCell>{a.team}</TableCell>
                   <TableCell>{a.tl}</TableCell>
                   <TableCell className="tabular-nums">{a.shift}</TableCell>
@@ -131,64 +139,42 @@ export function Employees() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="success">Active</Badge>
+                    {gone ? (
+                      <Badge variant="destructive">Terminated</Badge>
+                    ) : profile.endDate ? (
+                      <Badge variant="warning" title={`Last day ${fmtDay(profile.endDate)}`}>Leaving</Badge>
+                    ) : (
+                      <Badge variant="success">Active</Badge>
+                    )}
                   </TableCell>
                   <TableCell>
-                    <PermissionGate module="skills" fallback={<span className="text-xs text-muted-foreground">—</span>}>
-                      <Button variant="ghost" size="sm" onClick={() => setSkillsAgent(a)}>
-                        <Star className="h-3.5 w-3.5" /> Skills
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="sm" asChild>
+                        <Link to={`/employees/${a.id}`}><SquareUser className="h-3.5 w-3.5" /> Profile</Link>
                       </Button>
-                    </PermissionGate>
+                      <PermissionGate module="skills">
+                        <Button variant="ghost" size="sm" onClick={() => setSkillsAgent(a)}>
+                          <Star className="h-3.5 w-3.5" /> Skills
+                        </Button>
+                      </PermissionGate>
+                    </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                )
+              })}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
 
-      <Dialog
+      <OnboardingDialog
         open={open}
         onClose={() => setOpen(false)}
-        title="Add employee"
-        description="New hires flow straight into scheduling coverage and the real-time board."
-        footer={
-          <>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={submit}><UserPlus className="h-4 w-4" /> Add employee</Button>
-          </>
-        }
-      >
-        <div className="space-y-4">
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-muted-foreground">Full name</span>
-            <Input value={name} onChange={(e) => { setName(e.target.value); setError("") }} placeholder="e.g. Jordan Blake" autoFocus />
-          </label>
-
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-muted-foreground">Team</span>
-              <Select value={team} onChange={(e) => setTeam(e.target.value)} options={TEAM_NAMES.map((t) => ({ value: t, label: t }))} className="w-full" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-muted-foreground">Shift pattern</span>
-              <Select
-                value={shiftPatternId}
-                onChange={(e) => setShiftPatternId(e.target.value)}
-                options={shiftPatterns.map((p) => ({ value: p.id, label: `${p.name} (${p.start}–${p.end})` }))}
-                className="w-full"
-              />
-            </label>
-          </div>
-
-          <div>
-            <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Skills — order sets priority</span>
-            <SkillPriorityEditor skills={skills} onChange={(s) => { setSkills(s); setError("") }} />
-          </div>
-
-          {error && <p className="text-sm text-destructive">{error}</p>}
-        </div>
-      </Dialog>
+        onCreated={(id, openProfile) => {
+          setOpen(false)
+          if (openProfile) navigate(`/employees/${id}`)
+        }}
+      />
 
       <AgentSkillsDialog agent={skillsAgent} open={!!skillsAgent} onClose={() => setSkillsAgent(null)} />
     </>

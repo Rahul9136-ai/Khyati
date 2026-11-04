@@ -9,6 +9,7 @@ import { ACTIVITY_BY_ID, CHANNEL_BY_ID, fmtHM } from "@/lib/domain/channels"
 import { fmtDay, localISODate, scheduleHorizon, weekStart } from "@/lib/domain/horizon"
 import type { Row } from "@/lib/export"
 import { dayStatus } from "@/lib/performanceReport"
+import { useScheduleHorizon } from "@/lib/schedulePublish"
 import type { ServerDayPlan } from "@/lib/scheduleSync"
 import { dayFromServer, useScheduleSync } from "@/lib/scheduleSync"
 import { cn } from "@/lib/utils"
@@ -37,14 +38,15 @@ export function scheduleExportRows(days: PublishedDay[]): Row[] {
   })
 }
 
-/** An agent's published days for the next 3 months: a signed-in agent's own
+/** An agent's published days for the next 3 months (or as far as schedules
+ *  have been generated): a signed-in agent's own
  *  (GET /scheduling/my-schedule), or — for staff previewing the Agent view —
  *  that roster agent's, exactly as the agent sees them. */
 export function usePublishedDays(agentId: string) {
   const user = useAuth((s) => s.user)
   const status = useScheduleSync((s) => s.status)
   const staff = !!user && (user.is_superuser || user.permission_codes.includes("employee:read"))
-  const { start, end } = scheduleHorizon(localISODate())
+  const { start, end } = useScheduleHorizon()
   const online = status !== "idle" && status !== "offline"
   const query = useQuery({
     queryKey: ["my-schedule", staff ? agentId : "me", start, end],
@@ -70,7 +72,7 @@ export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDat
       <CardHeader className="pb-2">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <CardTitle className="flex items-center gap-2"><CalendarCheck className="h-4 w-4 text-primary" /> My schedule — next 3 months</CardTitle>
+            <CardTitle className="flex items-center gap-2"><CalendarCheck className="h-4 w-4 text-primary" /> My schedule — {end === scheduleHorizon(localISODate()).end ? "next 3 months" : `through ${fmtDay(end)}`}</CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
               {fmtDay(start)} – {fmtDay(end)} · published shifts only. You get a pop-up whenever one of them changes.
             </p>

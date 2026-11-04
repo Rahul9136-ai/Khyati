@@ -14,6 +14,7 @@ import {
 } from "@/lib/domain/roles"
 import { seedExceptions, type AdherenceException, type ExceptionStatus } from "@/lib/domain/adherence"
 import { computeAlerts, type WfmAlert } from "@/lib/domain/alerts"
+import { DEFAULT_DATA_SOURCES, type DataSource, type DataSourceKind, type EmployeeProfile } from "@/lib/domain/employeeProfile"
 import type { ExternalFactor, NewFactor } from "@/lib/domain/externalFactors"
 import type { ScheduleAddition } from "@/lib/domain/autoschedule"
 import { evaluatePtoRequest } from "@/lib/domain/ptoRules"
@@ -359,10 +360,20 @@ interface WfmState {
 
   agents: Agent[]
   rta: RtaEntry[]
-  addAgent: (a: NewAgent) => void
+  /** Adds the agent to the roster and returns their new id. */
+  addAgent: (a: NewAgent) => string
   /** Auto-scheduler: mint new agents from the recommended pattern additions. */
   applyAutoSchedule: (queueId: string, additions: ScheduleAddition[]) => void
   setAgents: (agents: Agent[], detail: string) => void
+  /** HR profiles by agent id (lib/domain/employeeProfile.ts); absent = the default. */
+  employeeProfiles: Record<string, EmployeeProfile>
+  /** Saves the profile; its team lead becomes the agent's team lead everywhere. */
+  saveEmployeeProfile: (agentId: string, profile: EmployeeProfile) => void
+  /** Removes a (terminated) employee from the roster altogether. */
+  deleteEmployee: (agentId: string) => void
+  /** Systems an employee can have an ID in (ACD, screens, WFM, adherence, quality). */
+  dataSources: DataSource[]
+  addDataSource: (name: string, kind: DataSourceKind) => void
   setAgentSkills: (agentId: string, skills: string[]) => void
   recallAgent: (id: string) => void
   recallMany: (ids: string[]) => void
@@ -577,9 +588,9 @@ export const useWfm = create<WfmState>()(
       agents: AGENTS,
       rta: makeRTA(AGENTS),
 
-      addAgent: (a) =>
+      addAgent: (a) => {
+        const id = "a" + String(get().agents.length + 1).padStart(2, "0") + uid().slice(0, 3)
         set((s) => {
-          const id = "a" + String(s.agents.length + 1).padStart(2, "0") + uid().slice(0, 3)
           const pattern = s.shiftPatterns.find((p) => p.id === a.shiftPatternId)
           const agent: Agent = {
             id,
@@ -597,6 +608,45 @@ export const useWfm = create<WfmState>()(
               entry(s.currentUser, "Employee", "Added employee", `${agent.name} · ${agent.team} · ${agent.skills.map((sk) => skillLabel(sk, s.queues)).join(" > ")} · ${pattern?.name ?? agent.shift}`),
               ...s.auditLog,
             ],
+          }
+        })
+        return id
+      },
+
+      employeeProfiles: {},
+      saveEmployeeProfile: (agentId, profile) =>
+        set((s) => {
+          const agent = s.agents.find((a) => a.id === agentId)
+          if (!agent) return s
+          const tl = profile.teamLead.trim() || agent.tl
+          return {
+            employeeProfiles: { ...s.employeeProfiles, [agentId]: profile },
+            agents: tl === agent.tl ? s.agents : s.agents.map((a) => (a.id === agentId ? { ...a, tl } : a)),
+            auditLog: [entry(s.currentUser, "Employee", "Updated profile", `${agent.name} · ${profile.jobTitle}${profile.endDate ? ` · ends ${profile.endDate}` : ""}`), ...s.auditLog],
+          }
+        }),
+      deleteEmployee: (agentId) =>
+        set((s) => {
+          const agent = s.agents.find((a) => a.id === agentId)
+          if (!agent) return s
+          const employeeProfiles = { ...s.employeeProfiles }
+          delete employeeProfiles[agentId]
+          return {
+            agents: s.agents.filter((a) => a.id !== agentId),
+            rta: s.rta.filter((r) => r.id !== agentId),
+            employeeProfiles,
+            auditLog: [entry(s.currentUser, "Employee", "Deleted employee", `${agent.name} · ${agent.team}`), ...s.auditLog],
+          }
+        }),
+      dataSources: DEFAULT_DATA_SOURCES,
+      addDataSource: (name, kind) =>
+        set((s) => {
+          const clean = name.trim()
+          if (!clean || s.dataSources.some((d) => d.name.toLowerCase() === clean.toLowerCase())) return s
+          const id = clean.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || uid()
+          return {
+            dataSources: [...s.dataSources, { id: s.dataSources.some((d) => d.id === id) ? `${id}-${uid().slice(0, 4)}` : id, name: clean, kind }],
+            auditLog: [entry(s.currentUser, "Config", "Added data source", `${clean} · ${kind}`), ...s.auditLog],
           }
         }),
 
@@ -1637,6 +1687,8 @@ export const useWfm = create<WfmState>()(
         queues: s.queues,
         queueId: s.queueId,
         agents: s.agents,
+        employeeProfiles: s.employeeProfiles,
+        dataSources: s.dataSources,
         rta: s.rta,
         shiftPatterns: s.shiftPatterns,
         workRules: s.workRules,
