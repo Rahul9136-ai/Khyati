@@ -39,6 +39,7 @@ export function Rta() {
   }, [])
 
   const [surge, setSurge] = useState(true)
+  const [scanResult, setScanResult] = useState<string | null>(null)
 
   const underQueues = useMemo(
     () =>
@@ -355,9 +356,20 @@ export function Rta() {
             </p>
           </div>
           <PermissionGate module="realtime" fallback={<Badge variant="secondary">view only</Badge>}>
-            <Button size="sm" variant="outline" onClick={() => scanSkillRecommendations()}>
-              <RefreshCw className="h-4 w-4" /> Check now
-            </Button>
+            <div className="flex items-center gap-2">
+              {scanResult && <span role="status" className="text-xs text-muted-foreground">{scanResult}</span>}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  const found = scanSkillRecommendations()
+                  const at = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                  setScanResult(found ? `Checked ${at} — ${found} new recommendation${found === 1 ? "" : "s"} below.` : `Checked ${at} — every queue is balanced.`)
+                }}
+              >
+                <RefreshCw className="h-4 w-4" /> Check now
+              </Button>
+            </div>
           </PermissionGate>
         </CardHeader>
         <CardContent className="space-y-2">

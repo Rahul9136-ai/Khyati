@@ -106,7 +106,7 @@ export function Copilot() {
           </div>
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void send(input) }}>
             <Input placeholder="Ask the WFM Copilot…" value={input} onChange={(e) => setInput(e.target.value)} />
-            <Button type="submit" size="icon"><Send className="h-4 w-4" /></Button>
+            <Button type="submit" size="icon" aria-label="Send" title={input.trim() ? "Send" : "Type a question first"} disabled={!input.trim()}><Send className="h-4 w-4" /></Button>
           </form>
         </div>
       </Card>

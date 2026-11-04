@@ -1,9 +1,13 @@
 import { X } from "lucide-react"
 import { useEffect } from "react"
+import { createPortal } from "react-dom"
 
 import { cn } from "@/lib/utils"
 
 // Lightweight modal dialog — backdrop + centered card, closes on Esc / backdrop.
+// Rendered into <body> so it always covers the screen: inside a card with
+// backdrop-filter (.glass) a `fixed` element is positioned against the card
+// instead, which left dialogs cut off behind the page.
 export function Dialog({
   open,
   onClose,
@@ -30,14 +34,14 @@ export function Dialog({
 
   if (!open) return null
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
         className={cn(
-          "relative z-10 w-full max-w-lg rounded-xl border bg-card p-5 shadow-2xl animate-fade-in",
+          "relative z-10 max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border bg-card p-5 shadow-2xl animate-fade-in",
           className,
         )}
       >
@@ -53,6 +57,7 @@ export function Dialog({
         {children}
         {footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

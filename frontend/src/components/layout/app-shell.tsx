@@ -1,6 +1,7 @@
-import { LogOut, Search } from "lucide-react"
+import { LogOut } from "lucide-react"
 import { NavLink } from "react-router-dom"
 
+import { GlobalSearch } from "@/components/layout/global-search"
 import { MessagePopup } from "@/components/layout/message-popup"
 import { NotificationsBell } from "@/components/layout/notifications-bell"
 import { QueuePicker } from "@/components/layout/queue-picker"
@@ -82,13 +83,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-10 flex h-14 items-center gap-3 border-b bg-card/60 px-5 backdrop-blur-xl">
-          <div className="relative hidden max-w-xs flex-1 items-center md:flex">
-            <Search className="absolute left-3 h-4 w-4 text-muted-foreground" />
-            <input
-              placeholder="Search…"
-              className="h-8 w-full rounded-md border bg-background pl-9 pr-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          </div>
+          <GlobalSearch />
           <div className="flex-1" />
           <QueuePicker />
           {user?.is_superuser && (

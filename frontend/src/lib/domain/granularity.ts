@@ -30,7 +30,9 @@ export interface BacktestG {
   holdoutDow?: number
 }
 
-export function backtestG(queueId: string, gran: GranId, overlay?: ActualRow[]): BacktestG {
+/** The back-test as small steps (one model on one held-out day each), so it
+ *  can run a step at a time without freezing the page (backtestGAsync). */
+function* backtestSteps(queueId: string, gran: GranId, overlay?: ActualRow[]): Generator<void, BacktestG> {
   const { days, dows, doys } = historyFor(queueId, overlay)
 
   if (gran === "daily") {
@@ -60,11 +62,60 @@ export function backtestG(queueId: string, gran: GranId, overlay?: ActualRow[]):
   const preds: number[][] = METHODS.map(() => [])
   for (let d = start; d < days.length; d++) {
     const train = days.slice(0, d), tDows = dows.slice(0, d), tDoys = doys.slice(0, d)
-    METHODS.forEach((m, k) => preds[k].push(dayTotal(m, train, tDows, dows[d], d, tDoys, doys[d])))
+    for (let k = 0; k < METHODS.length; k++) {
+      preds[k].push(dayTotal(METHODS[k], train, tDows, dows[d], d, tDoys, doys[d]))
+      yield
+    }
   }
   const perMethod = METHODS.map((m, k) => ({ id: m.id, name: m.name, kind: m.kind, mape: mape(preds[k], actual), pred: preds[k] }))
   const best = perMethod.reduce((a, b) => (b.mape < a.mape ? b : a))
   return { perMethod, best, actual, labels, unit: "contacts / day" }
+}
+
+// Finished back-tests by queue + granularity, per actuals overlay (a new
+// import is a new array, so it gets fresh results).
+const NO_OVERLAY: ActualRow[] = []
+const backtests = new WeakMap<ActualRow[], Map<string, BacktestG>>()
+const cacheFor = (overlay?: ActualRow[]) => {
+  const k = overlay ?? NO_OVERLAY
+  let m = backtests.get(k)
+  if (!m) backtests.set(k, (m = new Map()))
+  return m
+}
+
+/** A back-test already worked out, if there is one. */
+export function cachedBacktest(queueId: string, gran: GranId, overlay?: ActualRow[]): BacktestG | undefined {
+  return cacheFor(overlay).get(`${queueId}|${gran}`)
+}
+
+export function backtestG(queueId: string, gran: GranId, overlay?: ActualRow[]): BacktestG {
+  const hit = cachedBacktest(queueId, gran, overlay)
+  if (hit) return hit
+  const steps = backtestSteps(queueId, gran, overlay)
+  let r = steps.next()
+  while (!r.done) r = steps.next()
+  cacheFor(overlay).set(`${queueId}|${gran}`, r.value)
+  return r.value
+}
+
+/** Same as backtestG, a step at a time between frames so the page stays
+ *  responsive — the monthly back-test refits every model 14 times. */
+export async function backtestGAsync(queueId: string, gran: GranId, overlay?: ActualRow[], isCancelled: () => boolean = () => false): Promise<BacktestG | null> {
+  const hit = cachedBacktest(queueId, gran, overlay)
+  if (hit) return hit
+  const steps = backtestSteps(queueId, gran, overlay)
+  let r = steps.next()
+  let sliceStart = performance.now()
+  while (!r.done) {
+    if (performance.now() - sliceStart > 12) { // ~one frame of work, then let the page paint and handle input
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      if (isCancelled()) return null
+      sliceStart = performance.now()
+    }
+    r = steps.next()
+  }
+  cacheFor(overlay).set(`${queueId}|${gran}`, r.value)
+  return r.value
 }
 
 export function dayProfile(queueId: string, date: Date, methodId: string, overlay?: ActualRow[]): number[] {

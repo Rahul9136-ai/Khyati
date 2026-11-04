@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 
 import { SeriesChart } from "@/components/charts/series-chart"
 import { ExportButton } from "@/components/export-button"
@@ -8,7 +8,7 @@ import { PermissionGate } from "@/components/permission-gate"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Gauge, LineChart, Target, Timer, Zap } from "lucide-react"
+import { CheckCircle2, Gauge, LineChart, Target, Timer, Zap } from "lucide-react"
 import { buildPlan, fmtPct } from "@/lib/domain/planning"
 import { actualsFor, INTERVALS } from "@/lib/domain/seed"
 import { cn } from "@/lib/utils"
@@ -16,6 +16,8 @@ import { useWfm } from "@/store/wfm"
 
 export function Intraday() {
   const { queueId, forecasts, nowIdx, setNowIdx, queues, shrinkage, agents, thresholds, ruleState, logAudit } = useWfm()
+  // Proposals approved this session (per queue and interval), so each is approved once and shows it.
+  const [approved, setApproved] = useState<Set<string>>(new Set())
   const queue = queues.find((q) => q.id === queueId)!
   const volume = forecasts[queue.id]
   const actuals = useMemo(() => actualsFor(queue.id, nowIdx), [queue.id, nowIdx])
@@ -185,14 +187,23 @@ export function Intraday() {
                   <div className="text-sm font-semibold">{p.title}</div>
                   <p className="mt-1 text-xs text-muted-foreground">{p.detail}</p>
                   <PermissionGate module="intraday" fallback={<span className="mt-2 block text-xs text-muted-foreground">view only</span>}>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="mt-2"
-                      onClick={() => logAudit("Real-Time", "Approved intraday action", `${queue.name} · ${p.title}`)}
-                    >
-                      Approve & log
-                    </Button>
+                    {approved.has(`${queue.id}|${nowIdx}|${p.id}`) ? (
+                      <p role="status" className="mt-2 flex items-center gap-1.5 text-xs font-medium text-emerald-500">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Approved — logged to the audit trail
+                      </p>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mt-2"
+                        onClick={() => {
+                          logAudit("Real-Time", "Approved intraday action", `${queue.name} · ${p.title}`)
+                          setApproved((cur) => new Set(cur).add(`${queue.id}|${nowIdx}|${p.id}`))
+                        }}
+                      >
+                        Approve & log
+                      </Button>
+                    )}
                   </PermissionGate>
                 </div>
               ))

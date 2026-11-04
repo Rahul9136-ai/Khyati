@@ -8,7 +8,7 @@ import { MySchedule } from "@/components/my-schedule"
 import { ScheduleDateBar } from "@/components/schedule-date-bar"
 import { ScheduleOverview } from "@/components/schedule-overview"
 import { api } from "@/lib/api"
-import { addDays, datesBetween, localISODate, scheduleHorizon } from "@/lib/domain/horizon"
+import { addDays, datesBetween, fmtDay, localISODate, scheduleHorizon } from "@/lib/domain/horizon"
 import { AGENTS } from "@/lib/domain/seed"
 import { useScheduleSync } from "@/lib/scheduleSync"
 import { useAuth } from "@/store/auth"
@@ -84,7 +84,7 @@ describe("schedule change pop-up", () => {
 })
 
 describe("3-month overview", () => {
-  it("draws every day of the next 3 months, published vs draft, and opens a day on click", async () => {
+  it("draws the next 3 months 4 weeks at a time, published vs draft, and opens a day on click", async () => {
     get.mockResolvedValue({ data: { data: [
       { plan_date: tomorrow, agent_key: a01.id, agent_name: a01.name, team: a01.team, shift_start: 9 * 60, shift_end: 17 * 60 + 30, ot_minutes: 60, activities: ["meeting"], version: 2, published: true },
     ] } })
@@ -101,10 +101,22 @@ describe("3-month overview", () => {
     )
     expect(published).toHaveTextContent("09:00")
     // Not saved on the server → the shift-pattern default, as a draft.
-    const draft = screen.getAllByRole("button", { name: new RegExp(`^${a02.name} · .* · 07:00–15:30 · draft$`) })
-    expect(draft).toHaveLength(datesBetween(start, end).length)
+    const draft = () => screen.getAllByRole("button", { name: new RegExp(`^${a02.name} · .* · 07:00–15:30 · draft$`) })
+    expect(draft()).toHaveLength(28) // the first 4 weeks, not all ~13 at once
+    const total = Math.ceil(datesBetween(start, end).length / 7)
+    expect(screen.getByText(`· weeks 1–4 of ${total}`)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Previous 4 weeks/ })).toBeDisabled()
 
-    fireEvent.click(published)
+    // Step through the horizon and back.
+    fireEvent.click(screen.getByRole("button", { name: /Next 4 weeks/ }))
+    expect(screen.getByText(`· weeks 5–8 of ${total}`)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: `Open ${fmtDay(addDays(today, 28))}` })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: `Open ${fmtDay(tomorrow)}` })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "This week" }))
+    expect(screen.getByText(`· weeks 1–4 of ${total}`)).toBeInTheDocument()
+
+    // Paging redraws the cells — find it again.
+    fireEvent.click(screen.getByRole("button", { name: published.getAttribute("aria-label")! }))
     expect(onOpen).toHaveBeenCalledWith(tomorrow)
     fireEvent.click(screen.getByRole("button", { name: /Schedules — next 3 months/ })) // collapses
     expect(screen.queryByRole("table")).not.toBeInTheDocument()
@@ -123,9 +135,10 @@ describe("3-month overview", () => {
     expect(absent).toHaveTextContent("ABS")
     expect(screen.getByRole("button", { name: new RegExp(`^${a01.name} · .* · 09:00–17:00 · Meeting · published$`) })).toHaveTextContent("09:00")
 
-    const { start, end } = scheduleHorizon(today)
+    const { start } = scheduleHorizon(today)
     // Today comes from the live timeline (no week off marked there), so it's left out.
-    const weekends = datesBetween(start, end).filter((d) => d !== today && [0, 6].includes(new Date(`${d}T00:00:00`).getDay())).length
+    // Counted over the 4 weeks on screen.
+    const weekends = datesBetween(start, addDays(start, 27)).filter((d) => d !== today && [0, 6].includes(new Date(`${d}T00:00:00`).getDay())).length
     const offs = screen.getAllByRole("button", { name: new RegExp(`^${a02.name} · .* · Week off · draft$`) })
     expect(offs).toHaveLength(weekends)
     expect(offs[0]).toHaveTextContent("OFF")
@@ -138,7 +151,7 @@ describe("3-month overview", () => {
     get.mockResolvedValue({ data: { data: [] } })
     renderWith(<ScheduleOverview agents={[a02]} onOpenDate={() => {}} />)
     await waitFor(() => expect(get).toHaveBeenCalled())
-    expect(screen.getAllByRole("button", { name: new RegExp(`^${a02.name} · .* · not published$`) }).length).toBeGreaterThan(80)
+    expect(screen.getAllByRole("button", { name: new RegExp(`^${a02.name} · .* · not published$`) }).length).toBeGreaterThanOrEqual(27)
   })
 })
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Database, FileDown, Upload, X } from "lucide-react"
+import { Database, FileDown, Loader2, Upload, X } from "lucide-react"
 
 import { AiSummary } from "@/components/ai-summary"
 import { SeriesChart } from "@/components/charts/series-chart"
@@ -17,7 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { parseActualsFile, downloadActualsTemplate } from "@/lib/actuals"
 import { addDays, fmtDay, parseYMD, PRESETS, TODAY, ymd } from "@/lib/domain/dates"
 import { generate, methodById } from "@/lib/domain/forecast"
-import { backtestG, type GranId, GRANULARITIES, rangePlan, summariseBuckets } from "@/lib/domain/granularity"
+import { backtestG, backtestGAsync, cachedBacktest, type GranId, GRANULARITIES, rangePlan, summariseBuckets } from "@/lib/domain/granularity"
 import { daysAppendedBeyondBase, historyFor } from "@/lib/domain/history"
 import { fmtPct } from "@/lib/domain/planning"
 import { cn } from "@/lib/utils"
@@ -35,7 +35,30 @@ export function Forecasting() {
   const [start, setStart] = useState(ymd(TODAY))
   const [end, setEnd] = useState(ymd(addDays(TODAY, 6)))
 
-  const bt = useMemo(() => backtestG(queue.id, gran, overlay), [queue.id, gran, overlay])
+  // The back-test the page shows, and the granularity it belongs to. A new
+  // granularity is worked out a step at a time (the monthly one refits every
+  // model 14 times), so the click responds at once and the page never freezes.
+  const [shown, setShown] = useState(() => ({ gran, bt: backtestG(queue.id, gran, overlay) }))
+  const [backtesting, setBacktesting] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    const hit = cachedBacktest(queue.id, gran, overlay)
+    if (hit) {
+      setShown({ gran, bt: hit })
+      setBacktesting(false)
+      return
+    }
+    setBacktesting(true)
+    void backtestGAsync(queue.id, gran, overlay, () => cancelled).then((bt) => {
+      if (cancelled || !bt) return
+      setShown({ gran, bt })
+      setBacktesting(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [queue.id, gran, overlay])
+  const bt = shown.bt
   const [method, setMethod] = useState(bt.best.id)
   useEffect(() => setMethod(bt.best.id), [bt.best.id])
   const previewMethod = bt.perMethod.find((m) => m.id === method) ?? bt.best
@@ -112,7 +135,7 @@ export function Forecasting() {
   }
 
   const insight = {
-    headline: `${bt.best.name} is the most accurate model for ${queue.name} (${fmtPct(bt.best.mape)} MAPE, ${gran}).`,
+    headline: `${bt.best.name} is the most accurate model for ${queue.name} (${fmtPct(bt.best.mape)} MAPE, ${shown.gran}).`,
     bullets: [
       `Best statistical ${bestOfKind("Statistical")} · best ML ${bestOfKind("ML")} · best deep learning ${bestOfKind("DL")}.`,
       `Applied (${previewMethod.name}) projects ${bsum.totalVol.toLocaleString()} contacts over ${rp.nDays} days, peaking ${bsum.peakLabel}.`,
@@ -195,7 +218,14 @@ export function Forecasting() {
 
       <Card className="glass mb-4">
         <CardHeader>
-          <CardTitle>Model selection</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            Model selection
+            {backtesting && (
+              <span role="status" className="flex items-center gap-1.5 text-xs font-normal text-primary">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Back-testing every model {gran === "monthly" ? "over the last 14 days" : gran === "weekly" ? "over the last 7 days" : "on the last day"}…
+              </span>
+            )}
+          </CardTitle>
           {!can("forecasting", "edit") && <p className="text-xs text-muted-foreground">Read-only for your designation — showing accuracy only.</p>}
         </CardHeader>
         <CardContent>

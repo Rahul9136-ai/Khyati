@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight } from "lucide-react"
-import { useCallback, useMemo, useState } from "react"
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
+import { Button } from "@/components/ui/button"
 import { ACTIVITY_BY_ID, fmtHM, shiftBounds } from "@/lib/domain/channels"
 import { employedOn } from "@/lib/domain/employeeProfile"
 import { datesBetween, fmtDay, isWeekend, localISODate, parseISODate, scheduleHorizon } from "@/lib/domain/horizon"
@@ -28,6 +29,15 @@ interface Cell {
   state: "published" | "draft" | "local"
 }
 
+/** Days drawn at once (4 weeks). */
+const WINDOW_DAYS = 28
+
+/** The 4-week window that holds `date` (or the first one). */
+function windowStartFor(dates: string[], date: string): number {
+  const i = dates.indexOf(date)
+  return i < 0 ? 0 : Math.floor(i / WINDOW_DAYS) * WINDOW_DAYS
+}
+
 /** Every agent's shift for every day of the next 3 months (or as far as
  *  schedules have been generated): published days are solid, drafts dashed. Click a day (or a cell) to open it on the timeline. */
 export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOpenDate: (date: string) => void }) {
@@ -35,7 +45,24 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
   const today = localISODate()
   const { start, end } = useScheduleHorizon()
   const extended = end !== scheduleHorizon(today).end
-  const dates = useMemo(() => datesBetween(start, end), [start, end])
+  const allDates = useMemo(() => datesBetween(start, end), [start, end])
+  // Four weeks on screen at a time: a long generated horizon (up to 52 weeks ×
+  // every agent) drawn at once froze the page for seconds.
+  const selected = useWfm((s) => s.scheduleDate)
+  const [offset, setOffset] = useState(() => windowStartFor(allDates, selected))
+  const first = Math.min(offset, Math.max(0, allDates.length - WINDOW_DAYS))
+  const dates = useMemo(() => allDates.slice(first, first + WINDOW_DAYS), [allDates, first])
+  const windows = Math.max(1, Math.ceil(allDates.length / WINDOW_DAYS))
+  const windowNo = Math.floor(first / WINDOW_DAYS) + 1
+  // Picking another day in the date bar brings its weeks up (paging with
+  // Previous / Next doesn't — only a change of the selected day does).
+  const lastSelected = useRef(selected)
+  useEffect(() => {
+    if (lastSelected.current === selected) return
+    lastSelected.current = selected
+    const i = allDates.indexOf(selected)
+    if (i >= 0) setOffset(windowStartFor(allDates, selected))
+  }, [selected, allDates])
   const { status, canWrite, serverAgents } = useScheduleSync()
   const online = status !== "idle" && status !== "offline"
   const { data: server } = useQuery({
@@ -128,7 +155,7 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
         {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         <span className="font-semibold">Schedules — {extended ? `through ${fmtDay(end)}` : "next 3 months"}</span>
         <span className="text-xs text-muted-foreground">
-          {fmtDay(start)} – {fmtDay(end)} · {dates.length} days · {agents.length} agents
+          {fmtDay(start)} – {fmtDay(end)} · {allDates.length} days · {agents.length} agents
         </span>
       </button>
       {open && (
@@ -145,6 +172,23 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
             <span className="flex items-center gap-1.5"><i className="h-1.5 w-1.5 rounded-full bg-violet-500" /> Part-day activity (meeting, training, VTO…)</span>
             <span className="flex items-center gap-1.5"><b className="text-[9px] text-amber-600">OT</b> Overtime</span>
             <span>Click a day to open it below.</span>
+          </div>
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+            <Button variant="outline" size="sm" className="h-7" disabled={first === 0} onClick={() => setOffset(Math.max(0, first - WINDOW_DAYS))}>
+              <ChevronLeft className="h-3.5 w-3.5" /> Previous 4 weeks
+            </Button>
+            <span className="font-medium tabular-nums">
+              {dates.length ? `${fmtDay(dates[0])} – ${fmtDay(dates.at(-1)!)}` : "—"}
+            </span>
+            <span className="text-muted-foreground">· weeks {(windowNo - 1) * 4 + 1}–{Math.min(windowNo * 4, Math.ceil(allDates.length / 7))} of {Math.ceil(allDates.length / 7)}</span>
+            <Button variant="outline" size="sm" className="h-7" disabled={first + WINDOW_DAYS >= allDates.length} onClick={() => setOffset(first + WINDOW_DAYS)}>
+              Next 4 weeks <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
+            {windows > 1 && (
+              <Button variant="ghost" size="sm" className="h-7" disabled={first === 0} onClick={() => setOffset(0)}>
+                This week
+              </Button>
+            )}
           </div>
           <div className="max-h-[420px] overflow-auto rounded-md border">
             <table className="border-separate border-spacing-0 text-[10px]">

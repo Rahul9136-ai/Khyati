@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertTriangle, Bell, Info, Zap } from "lucide-react"
 import { useState } from "react"
+import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 
 import { api } from "@/lib/api"
@@ -63,7 +64,8 @@ export function NotificationsBell() {
 
       {open && (
         <>
-          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+          {/* In <body>: the header's backdrop-filter would clip a `fixed` overlay to the header. */}
+          {createPortal(<div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />, document.body)}
           <div className="absolute right-0 z-30 mt-2 w-80 overflow-hidden rounded-lg border bg-card shadow-xl">
             <div className="border-b px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Notifications {unread > 0 && `· ${unread} unread`}

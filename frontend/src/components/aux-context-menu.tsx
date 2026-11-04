@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { Eraser, MoreHorizontal } from "lucide-react"
 
 import { Input } from "@/components/ui/input"
@@ -72,7 +73,9 @@ export function AuxContextMenu({
   const startMin = toMins(start)
   const item = "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs outline-none hover:bg-accent focus-visible:bg-accent"
 
-  return (
+  // In <body>: the timeline sits in a backdrop-filter card, which would
+  // otherwise anchor this `fixed` menu to the card instead of the cursor.
+  return createPortal(
     <div
       ref={ref}
       role="menu"
@@ -139,6 +142,7 @@ export function AuxContextMenu({
           </button>
         </div>
       )}
-    </div>
+    </div>,
+    document.body,
   )
 }
