@@ -462,7 +462,7 @@ export function runEngine(ds: Dataset, cfg: CapacityConfig): EngineResult {
       let equivVolume = 0
       let baseFte: number | null = 0
       let blankReason: string | null = null
-      let txUnits = 0, txFte = 0
+      let txUnits = 0, txUnitsPerPeak = 0 // Σ Volume and Σ (Volume ÷ Peak) over transaction tasks
       for (const t of tasks) {
         const units = t.units.get(month) ?? 0
         volume += units
@@ -478,7 +478,7 @@ export function runEngine(ds: Dataset, cfg: CapacityConfig): EngineResult {
           } else {
             fte = baseFteTransaction(units, wd, t.peak)
             txUnits += units
-            txFte += fte ?? 0
+            txUnitsPerPeak += units / t.peak
           }
           equivVolume += units
         } else if (t.treatment === "fte") {
@@ -495,7 +495,7 @@ export function runEngine(ds: Dataset, cfg: CapacityConfig): EngineResult {
 
       // P2: volume-weighted peak (Σ volume ÷ Σ volume/peak), else average task peak
       const peaks = tasks.map((t) => t.peak).filter((p): p is number => p != null)
-      const peak = txFte > 0 ? txUnits / txFte : peaks.length ? peaks.reduce((s, p) => s + p, 0) / peaks.length : null
+      const peak = txUnitsPerPeak > 0 ? txUnits / txUnitsPerPeak : peaks.length ? peaks.reduce((s, p) => s + p, 0) / peaks.length : null
       const qcaW = tasks.filter((t) => t.peakQca != null && t.treatment === "transaction" && (t.units.get(month) ?? 0) > 0)
       const qcaWsum = qcaW.reduce((s, t) => s + (t.units.get(month) ?? 0), 0)
       const qcaAll = tasks.map((t) => t.peakQca).filter((p): p is number => p != null)
