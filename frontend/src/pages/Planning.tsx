@@ -11,6 +11,7 @@ import {
 } from "recharts"
 
 import { KpiCard } from "@/components/kpi-card"
+import { CapacityModule } from "@/pages/planning/capacity/CapacityModule"
 import { MovementTab } from "@/pages/planning/MovementTab"
 import { NewHireTab } from "@/pages/planning/NewHireTab"
 import { SeasonalityTab } from "@/pages/planning/SeasonalityTab"
@@ -140,6 +141,7 @@ export function Planning() {
         </TabsList>
 
         <TabsContent value="capacity">
+          <CapacityModule legacy={<>
           <ConfigStrip cfg={cfg} onSave={(p) => saveConfig.mutate(p)} />
           <Card className="glass mt-4">
             <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -223,6 +225,7 @@ export function Planning() {
               )}
             </CardContent>
           </Card>
+          </>} />
         </TabsContent>
 
         <TabsContent value="newhire">
