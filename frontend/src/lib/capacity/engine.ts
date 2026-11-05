@@ -273,7 +273,7 @@ export function runEngine(ds: Dataset, cfg: CapacityConfig): EngineResult {
 
     const target = targets.get(keyOf(taskNo))
     if (!target)
-      log({ code: "forecast-task-missing", severity: "error", sheet: "Forecast Details", row: r.__row, ...where,
+      log({ code: "forecast-task-missing", severity: treatment === "transaction" ? "error" : "warning", sheet: "Forecast Details", row: r.__row, ...where,
         issue: "TASK_NUMBER not found in Target Details — no peak target", value: taskNo,
         action: treatment === "transaction" ? "Base FTE not computed for this key — flagged, not defaulted to 0" : `No peak needed for ${billType} Base FTE; volume-based figures for this task have no peak` })
 
@@ -615,7 +615,8 @@ export function runEngine(ds: Dataset, cfg: CapacityConfig): EngineResult {
     const what = [...e.what].join(", ")
     const months = [...e.months]
     log({
-      code: "no-budget-month", severity: e.carried ? "warning" : "error", sheet: what, row: null,
+      // Not blocking: the row still calculates (Actual used, else 0) — so a warning, not an error.
+      code: "no-budget-month", severity: "warning", sheet: what, row: null,
       customer: e.info.customer, serviceLine: e.info.serviceLine, location: e.info.location,
       issue: e.carried ? "No budget row for these forecast months" : "No budget row for this key at all",
       value: `${e.info.customer} × ${e.info.serviceLine} × ${e.info.location}: ${months.length === 1 ? months[0] : `${months[0]}–${months[months.length - 1]} (${months.length} months)`}`,

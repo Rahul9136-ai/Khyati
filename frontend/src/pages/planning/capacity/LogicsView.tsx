@@ -95,8 +95,8 @@ export function LogicsView() {
               <div className="grid gap-1.5">{SECTION_OF[s].map(field)}</div>
               <table className="w-full text-xs tabular-nums">
                 <thead><tr className="border-b text-muted-foreground">
-                  <th className="py-1 text-left font-medium">Output</th><th className="text-right font-medium">Value</th>
-                  <th className="text-right font-medium">Expected</th><th />
+                  <th className="py-1 text-left font-medium">Output</th><th className="pl-3 text-right font-medium">Value</th>
+                  <th className="pl-3 text-right font-medium">Expected</th><th className="w-5" />
                 </tr></thead>
                 <tbody>
                   {GOLDEN_CASES.filter((c) => c.section === s).map((c) => {
@@ -105,8 +105,8 @@ export function LogicsView() {
                     return (
                       <tr key={c.label} className="border-b border-border/40" title={FORMULA_TEXT[c.label]}>
                         <td className="py-1 pr-2">{c.label}<div className="text-[10px] text-muted-foreground">{FORMULA_TEXT[c.label]}</div></td>
-                        <td className="text-right font-semibold">{v == null ? "(blank)" : v.toFixed(Math.max(4, c.dp))}</td>
-                        <td className="text-right text-muted-foreground">{isGolden ? c.expected : "—"}</td>
+                        <td className="pl-3 text-right font-semibold">{v == null ? "(blank)" : v.toFixed(Math.max(4, c.dp))}</td>
+                        <td className="pl-3 text-right text-muted-foreground">{isGolden ? c.expected : "—"}</td>
                         <td className="pl-1 text-right">{isGolden && (pass ? <CheckCircle2 className="inline h-3.5 w-3.5 text-emerald-600" /> : <XCircle className="inline h-3.5 w-3.5 text-destructive" />)}</td>
                       </tr>
                     )

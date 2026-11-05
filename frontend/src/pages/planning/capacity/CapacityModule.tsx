@@ -55,6 +55,8 @@ export function CapacityModule({ legacy }: { legacy: React.ReactNode }) {
   const loaded = SHEETS.filter((s) => dataset[s.id]).length
   const hasData = loaded > 0
   const errorCount = result.exceptions.filter((e) => e.severity === "error").length
+  const warningCount = result.exceptions.filter((e) => e.severity === "warning").length
+  const blankRows = result.rows.filter((r) => r.baseFte == null).length
 
   async function onFile(f: File | undefined) {
     if (!f) return
@@ -82,9 +84,16 @@ export function CapacityModule({ legacy }: { legacy: React.ReactNode }) {
                     : "No workbook loaded yet. Import the Excel workbook (all 14 sheets) to build the plan."}
                 </div>
               </div>
-              {hasData && (errorCount > 0
-                ? <Badge variant="warning"><AlertTriangle className="h-3 w-3" /> {result.exceptions.length} exceptions ({errorCount} errors)</Badge>
-                : <Badge variant="success"><CheckCircle2 className="h-3 w-3" /> No errors</Badge>)}
+              {hasData && (
+                <button type="button" onClick={() => setView("exceptions")} className="shrink-0 whitespace-nowrap"
+                  title="Data issues found in the workbook — open Data Exceptions">
+                  {errorCount > 0
+                    ? <Badge variant="destructive" className="whitespace-nowrap"><AlertTriangle className="h-3 w-3" />
+                        {blankRows} row{blankRows === 1 ? "" : "s"} can't be calculated · {warningCount} data warnings</Badge>
+                    : <Badge variant="success" className="whitespace-nowrap"><CheckCircle2 className="h-3 w-3" />
+                        All rows calculated · {warningCount} data warnings</Badge>}
+                </button>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {canEdit && (
