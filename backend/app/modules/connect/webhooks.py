@@ -51,6 +51,15 @@ EVENTS: dict[str, str] = {
     "settings.updated": (
         "Work rules, compliance limits, shift patterns or agents' rules / week offs changed."
     ),
+    "capacity.inputs.updated": (
+        "Capacity Planning input sheets were imported, replaced, edited or cleared — in the app or "
+        "through the API. Edits include the changed rows."
+    ),
+    "capacity.config.updated": "Capacity Planning switches (open decisions) changed.",
+    "capacity.results.updated": (
+        "Capacity Planning results were recalculated after a change — monthly totals included; "
+        "GET /capacity/results for the detail."
+    ),
     "ping": "Test event sent from the Integrations screen.",
 }
 

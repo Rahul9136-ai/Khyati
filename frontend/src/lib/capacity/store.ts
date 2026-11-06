@@ -5,6 +5,7 @@ import { create } from "zustand"
 import { type CapacityConfig, DEFAULT_CONFIG } from "./config"
 import { type Cell, type Dataset, type ParseIssue, type SheetData, parseWorkbook } from "./parse"
 import { SHEET_BY_ID, type SheetId } from "./schema"
+import { syncCellEdited, syncCleared, syncConfigChanged, syncSheetsReplaced } from "./sync"
 
 const DB_NAME = "aforce-capacity"
 const STORE = "kv"
@@ -76,6 +77,9 @@ interface CapacityState extends Persisted {
   setConfig: (patch: Partial<CapacityConfig>) => void
   resetConfig: () => void
   clearData: () => void
+  /** Sync: the server's copy replaces these sheets (no upload back). */
+  replaceFromServer: (dataset: Dataset, edits: Record<string, Cell>) => void
+  replaceConfigFromServer: (config: CapacityConfig) => void
 }
 
 /** Key for an edited cell. The original value is kept so the UI can show it. */
@@ -123,6 +127,7 @@ export const useCapacity = create<CapacityState>((set, get) => ({
       }
       set({ dataset, edits, lastImport: report })
       persist(get())
+      syncSheetsReplaced(res.sheets.map((s) => s.id))
       return report
     } finally {
       set({ busy: false })
@@ -143,18 +148,30 @@ export const useCapacity = create<CapacityState>((set, get) => ({
     rows[idx] = { ...rows[idx], [column]: value }
     set({ dataset: { ...get().dataset, [sheet]: { ...sd, rows } }, edits })
     persist(get())
+    syncCellEdited(sheet, srcRow, column, value)
   },
 
   setConfig: (patch) => {
     set({ config: { ...get().config, ...patch } })
     persist(get())
+    syncConfigChanged()
   },
   resetConfig: () => {
     set({ config: DEFAULT_CONFIG })
     persist(get())
+    syncConfigChanged()
   },
   clearData: () => {
     set({ dataset: {}, edits: {}, lastImport: null })
+    persist(get())
+    syncCleared()
+  },
+  replaceFromServer: (dataset, edits) => {
+    set({ dataset, edits })
+    persist(get())
+  },
+  replaceConfigFromServer: (config) => {
+    set({ config: { ...DEFAULT_CONFIG, ...config } })
     persist(get())
   },
 }))

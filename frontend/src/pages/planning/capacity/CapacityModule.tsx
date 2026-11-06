@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, FileSpreadsheet, Loader2, Trash2, Upload } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Cloud, CloudOff, FileSpreadsheet, HardDrive, Loader2, Trash2, Upload } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 
@@ -8,18 +8,21 @@ import { Card, CardContent } from "@/components/ui/card"
 import { runEngine } from "@/lib/capacity/engine"
 import { SHEETS, SHEET_BY_ID } from "@/lib/capacity/schema"
 import { useCapacity } from "@/lib/capacity/store"
+import { isSyncing, startCapacitySync, stopCapacitySync, useCapacitySync } from "@/lib/capacity/sync"
+import { useAuth } from "@/store/auth"
 import { useWfm } from "@/store/wfm"
 
 import { ExceptionsView } from "./ExceptionsView"
 import { InputsView } from "./InputsView"
 import { LogicsView } from "./LogicsView"
 import { CalculationsView, SummaryView } from "./ResultsViews"
+import { ConnectView } from "./ConnectView"
 import { CapacityCtx, EMPTY_FILTERS, type Filters } from "./ctx"
 import { SubNav } from "./shared"
 import { SwitchesView } from "./SwitchesView"
 
-type View = "inputs" | "calc" | "summary" | "logics" | "exceptions" | "switches" | "lob"
-const VIEWS: View[] = ["inputs", "calc", "summary", "logics", "exceptions", "switches", "lob"]
+type View = "inputs" | "calc" | "summary" | "logics" | "exceptions" | "switches" | "connect" | "lob"
+const VIEWS: View[] = ["inputs", "calc", "summary", "logics", "exceptions", "switches", "connect", "lob"]
 
 /**
  * Capacity Planning (East Division workbook model). Mirrors
@@ -51,10 +54,17 @@ export function CapacityModule({ legacy }: { legacy: React.ReactNode }) {
 
   useEffect(() => { void hydrate() }, [hydrate])
 
+  // Shared with everyone (and connected tools) through the server while signed in.
+  const signedIn = useAuth((s) => s.status === "authenticated")
+  useEffect(() => {
+    if (!hydrated || !signedIn) return
+    void startCapacitySync(canEdit)
+    return () => stopCapacitySync()
+  }, [hydrated, signedIn, canEdit])
+
   const result = useMemo(() => runEngine(dataset, config), [dataset, config])
   const loaded = SHEETS.filter((s) => dataset[s.id]).length
   const hasData = loaded > 0
-  const errorCount = result.exceptions.filter((e) => e.severity === "error").length
   const warningCount = result.exceptions.filter((e) => e.severity === "warning").length
   const blankRows = result.rows.filter((r) => r.baseFte == null).length
 
@@ -64,7 +74,7 @@ export function CapacityModule({ legacy }: { legacy: React.ReactNode }) {
     if (fileRef.current) fileRef.current.value = ""
   }
 
-  const shownView: View = !hasData && view !== "lob" && view !== "logics" && view !== "switches" ? "inputs" : view
+  const shownView: View = !hasData && !["lob", "logics", "switches", "connect"].includes(view) ? "inputs" : view
 
   return (
     <CapacityCtx.Provider value={{ result, filters, setFilters, canEdit }}>
@@ -87,7 +97,7 @@ export function CapacityModule({ legacy }: { legacy: React.ReactNode }) {
               {hasData && (
                 <button type="button" onClick={() => setView("exceptions")} className="shrink-0 whitespace-nowrap"
                   title="Data issues found in the workbook — open Data Exceptions">
-                  {errorCount > 0
+                  {blankRows > 0
                     ? <Badge variant="destructive" className="whitespace-nowrap"><AlertTriangle className="h-3 w-3" />
                         {blankRows} row{blankRows === 1 ? "" : "s"} can't be calculated · {warningCount} data warnings</Badge>
                     : <Badge variant="success" className="whitespace-nowrap"><CheckCircle2 className="h-3 w-3" />
@@ -96,6 +106,7 @@ export function CapacityModule({ legacy }: { legacy: React.ReactNode }) {
               )}
             </div>
             <div className="flex items-center gap-2">
+              <SyncBadge />
               {canEdit && (
                 <>
                   <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.xls" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
@@ -103,7 +114,9 @@ export function CapacityModule({ legacy }: { legacy: React.ReactNode }) {
                     {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Import workbook
                   </Button>
                   {hasData && (
-                    <Button size="sm" variant="outline" onClick={() => { if (window.confirm("Remove the imported workbook and all edits from this browser?")) clearData() }}>
+                    <Button size="sm" variant="outline" onClick={() => {
+                      if (window.confirm(isSyncing() ? "Remove the workbook for everyone in your organisation (and connected tools)? The switches stay." : "Remove the imported workbook and all edits from this browser?")) clearData()
+                    }}>
                       <Trash2 className="h-3.5 w-3.5" /> Remove data
                     </Button>
                   )}
@@ -128,6 +141,7 @@ export function CapacityModule({ legacy }: { legacy: React.ReactNode }) {
           { id: "logics", label: "Calculation & Logics" },
           { id: "exceptions", label: "Data Exceptions", badge: hasData ? <span className="text-[10px] opacity-70">{result.exceptions.length}</span> : undefined },
           { id: "switches", label: "Switches (§7)" },
+          { id: "connect", label: "Connect a CRM" },
           { id: "lob", label: "LOB monthly plan" },
         ]} />
 
@@ -137,8 +151,30 @@ export function CapacityModule({ legacy }: { legacy: React.ReactNode }) {
         {shownView === "logics" && <LogicsView />}
         {shownView === "exceptions" && <ExceptionsView />}
         {shownView === "switches" && <SwitchesView canEdit={canEdit} />}
+        {shownView === "connect" && <ConnectView />}
         {shownView === "lob" && legacy}
       </div>
     </CapacityCtx.Provider>
+  )
+}
+
+/** Where the data lives right now: shared on the server, saving, offline, or this browser only. */
+function SyncBadge() {
+  const { status, message, lastSyncedAt } = useCapacitySync()
+  const map = {
+    local: { icon: HardDrive, text: "This browser only", cls: "text-muted-foreground", tip: "Sign in to share the plan with your team and connected tools." },
+    loading: { icon: Loader2, text: "Loading shared plan…", cls: "text-muted-foreground", tip: "" },
+    saving: { icon: Loader2, text: "Saving…", cls: "text-sky-600", tip: "" },
+    synced: { icon: Cloud, text: "Shared · synced", cls: "text-emerald-600", tip: "Saved on the server: everyone in your organisation and connected tools see the same plan." },
+    readonly: { icon: Cloud, text: "Shared · view only", cls: "text-muted-foreground", tip: "" },
+    offline: { icon: CloudOff, text: "Offline", cls: "text-amber-600", tip: "" },
+    conflict: { icon: AlertTriangle, text: "Updated by someone else", cls: "text-amber-600", tip: "" },
+  }[status]
+  const Icon = map.icon
+  return (
+    <span className={`inline-flex items-center gap-1 whitespace-nowrap text-xs ${map.cls}`} role="status"
+      title={[message ?? map.tip, lastSyncedAt ? `Last synced ${new Date(lastSyncedAt).toLocaleTimeString()}` : ""].filter(Boolean).join(" · ")}>
+      <Icon className={`h-3.5 w-3.5 ${status === "loading" || status === "saving" ? "animate-spin" : ""}`} /> {map.text}
+    </span>
   )
 }
