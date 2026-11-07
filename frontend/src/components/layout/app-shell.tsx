@@ -1,5 +1,4 @@
 import { LogOut } from "lucide-react"
-import { NavLink } from "react-router-dom"
 
 import { GlobalSearch } from "@/components/layout/global-search"
 import { MessagePopup } from "@/components/layout/message-popup"
@@ -7,15 +6,13 @@ import { NotificationsBell } from "@/components/layout/notifications-bell"
 import { QueuePicker } from "@/components/layout/queue-picker"
 import { SchedulePopup } from "@/components/layout/schedule-popup"
 import { SendMessageButton } from "@/components/layout/send-message-button"
-import { PurviLogo } from "@/components/purvi-logo"
+import { Breadcrumb, Sidebar } from "@/components/layout/sidebar"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Select } from "@/components/ui/select"
-import { NAV } from "@/config/nav"
 import { initialsOf } from "@/lib/auth"
 import { METHODS } from "@/lib/domain/forecast"
 import type { ModuleId } from "@/lib/domain/roles"
 import { effectiveLevel, ROLES } from "@/lib/domain/roles"
-import { cn } from "@/lib/utils"
 import { useAuth } from "@/store/auth"
 import { useWfm } from "@/store/wfm"
 
@@ -32,57 +29,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-background">
-      {/* Sidebar */}
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r bg-card/40 backdrop-blur-xl md:flex">
-        <div className="flex h-14 items-center border-b px-5">
-          <div className="flex flex-col gap-0.5">
-            <PurviLogo size="sm" orientation="horizontal" />
-            <span className="pl-8 text-[8px] font-medium uppercase leading-tight tracking-[0.1em] text-muted-foreground">
-              A Product of Purvi Technology
-            </span>
-          </div>
-        </div>
-        <nav className="flex-1 overflow-y-auto p-3">
-          {NAV.map((g) => {
-            const items = g.items.filter((it) => visible(it.module))
-            if (items.length === 0) return null
-            return (
-              <div key={g.group} className="mb-3">
-                <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  {g.group}
-                </p>
-                {items.map((it) => (
-                  <NavLink
-                    key={it.to}
-                    to={it.to}
-                    end={it.to === "/"}
-                    className={({ isActive }) =>
-                      cn(
-                        "mb-0.5 flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                        isActive
-                          ? "bg-primary/15 text-primary"
-                          : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                      )
-                    }
-                  >
-                    <it.icon className="h-4 w-4" />
-                    {it.label}
-                  </NavLink>
-                ))}
-              </div>
-            )
-          })}
-        </nav>
-        <div className="border-t p-4 text-[11px] text-muted-foreground">
-          Powered by FlowForce WFM
-          <br />
-          v0.1 · Erlang-C engine · {METHODS.length} models
-        </div>
-      </aside>
+      <Sidebar
+        canSee={(it) => visible(it.module)}
+        footer={<><p className="font-medium text-foreground/80">Powered by FlowForce WFM</p><p>v0.1 · Erlang-C engine · {METHODS.length} models</p></>}
+      />
 
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-10 flex h-14 items-center gap-3 border-b bg-card/60 px-5 backdrop-blur-xl">
+          <Breadcrumb />
           <GlobalSearch />
           <div className="flex-1" />
           <QueuePicker />
