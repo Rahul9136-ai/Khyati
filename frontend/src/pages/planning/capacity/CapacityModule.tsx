@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Cloud, CloudOff, FileSpreadsheet, HardDrive, Loader2, Trash2, Upload } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Cloud, CloudOff, FileSpreadsheet, HardDrive, Loader2, Radio, Trash2, Upload } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 
@@ -160,8 +160,10 @@ export function CapacityModule({ legacy }: { legacy: React.ReactNode }) {
 
 /** Where the data lives right now: shared on the server, saving, offline, or this browser only. */
 function SyncBadge() {
-  const { status, message, lastSyncedAt } = useCapacitySync()
+  const { status: s, message, lastSyncedAt, live } = useCapacitySync()
+  const status = s === "synced" && live ? "live" : s
   const map = {
+    live: { icon: Radio, text: "Shared · live", cls: "text-emerald-600", tip: "Live: changes made by anyone, in the app or by a connected tool, appear here within a second." },
     local: { icon: HardDrive, text: "This browser only", cls: "text-muted-foreground", tip: "Sign in to share the plan with your team and connected tools." },
     loading: { icon: Loader2, text: "Loading shared plan…", cls: "text-muted-foreground", tip: "" },
     saving: { icon: Loader2, text: "Saving…", cls: "text-sky-600", tip: "" },

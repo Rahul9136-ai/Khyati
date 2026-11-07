@@ -19,7 +19,9 @@ monthly totals.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import re
 import uuid
 from collections import OrderedDict
 from typing import Any
@@ -28,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.modules.capacity import live
 from app.modules.capacity.calc import (
     BILL_TREATMENTS,
     CONFIG_CHOICES,
@@ -38,9 +41,10 @@ from app.modules.capacity.calc import (
     parse_month,
 )
 from app.modules.capacity.engine import run_engine
-from app.modules.capacity.models import CapacityDocument
+from app.modules.capacity.models import CapacityDocument, CapacitySyncRequest
 from app.modules.capacity.schema import MONTH_COLUMN, SHEET_IDS, SHEETS, column_types, convert
 from app.modules.connect import webhooks
+from app.modules.identity.models import AuditLog
 from app.modules.identity.service import record_audit
 
 CONFIG_DOC = "config"
@@ -74,10 +78,26 @@ def _check_sheet(sheet: str) -> None:
         raise NotFoundError(f"Unknown sheet '{sheet}' — use one of: {', '.join(SHEET_IDS)}")
 
 
-def _results_version(docs: dict[str, CapacityDocument]) -> str:
+def _version_sig(items: list[tuple[str, uuid.UUID, int]]) -> str:
     # the row id is in it too: a sheet removed and loaded again restarts at version 1
-    sig = "|".join(f"{k}:{docs[k].id}:{docs[k].version}" for k in sorted(docs))
+    sig = "|".join(f"{k}:{i}:{v}" for k, i, v in sorted(items))
     return hashlib.sha1(sig.encode()).hexdigest()[:12] if sig else "empty"  # noqa: S324 - not security
+
+
+def _results_version(docs: dict[str, CapacityDocument]) -> str:
+    return _version_sig([(k, d.id, d.version) for k, d in docs.items()])
+
+
+async def results_version(db: AsyncSession, org: uuid.UUID) -> str:
+    """Same as state()["resultsVersion"] without loading the sheets (for the live stream)."""
+    rows = (
+        await db.execute(
+            select(CapacityDocument.doc, CapacityDocument.id, CapacityDocument.version).where(
+                CapacityDocument.organization_id == org
+            )
+        )
+    ).all()
+    return _version_sig([(r[0], r[1], r[2]) for r in rows])
 
 
 async def state(db: AsyncSession, org: uuid.UUID) -> dict[str, Any]:
@@ -150,6 +170,15 @@ async def get_config(db: AsyncSession, org: uuid.UUID) -> tuple[dict[str, Any], 
 
 _cache: OrderedDict[tuple[uuid.UUID, str], dict[str, Any]] = OrderedDict()
 _CACHE_SIZE = 8
+
+
+def _forget(org: uuid.UUID) -> None:
+    """A rolled-back change may have cached results under versions that were never saved."""
+    for k in [k for k in _cache if k[0] == org]:
+        _cache.pop(k, None)
+
+
+live.on_rollback(_forget)
 
 
 async def results(db: AsyncSession, org: uuid.UUID) -> tuple[dict[str, Any], str]:
@@ -331,7 +360,7 @@ def _month_columns(sheet: str, given: list[str] | None, rows: list[Any]) -> list
     return cols
 
 
-async def _after_change(db: AsyncSession, org: uuid.UUID) -> None:
+async def _after_change(db: AsyncSession, org: uuid.UUID) -> str:
     """Recalculate and tell subscribers the results changed."""
     res, rv = await results(db, org)
     await webhooks.emit(
@@ -345,6 +374,7 @@ async def _after_change(db: AsyncSession, org: uuid.UUID) -> None:
             "exceptions": exception_counts(res),
         },
     )
+    return rv
 
 
 async def _save(
@@ -362,6 +392,7 @@ async def _save(
         d.data = data
         d.version = d.version + 1
     d.updated_by = getattr(actor, "email", "") or ""
+    live.mark_changed(db, org)
     await db.flush()
     await db.refresh(d, ["updated_at"])
     return d
@@ -463,6 +494,7 @@ async def patch_rows(
     body: dict[str, Any],
     *,
     actor,  # noqa: ANN001
+    emit_results: bool = True,
 ) -> dict[str, Any]:
     """Edit rows: `upsert` [{row | match, values}] and `delete` [row numbers] /
     `deleteMatch` [{…}]."""
@@ -561,7 +593,8 @@ async def patch_rows(
         entity_id=sheet,
         after={"version": d.version, "updated": updated, "inserted": inserted, "deleted": deleted},
     )
-    await _after_change(db, org)
+    if emit_results:
+        await _after_change(db, org)
     return {
         **_sheet_out(sheet, d, rows=False),
         "updated": updated,
@@ -621,6 +654,7 @@ async def put_config(
     *,
     actor,
     partial: bool = False,
+    emit_results: bool = True,
 ) -> tuple[dict[str, Any], int]:  # noqa: ANN001
     d = await _doc(db, org, CONFIG_DOC)
     _check_version(d, base_version, "The switches")
@@ -649,7 +683,8 @@ async def put_config(
         entity_id=CONFIG_DOC,
         after={"version": d.version, "changed": list(changed)},
     )
-    await _after_change(db, org)
+    if emit_results:
+        await _after_change(db, org)
     return new, d.version
 
 
@@ -660,6 +695,7 @@ async def clear(db: AsyncSession, org: uuid.UUID, *, actor) -> int:  # noqa: ANN
     for sid in gone:
         await db.delete(docs[sid])
     if gone:
+        live.mark_changed(db, org)
         await db.flush()
         await webhooks.emit(
             db,
@@ -677,3 +713,204 @@ async def clear(db: AsyncSession, org: uuid.UUID, *, actor) -> int:  # noqa: ANN
         )
         await _after_change(db, org)
     return len(gone)
+
+
+# ---------------------------------------------------------------- activity
+
+
+_API_KEY = re.compile(r"^(?P<who>.*) \(API key: (?P<key>.*)\)$")
+_ACTIONS = {
+    "capacity.sheet.replace": "replaced",
+    "capacity.sheet.edit": "edited",
+    "capacity.config.update": "changed the switches",
+    "capacity.clear": "removed all sheets",
+    "capacity.sync": "pushed a batch",
+}
+
+
+def _activity_summary(action: str, after: dict[str, Any]) -> str:
+    if action == "capacity.sheet.edit":
+        bits = [f"{after[k]} {k}" for k in ("updated", "inserted", "deleted") if after.get(k)]
+        return ", ".join(bits) or "no rows changed"
+    if action == "capacity.sheet.replace":
+        return f"{after.get('rows', 0)} rows"
+    if action == "capacity.config.update":
+        return ", ".join(after.get("changed") or []) or "-"
+    if action == "capacity.sync":
+        return f"{after.get('changes', 0)} sheet change(s)" + (
+            " + switches" if after.get("config") else ""
+        )
+    return ", ".join(after.get("sheets") or [])
+
+
+def _activity_out(a: AuditLog) -> dict[str, Any]:
+    m = _API_KEY.match(a.actor_email or "")
+    after = a.after or {}
+    sheet = a.entity_id if a.entity_type == "capacity_sheet" and a.entity_id in SHEETS else None
+    label = SHEETS[sheet]["label"] if sheet else None
+    if a.entity_type == "capacity_config":
+        label = "Switches"
+    return {
+        "id": str(a.id),
+        "at": a.created_at,
+        "by": m.group("who") if m else a.actor_email,
+        "source": "api" if m else "app",
+        "apiKey": m.group("key") if m else None,
+        "action": a.action,
+        "verb": _ACTIONS.get(a.action, a.action),
+        "sheet": sheet,
+        "label": label,
+        "version": after.get("version"),
+        "summary": _activity_summary(a.action, after),
+    }
+
+
+async def activity(
+    db: AsyncSession, org: uuid.UUID, *, limit: int = 50, offset: int = 0
+) -> list[dict[str, Any]]:
+    """Who changed what, newest first: the app and every connected tool."""
+    rows = (
+        await db.execute(
+            select(AuditLog)
+            .where(AuditLog.organization_id == org, AuditLog.action.like("capacity.%"))
+            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).scalars()
+    return [_activity_out(a) for a in rows]
+
+
+# ---------------------------------------------------------------- batch sync (CRMs)
+
+MAX_SYNC_CHANGES = 200
+
+
+def _hash_body(body: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, default=str, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+async def _apply_change(
+    db: AsyncSession,
+    org: uuid.UUID,
+    ch: dict[str, Any],
+    actor,  # noqa: ANN001
+) -> dict[str, Any]:
+    sheet = ch.get("sheet") or ""
+    if ch.get("replace") is not None:
+        return await put_sheet(
+            db,
+            org,
+            sheet,
+            {**ch["replace"], "base_version": ch.get("base_version")},
+            actor=actor,
+            emit_results=False,
+        )
+    return await patch_rows(
+        db,
+        org,
+        sheet,
+        {
+            "upsert": ch.get("upsert") or [],
+            "delete": ch.get("delete") or [],
+            "deleteMatch": ch.get("deleteMatch") or [],
+            "base_version": ch.get("base_version"),
+        },
+        actor=actor,
+        emit_results=False,
+    )
+
+
+async def sync(
+    db: AsyncSession,
+    org: uuid.UUID,
+    body: dict[str, Any],
+    *,
+    actor,  # noqa: ANN001
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """Apply several sheet changes (and switches) in one transaction: all or nothing,
+    one `capacity.results.updated` event. With an Idempotency-Key a retried request
+    returns the first response instead of applying the changes twice."""
+    digest = _hash_body(body)
+    if idempotency_key:
+        prev = (
+            await db.execute(
+                select(CapacitySyncRequest).where(
+                    CapacitySyncRequest.organization_id == org,
+                    CapacitySyncRequest.key == idempotency_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if prev is not None:
+            if prev.request_hash != digest:
+                raise ConflictError(
+                    "This Idempotency-Key was already used with a different request body"
+                )
+            return {**prev.response, "replayed": True}
+
+    changes = body.get("changes") or []
+    config = body.get("config")
+    if not changes and not config:
+        raise ValidationError("Nothing to apply: send 'changes' and/or 'config'")
+    if len(changes) > MAX_SYNC_CHANGES:
+        raise ValidationError(f"At most {MAX_SYNC_CHANGES} changes per request")
+
+    applied: list[dict[str, Any]] = []
+    for i, ch in enumerate(changes):
+        sheet = ch.get("sheet") or ""
+        try:
+            out = await _apply_change(db, org, ch, actor)
+        except (ValidationError, NotFoundError, ConflictError) as e:
+            raise type(e)(
+                f"changes[{i}] ({sheet or 'no sheet'}): {e.message}. Nothing was applied.",
+                details={"index": i, "sheet": sheet, "error": e.details},
+            ) from e
+        applied.append(
+            {
+                "sheet": out["id"],
+                "version": out["version"],
+                "rows": out["rowCount"],
+                **{k: out[k] for k in ("updated", "inserted", "deleted") if k in out},
+            }
+        )
+
+    cfg_out = None
+    if config:
+        try:
+            cfg, cfg_version = await put_config(
+                db,
+                org,
+                config,
+                body.get("config_base_version"),
+                actor=actor,
+                partial=True,
+                emit_results=False,
+            )
+        except (ValidationError, ConflictError) as e:
+            raise type(e)(f"config: {e.message}. Nothing was applied.", details=e.details) from e
+        cfg_out = {"version": cfg_version, "config": cfg}
+
+    rv = await _after_change(db, org)
+    await record_audit(
+        db,
+        actor=actor,
+        action="capacity.sync",
+        entity_type="capacity_sync",
+        entity_id=idempotency_key[:64] if idempotency_key else None,
+        after={"changes": len(applied), "config": bool(config), "resultsVersion": rv},
+    )
+    response = {"applied": applied, "config": cfg_out, "resultsVersion": rv, "replayed": False}
+    if idempotency_key:
+        db.add(
+            CapacitySyncRequest(
+                organization_id=org,
+                key=idempotency_key,
+                request_hash=digest,
+                response=json.loads(json.dumps(response, default=str)),
+            )
+        )
+        await db.flush()
+    return response

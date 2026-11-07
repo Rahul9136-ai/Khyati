@@ -5,11 +5,11 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { api } from "@/lib/api"
+import { api, tokenStore } from "@/lib/api"
 import { DEFAULT_CONFIG } from "@/lib/capacity/config"
 import { type Dataset, parseWorkbook } from "@/lib/capacity/parse"
 import { useCapacity } from "@/lib/capacity/store"
-import { flush, poll, startCapacitySync, stopCapacitySync, useCapacitySync } from "@/lib/capacity/sync"
+import { flush, poll, startCapacitySync, stopCapacitySync, streamTransport, useCapacitySync } from "@/lib/capacity/sync"
 import { miniWorkbook } from "@/lib/capacity/testWorkbook"
 import { useWfm } from "@/store/wfm"
 
@@ -229,5 +229,109 @@ describe("sync with the server (and connected tools)", () => {
     expect(screen.getByRole("status")).toHaveTextContent("This browser only")
     act(() => useCapacitySync.setState({ status: "synced" }))
     expect(screen.getByRole("status")).toHaveTextContent("Shared · synced")
+    act(() => useCapacitySync.setState({ live: true }))
+    expect(screen.getByRole("status")).toHaveTextContent("Shared · live")
+  })
+})
+
+describe("live updates (server push)", () => {
+  /** A fake event stream the test writes into. */
+  function fakeStream() {
+    const queue: string[] = []
+    let wake: (() => void) | null = null
+    let closed = false
+    const opened: { url: string; token: string }[] = []
+    const open = async function* (url: string, token: string, signal: AbortSignal) {
+      opened.push({ url, token })
+      signal.addEventListener("abort", () => { closed = true; wake?.() })
+      while (!closed) {
+        if (!queue.length) await new Promise<void>((r) => { wake = r })
+        while (queue.length) yield queue.shift()!
+      }
+    }
+    const send = (chunk: string) => { queue.push(chunk); wake?.() }
+    return { open, send, opened, isClosed: () => closed }
+  }
+  const event = (name: string, data: object) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
+  const original = streamTransport.open
+
+  beforeEach(() => { (tokenStore as { access: string | null }).access = "tok" })
+  afterEach(() => { streamTransport.open = original; (tokenStore as { access: string | null }).access = null })
+
+  it("opens the live stream, and a change pushed by the server is loaded at once", async () => {
+    const server = mini()
+    const versions: Record<string, number> = Object.fromEntries(Object.keys(server).map((id) => [id, 1]))
+    const rv = () => `rv-${versions.workingDays}`
+    get.mockImplementation((url: string) => {
+      if (url === "/capacity/state") return ok({ sheets: Object.fromEntries(Object.keys(server).map((id) => [id, { version: versions[id] }])), config: { version: 1 }, resultsVersion: rv() })
+      if (url === "/capacity/sheets") return ok(Object.keys(server).map((id) => ({ id, version: versions[id], columns: server[id as keyof Dataset]!.columns, rows: server[id as keyof Dataset]!.rows, updatedAt: "", updatedBy: "", fileName: "x", sheetName: id, monthColumns: null })))
+      if (url === "/capacity/config") return ok({ config: DEFAULT_CONFIG, version: 1 })
+      const id = url.split("/").pop()! as keyof Dataset
+      return ok({ id, version: versions[id], columns: server[id]!.columns, rows: server[id]!.rows, updatedAt: "", updatedBy: "", fileName: "x", sheetName: id, monthColumns: null })
+    })
+    const s = fakeStream()
+    streamTransport.open = s.open
+    await startCapacitySync(true)
+    await waitFor(() => expect(s.opened).toHaveLength(1))
+    expect(s.opened[0]).toEqual({ url: "http://srv/api/v1/capacity/stream", token: "tok" })
+
+    s.send(": ping\n\n")
+    s.send(event("hello", { resultsVersion: rv(), activity: [] }))
+    await waitFor(() => expect(useCapacitySync.getState().live).toBe(true))
+    expect(get).not.toHaveBeenCalledWith("/capacity/sheets/workingDays", expect.anything()) // nothing new
+
+    // a CRM pushes Sep'26 working days = 10; the server announces it (split across chunks)
+    server.workingDays!.rows[0] = { ...server.workingDays!.rows[0], Days: 10 }
+    versions.workingDays = 2
+    const msg = event("change", { resultsVersion: rv(), activity: [{ id: "a1", at: "2026-11-06T10:00:00Z", by: "ops@x.dev", source: "api", apiKey: "HubSpot", action: "capacity.sheet.edit", verb: "edited", sheet: "workingDays", label: "Working Days", version: 2, summary: "1 updated" }] })
+    s.send(msg.slice(0, 20))
+    s.send(msg.slice(20))
+    await waitFor(() => expect(useCapacity.getState().dataset.workingDays!.rows[0]["Days"]).toBe(10))
+    expect(useCapacitySync.getState().message).toMatch(/Working Days \(latest: HubSpot via API\)/)
+    expect(useCapacitySync.getState().activity[0].apiKey).toBe("HubSpot")
+    expect(useCapacitySync.getState().resultsVersion).toBe("rv-2")
+
+    stopCapacitySync()
+    expect(s.isClosed()).toBe(true)
+    expect(useCapacitySync.getState().live).toBe(false)
+  })
+
+  it("reconnects when the live connection drops, and stays usable meanwhile", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      get.mockImplementation((url: string) => (url === "/capacity/state"
+        ? ok({ sheets: {}, config: { version: 1 }, resultsVersion: "empty" })
+        : ok({ config: DEFAULT_CONFIG, version: 1 })))
+      useCapacity.setState({ dataset: {} })
+      let calls = 0
+      streamTransport.open = async function* () {
+        calls++
+        if (calls === 1) throw Object.assign(new Error("gone"), { status: 502 })
+        yield event("hello", { resultsVersion: "empty", activity: [] })
+        await new Promise(() => {}) // stays open
+      }
+      await startCapacitySync(true)
+      await vi.advanceTimersByTimeAsync(10)
+      expect(useCapacitySync.getState().live).toBe(false)
+      expect(useCapacitySync.getState().status).toBe("synced")
+      await vi.advanceTimersByTimeAsync(1_100) // first retry after 1 s
+      expect(calls).toBe(2)
+      expect(useCapacitySync.getState().live).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("without a login token it doesn't try to stream (polling only)", async () => {
+    (tokenStore as { access: string | null }).access = null
+    get.mockImplementation((url: string) => (url === "/capacity/state"
+      ? ok({ sheets: {}, config: { version: 1 }, resultsVersion: "empty" })
+      : ok({ config: DEFAULT_CONFIG, version: 1 })))
+    const s = fakeStream()
+    streamTransport.open = s.open
+    useCapacity.setState({ dataset: {} })
+    await startCapacitySync(true)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(s.opened).toHaveLength(0)
   })
 })

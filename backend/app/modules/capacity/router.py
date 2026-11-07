@@ -4,19 +4,26 @@ Authenticate with a login token or an API key (`X-API-Key: wfm_…`, created in
 Settings → API & Webhooks). Reading needs `planning:read`; changing needs
 `planning:write`. Subscribe to `capacity.inputs.updated`,
 `capacity.config.updated` and `capacity.results.updated` webhooks to hear
-about changes made anywhere.
+about changes made anywhere, or keep GET /capacity/stream open (Server-Sent
+Events) to hear about them the moment they're saved. POST /capacity/sync
+applies a batch of changes from a CRM in one all-or-nothing transaction.
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DbSession, require_permission
 from app.core.exceptions import ValidationError
-from app.modules.capacity import service
+from app.db.session import get_db
+from app.modules.capacity import live, service
 from app.modules.capacity.calc import DEFAULT_CONFIG
 from app.modules.capacity.schema import describe
 from app.modules.workforce.service import org_scope
@@ -76,6 +83,26 @@ class ConfigIn(BaseModel):
         description="Switches (see GET /capacity/config); PATCH sends only the changes"
     )
     base_version: int | None = None
+
+
+class SyncChange(BaseModel):
+    """One sheet change. Either `replace` the whole sheet, or `upsert` / `delete` /
+    `deleteMatch` rows (same as PATCH /capacity/sheets/{sheet}/rows)."""
+
+    model_config = ConfigDict(extra="forbid")
+    sheet: str = Field(description="Sheet id, e.g. userMapping, hiring, target")
+    upsert: list[UpsertOp] = []
+    delete: list[int] = []
+    deleteMatch: list[dict[str, Any]] = []
+    replace: SheetIn | None = Field(None, description="Replace the whole sheet instead")
+    base_version: int | None = Field(None, description="The version you read; newer → 409")
+
+
+class SyncIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    changes: list[SyncChange] = Field([], description="Applied in order, all or nothing")
+    config: dict[str, Any] | None = Field(None, description="Switches to change (partial)")
+    config_base_version: int | None = None
 
 
 @router.get("/schema", response_model=ApiResponse[dict])
@@ -244,4 +271,77 @@ async def get_exceptions(
             "counts": service.exception_counts(res),
             "rows": ex[offset : offset + limit],
         }
+    )
+
+
+@router.post("/sync", response_model=ApiResponse[dict])
+async def sync(
+    body: SyncIn,
+    db: DbSession,
+    actor: Writer,
+    idempotency_key: Annotated[
+        str | None,
+        Header(
+            alias="Idempotency-Key",
+            max_length=128,
+            description="Any unique string per batch; a retry with the same key and body "
+            "returns the first response and changes nothing",
+        ),
+    ] = None,
+):
+    """Push a batch from a CRM: several sheets' row changes (and switches) in one
+    transaction. If any change fails nothing is saved and the error names the change
+    (`changes[2] (hiring): ...`). Results are recalculated once, and one
+    `capacity.results.updated` webhook / stream event goes out."""
+    data = body.model_dump(exclude_none=True)
+    for ch in data.get("changes", []):
+        if "replace" in ch:
+            ch["replace"].pop("base_version", None)
+    return ApiResponse(
+        data=await service.sync(
+            db, org_scope(actor), data, actor=actor, idempotency_key=idempotency_key
+        )
+    )
+
+
+@router.get("/activity", response_model=ApiResponse[list[dict]])
+async def get_activity(
+    db: DbSession,
+    user: Reader,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Who changed what and when, newest first: people in the app (`source: app`) and
+    connected tools (`source: api`, with the API key's name)."""
+    return ApiResponse(data=await service.activity(db, org_scope(user), limit=limit, offset=offset))
+
+
+@router.get(
+    "/stream",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {}}}},
+)
+async def stream(request: Request, user: Reader):
+    """Live updates (Server-Sent Events). Keep this open and you get `event: hello`
+    straight away, then `event: change` as soon as anything in the plan is saved
+    (by anyone, in the app or through the API), each with the new `resultsVersion`,
+    every sheet's version and the latest activity. A `: ping` comment every ~15 s
+    keeps proxies from closing it; reconnect if it drops.
+
+    `curl -N -H "X-API-Key: $WFM_KEY" .../capacity/stream`"""
+    org = org_scope(user)
+    factory = request.app.dependency_overrides.get(get_db, get_db)
+
+    @asynccontextmanager
+    async def session() -> AsyncIterator[AsyncSession]:
+        gen = factory()
+        try:
+            yield await gen.__anext__()
+        finally:
+            await gen.aclose()
+
+    return StreamingResponse(
+        live.stream(org, session, request.is_disconnected),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )

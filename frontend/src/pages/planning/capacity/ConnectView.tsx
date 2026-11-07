@@ -1,4 +1,4 @@
-import { Check, Cloud, Copy, ExternalLink, KeyRound, Webhook } from "lucide-react"
+import { Check, Cloud, Copy, ExternalLink, History, KeyRound, Webhook } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 
@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { api } from "@/lib/api"
 import { SHEETS } from "@/lib/capacity/schema"
-import { useCapacitySync } from "@/lib/capacity/sync"
+import { type Activity, useCapacitySync } from "@/lib/capacity/sync"
 
 /** Business keys a CRM can use to find a row (mirrors backend SUGGESTED_KEYS). */
 const MATCH_KEYS: Record<string, string> = {
@@ -41,13 +41,16 @@ function Snippet({ title, code }: { title: string; code: string }) {
 
 export function ConnectView() {
   const base = (api.defaults.baseURL ?? "").replace(/\/$/, "")
-  const { status, resultsVersion, lastSyncedAt } = useCapacitySync()
+  const { status, resultsVersion, lastSyncedAt, live } = useCapacitySync()
   const [state, setState] = useState<{ sheets: Record<string, { version: number; rows: number; updatedBy: string } | null> } | null>(null)
+  const [activity, setActivity] = useState<Activity[]>([])
   const shared = status !== "local"
+  const shown = status === "synced" && live ? "live" : status
 
   useEffect(() => {
     if (!shared) return
     api.get("/capacity/state").then((r) => setState(r.data.data)).catch(() => setState(null))
+    api.get("/capacity/activity", { params: { limit: 25 } }).then((r) => setActivity(r.data.data ?? [])).catch(() => undefined)
   }, [shared, resultsVersion])
 
   const H = `-H "X-API-Key: $WFM_KEY"`
@@ -60,16 +63,16 @@ export function ConnectView() {
         <CardContent className="space-y-2 text-xs">
           <p>
             API base URL: <code className="rounded bg-muted px-1">{base}/capacity</code>
-            {" · "}status: <Badge variant={status === "synced" || status === "readonly" ? "success" : status === "local" ? "secondary" : "warning"}>{status}</Badge>
+            {" · "}status: <Badge variant={shown === "live" || shown === "synced" || shown === "readonly" ? "success" : shown === "local" ? "secondary" : "warning"}>{shown}</Badge>
             {lastSyncedAt && <span className="text-muted-foreground"> · last synced {new Date(lastSyncedAt).toLocaleTimeString()}</span>}
             {resultsVersion && <span className="text-muted-foreground"> · results version <code>{resultsVersion}</code></span>}
           </p>
           {!shared && <p className="text-amber-600">You're not signed in to the server, so this plan lives only in this browser and connected tools can't see it.</p>}
           <p className="text-muted-foreground">
             Everything on this tab — the 14 input sheets, the switches and the calculated results — is stored on the server for your
-            organisation. A CRM reads and changes the same data through the REST API and hears about every change through webhooks; edits it
-            makes show up here within 20 seconds, and edits made here reach it as webhook events within seconds. Results from the API come from
-            the same formulas as this screen (checked by automated tests).
+            organisation. A CRM reads and changes the same data through the REST API and hears about every change through webhooks or the live
+            stream. Edits it makes show up here within a second while this tab is open ({live ? "live connection open" : "live connection not open — checking every 20 s"}),
+            and edits made here reach it straight away. Results from the API come from the same formulas as this screen (checked by automated tests).
           </p>
           {state && (
             <div className="overflow-x-auto">
@@ -122,6 +125,32 @@ export function ConnectView() {
         </Card>
       </div>
 
+      {shared && (
+        <Card className="glass">
+          <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><History className="h-4 w-4 text-primary" /> Recent changes</CardTitle></CardHeader>
+          <CardContent className="text-xs">
+            {activity.length === 0 ? <p className="text-muted-foreground">No changes yet.</p> : (
+              <div className="max-h-72 overflow-auto">
+                <table className="w-full tabular-nums">
+                  <thead><tr className="text-left text-muted-foreground"><th className="py-1">When</th><th>Who</th><th>Via</th><th>What</th><th>Detail</th></tr></thead>
+                  <tbody>
+                    {activity.map((a) => (
+                      <tr key={a.id} className="border-t border-border/40">
+                        <td className="whitespace-nowrap py-1 pr-3">{new Date(a.at).toLocaleString()}</td>
+                        <td className="pr-3">{a.by}</td>
+                        <td className="pr-3">{a.source === "api" ? <Badge variant="secondary">API · {a.apiKey}</Badge> : <Badge variant="outline">App</Badge>}</td>
+                        <td className="pr-3">{a.verb}{a.label ? ` ${a.label}` : ""}{a.version ? <span className="text-muted-foreground"> (v{a.version})</span> : null}</td>
+                        <td className="text-muted-foreground">{a.summary}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="glass">
         <CardHeader className="pb-2"><CardTitle className="text-sm">2 · Read the plan</CardTitle></CardHeader>
         <CardContent className="grid gap-3 xl:grid-cols-2">
@@ -129,6 +158,8 @@ export function ConnectView() {
           <Snippet title="Every P / Q / V field, nested" code={`curl ${H} "${base}/capacity/results?view=full&limit=500"`} />
           <Snippet title="Data Exceptions (errors only)" code={`curl ${H} "${base}/capacity/exceptions?severity=error"`} />
           <Snippet title="Has anything changed? (cheap to poll)" code={`curl ${H} "${base}/capacity/state"\n# → resultsVersion changes whenever the results do`} />
+          <Snippet title="Real-time: keep a live stream open (Server-Sent Events)" code={`curl -N ${H} "${base}/capacity/stream"\n# event: hello  → current versions + recent activity\n# event: change → sent the moment anything is saved`} />
+          <Snippet title="Change log (who changed what, app or API)" code={`curl ${H} "${base}/capacity/activity?limit=50"`} />
         </CardContent>
       </Card>
 
@@ -157,6 +188,17 @@ export function ConnectView() {
   "${base}/capacity/sheets/workingDays" -d '{
   "rows": [{ "Month": "Sep'\\''26", "Days": 21 }, { "Month": "Oct'\\''26", "Days": 22 }],
   "base_version": 3
+}'`} />
+          <Snippet title="Push a batch: several sheets at once, all or nothing, safe to retry" code={`curl -X POST ${H} -H "Content-Type: application/json" \\
+  -H "Idempotency-Key: crm-sync-2026-11-06T10:00" \\
+  "${base}/capacity/sync" -d '{
+  "changes": [
+    { "sheet": "userMapping",
+      "upsert": [{ "match": { "Emp Id": "1001" }, "values": { "Employment Status": "RESIGNED" } }] },
+    { "sheet": "hiring",
+      "upsert": [{ "match": { "RR Number": "RR-2041" }, "values": { "Status": "CLOSED" } }] }
+  ],
+  "config": { "snpPct": 0.2 }
 }'`} />
           <Snippet title="Change a switch" code={`curl -X PATCH ${H} -H "Content-Type: application/json" \\
   "${base}/capacity/config" -d '{ "config": { "qcaAttritionMode": "attrition" } }'`} />

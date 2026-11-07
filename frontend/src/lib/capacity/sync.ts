@@ -8,13 +8,16 @@
 //   a cell edit sends just that cell (batched), a switch change saves the
 //   switches. Each save carries the version it was based on — if someone else
 //   saved first (409) their copy is loaded and you're told.
-// * While the tab is open the server is checked every 20 s; sheets changed
-//   elsewhere (another user, a CRM through the API) are reloaded.
+// * While the tab is open it keeps a live connection to the server
+//   (GET /capacity/stream): a change saved anywhere (another user, a CRM through
+//   the API) is pushed here within a second and the changed sheets are reloaded.
+//   If the live connection drops it reconnects, and meanwhile the server is
+//   checked every 20 s.
 // * No server / offline: everything keeps working from this browser's copy and
 //   is uploaded when the server is back.
 import { create } from "zustand"
 
-import { api, type ApiError } from "@/lib/api"
+import { api, type ApiError, tokenStore } from "@/lib/api"
 
 import type { CapacityConfig } from "./config"
 import type { Cell, Dataset, Row, SheetData } from "./parse"
@@ -23,17 +26,38 @@ import { useCapacity } from "./store"
 
 export type SyncStatus = "local" | "loading" | "saving" | "synced" | "offline" | "conflict" | "readonly"
 
+/** One entry of the shared plan's change log (GET /capacity/activity). */
+export interface Activity {
+  id: string
+  at: string
+  by: string
+  source: "app" | "api"
+  apiKey: string | null
+  action: string
+  verb: string
+  sheet: string | null
+  label: string | null
+  version: number | null
+  summary: string
+}
+
 export const useCapacitySync = create<{
   status: SyncStatus
   message: string | null
   lastSyncedAt: number | null
   resultsVersion: string | null
-}>(() => ({ status: "local", message: null, lastSyncedAt: null, resultsVersion: null }))
+  /** the live connection is open: changes arrive as they happen */
+  live: boolean
+  activity: Activity[]
+}>(() => ({ status: "local", message: null, lastSyncedAt: null, resultsVersion: null, live: false, activity: [] }))
 
 const setStatus = (status: SyncStatus, message: string | null = null) =>
   useCapacitySync.setState({ status, message, ...(status === "synced" ? { lastSyncedAt: Date.now() } : {}) })
 
 const POLL_MS = 20_000
+/** While live, still check this often in case an event was missed. */
+const LIVE_POLL_MS = 120_000
+const RETRY_MS = [1_000, 3_000, 10_000, 30_000]
 const DEBOUNCE_MS = 600
 const BIG = { timeout: 120_000 }
 const isNetwork = (e: unknown) => !(e as ApiError)?.status
@@ -70,6 +94,10 @@ interface Ctx {
   clear: boolean
   timer?: ReturnType<typeof setTimeout>
   poll?: ReturnType<typeof setInterval>
+  lastPoll: number
+  /** a check was asked for while saving: run it afterwards */
+  pollAgain: boolean
+  stream?: AbortController
   flushing: boolean
   stopped: boolean
 }
@@ -117,7 +145,7 @@ async function pullConfig() {
 /** Start syncing (call when the tab opens while signed in). */
 export async function startCapacitySync(canWrite: boolean) {
   stopCapacitySync()
-  const me: Ctx = { canWrite, versions: {}, cells: new Map(), dirty: new Set(), configDirty: false, clear: false, flushing: false, stopped: false }
+  const me: Ctx = { canWrite, versions: {}, cells: new Map(), dirty: new Set(), configDirty: false, clear: false, flushing: false, stopped: false, lastPoll: Date.now(), pollAgain: false }
   ctx = me
   setStatus("loading")
   try {
@@ -145,7 +173,72 @@ export async function startCapacitySync(canWrite: boolean) {
   } catch (e) {
     setStatus("offline", isNetwork(e) ? "Server unreachable — working from this browser's copy; changes upload when it's back." : errMsg(e))
   }
-  if (!me.stopped) me.poll = setInterval(() => void poll(), POLL_MS)
+  if (me.stopped) return
+  me.poll = setInterval(() => {
+    if (!useCapacitySync.getState().live || Date.now() - me.lastPoll >= LIVE_POLL_MS) void poll()
+  }, POLL_MS)
+  void runStream(me)
+}
+
+/** Opens the server's live event stream and yields its text. Swapped out in tests. */
+export const streamTransport = {
+  async *open(url: string, token: string, signal: AbortSignal): AsyncGenerator<string> {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" }, signal, cache: "no-store" })
+    if (!res.ok || !res.body) throw Object.assign(new Error(`stream: HTTP ${res.status}`), { status: res.status })
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) return
+      yield dec.decode(value, { stream: true })
+    }
+  },
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** Keep the live connection open (reconnecting with backoff) until sync stops. */
+async function runStream(me: Ctx) {
+  let attempt = 0
+  while (!me.stopped) {
+    const token = tokenStore.access
+    if (!token || typeof TextDecoder === "undefined") return // polling only
+    const ac = new AbortController()
+    me.stream = ac
+    try {
+      let buf = ""
+      for await (const chunk of streamTransport.open(`${api.defaults.baseURL}/capacity/stream`, token, ac.signal)) {
+        if (me.stopped) break
+        buf += chunk.replace(/\r\n/g, "\n")
+        for (let i = buf.indexOf("\n\n"); i >= 0; i = buf.indexOf("\n\n")) {
+          const block = buf.slice(0, i)
+          buf = buf.slice(i + 2)
+          if (onStreamEvent(me, block)) attempt = 0
+        }
+      }
+    } catch (e) {
+      // an expired login: any API call refreshes it, then reconnect
+      if (!me.stopped && (e as ApiError)?.status === 401) await api.get("/capacity/state").catch(() => undefined)
+    }
+    if (me.stopped) return
+    useCapacitySync.setState({ live: false })
+    await sleep(RETRY_MS[Math.min(attempt++, RETRY_MS.length - 1)])
+  }
+}
+
+/** Handle one SSE block; true for a real event (not a keep-alive). */
+function onStreamEvent(me: Ctx | null, block: string): boolean {
+  let name = "message"
+  let body = ""
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event:")) name = line.slice(6).trim()
+    else if (line.startsWith("data:")) body += line.slice(5).trim()
+  }
+  if ((name !== "hello" && name !== "change") || !body || !me || me.stopped) return false
+  const msg = JSON.parse(body) as { resultsVersion: string; activity?: Activity[] }
+  useCapacitySync.setState({ live: true, ...(msg.activity ? { activity: msg.activity } : {}) })
+  if (msg.resultsVersion !== useCapacitySync.getState().resultsVersion) void poll()
+  return true
 }
 
 export function stopCapacitySync() {
@@ -153,14 +246,18 @@ export function stopCapacitySync() {
   ctx.stopped = true
   if (ctx.timer) clearTimeout(ctx.timer)
   if (ctx.poll) clearInterval(ctx.poll)
+  ctx.stream?.abort()
   ctx = null
+  useCapacitySync.setState({ live: false })
   setStatus("local")
 }
 
 /** Check for changes made elsewhere; upload anything left from offline. */
 export async function poll() {
   const me = ctx
-  if (!me || me.flushing) return
+  if (!me) return
+  if (me.flushing) { me.pollAgain = true; return }
+  me.lastPoll = Date.now()
   try {
     if (me.dirty.size || me.cells.size || me.configDirty || me.clear) await flush()
     const state = await data<ServerState>(api.get("/capacity/state"))
@@ -174,8 +271,11 @@ export async function poll() {
     const cfgChanged = (state.config?.version ?? 0) !== (me.versions.config ?? 0) && !me.configDirty
     if (cfgChanged && state.config) await pullConfig()
     useCapacitySync.setState({ resultsVersion: state.resultsVersion })
-    if (changed.length || cfgChanged)
-      setStatus("synced", `Updated from the server: ${[...changed.map((id) => SHEETS.find((s) => s.id === id)!.label), ...(cfgChanged ? ["Switches"] : [])].join(", ")}`)
+    if (changed.length || cfgChanged) {
+      const top = useCapacitySync.getState().activity[0]
+      const who = top ? ` (latest: ${top.source === "api" ? `${top.apiKey ?? "API"} via API` : top.by})` : ""
+      setStatus("synced", `Updated from the server: ${[...changed.map((id) => SHEETS.find((s) => s.id === id)!.label), ...(cfgChanged ? ["Switches"] : [])].join(", ")}${who}`)
+    }
     else if (useCapacitySync.getState().status === "offline") setStatus(me.canWrite ? "synced" : "readonly")
   } catch (e) {
     setStatus("offline", isNetwork(e) ? "Server unreachable — working from this browser's copy; changes upload when it's back." : errMsg(e))
@@ -258,6 +358,10 @@ export async function flush() {
     setStatus("offline", isNetwork(e) ? "Server unreachable — your changes are kept in this browser and upload when it's back." : errMsg(e))
   } finally {
     me.flushing = false
+    if (me.pollAgain && !me.stopped) {
+      me.pollAgain = false
+      void poll()
+    }
   }
 }
 

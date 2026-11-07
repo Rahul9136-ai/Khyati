@@ -70,6 +70,9 @@ async def record_audit(
             before=_jsonable(before),
             after=_jsonable(after),
             note=note,
+            # set here (microseconds) rather than by the database, whose clock may only
+            # keep seconds: entries made in quick succession stay in order
+            created_at=datetime.now(UTC),
         )
     )
 

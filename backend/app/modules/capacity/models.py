@@ -8,7 +8,9 @@ against overwriting someone else's edit (409).
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Integer, String, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -23,3 +25,21 @@ class CapacityDocument(UUIDMixin, TenantMixin, TimestampMixin, Base):
     data: Mapped[dict] = mapped_column(JSON)
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_by: Mapped[str] = mapped_column(String(255), default="")
+
+
+class CapacitySyncRequest(UUIDMixin, TenantMixin, Base):
+    """A batch a connected tool pushed to POST /capacity/sync with an `Idempotency-Key`.
+
+    Sending the same key again returns the stored response instead of applying the
+    changes twice (a CRM retrying after a timeout is safe).
+    """
+
+    __tablename__ = "capacity_sync_requests"
+    __table_args__ = (UniqueConstraint("organization_id", "key"),)
+
+    key: Mapped[str] = mapped_column(String(128))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    response: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
