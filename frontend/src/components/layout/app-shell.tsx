@@ -4,6 +4,7 @@ import { GlobalSearch } from "@/components/layout/global-search"
 import { MessagePopup } from "@/components/layout/message-popup"
 import { NotificationsBell } from "@/components/layout/notifications-bell"
 import { QueuePicker } from "@/components/layout/queue-picker"
+import { SaveStatus } from "@/components/layout/save-status"
 import { SchedulePopup } from "@/components/layout/schedule-popup"
 import { SendMessageButton } from "@/components/layout/send-message-button"
 import { Breadcrumb, Sidebar } from "@/components/layout/sidebar"
@@ -31,7 +32,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen bg-background">
       <Sidebar
         canSee={(it) => visible(it.module)}
-        footer={<><p className="font-medium text-foreground/80">Powered by FlowForce WFM</p><p>v0.1 · Erlang-C engine · {METHODS.length} models</p></>}
+        footer={<><p className="font-medium text-foreground/80">Purvi.AI</p><p>v0.1 · Erlang-C engine · {METHODS.length} models</p></>}
       />
 
       {/* Main */}
@@ -61,6 +62,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               />
             </div>
           )}
+          <SaveStatus />
           <SendMessageButton />
           <NotificationsBell />
           <ThemeToggle />

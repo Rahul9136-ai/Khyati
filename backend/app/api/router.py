@@ -26,6 +26,7 @@ from app.modules.reporting.scheduled_router import router as scheduled_reports_r
 from app.modules.requests.router import router as requests_router
 from app.modules.scheduling.router import router as scheduling_router
 from app.modules.workforce.router import employees_router, org_router
+from app.modules.workspace.router import router as workspace_router
 
 api_router = APIRouter()
 
@@ -52,3 +53,4 @@ api_router.include_router(reports_router)
 api_router.include_router(notifications_router)
 api_router.include_router(ai_router)
 api_router.include_router(autonomy_router)
+api_router.include_router(workspace_router)

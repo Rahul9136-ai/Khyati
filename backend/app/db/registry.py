@@ -22,3 +22,4 @@ from app.modules.reporting import models as reporting_models  # noqa: F401
 from app.modules.requests import models as request_models  # noqa: F401
 from app.modules.scheduling import models as scheduling_models  # noqa: F401
 from app.modules.workforce import models as workforce_models  # noqa: F401
+from app.modules.workspace import models as workspace_models  # noqa: F401

@@ -60,6 +60,10 @@ EVENTS: dict[str, str] = {
         "Capacity Planning results were recalculated after a change — monthly totals included; "
         "GET /capacity/results for the detail."
     ),
+    "workspace.updated": (
+        "Something people keep in the app (employees, forecasts, PTO, scenarios, messages ...) "
+        "was saved; GET /workspace/data/{key} for the new value."
+    ),
     "ping": "Test event sent from the Integrations screen.",
 }
 

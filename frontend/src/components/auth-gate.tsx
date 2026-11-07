@@ -3,6 +3,7 @@ import { useEffect } from "react"
 
 import { startScheduleSync, stopScheduleSync } from "@/lib/scheduleSync"
 import { startSettingsSync, stopSettingsSync } from "@/lib/settingsSync"
+import { startWorkspaceSync, stopWorkspaceSync } from "@/lib/workspaceSync"
 import { Login } from "@/pages/Login"
 import { useAuth } from "@/store/auth"
 
@@ -21,10 +22,19 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const canWrite = !!user && (user.is_superuser || user.permission_codes.includes("schedule:write"))
   useEffect(() => {
     if (status !== "authenticated") return
-    void startScheduleSync({ canWrite })
-    // Work rules, compliance, shift patterns and agents' week offs are shared too.
-    void startSettingsSync({ canWrite })
+    let cancelled = false
+    void (async () => {
+      // Everything people add (roster, forecasts, PTO, scenarios …) first, so the
+      // schedules and work rules below land on the organisation's roster.
+      await startWorkspaceSync()
+      if (cancelled) return
+      void startScheduleSync({ canWrite })
+      // Work rules, compliance, shift patterns and agents' week offs are shared too.
+      void startSettingsSync({ canWrite })
+    })()
     return () => {
+      cancelled = true
+      stopWorkspaceSync()
       stopScheduleSync()
       stopSettingsSync()
     }
