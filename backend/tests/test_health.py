@@ -15,4 +15,4 @@ async def test_health_liveness(client: AsyncClient) -> None:
 async def test_openapi_served(client: AsyncClient) -> None:
     resp = await client.get("/api/v1/openapi.json")
     assert resp.status_code == 200
-    assert resp.json()["info"]["title"] == "FlowForce WFM"
+    assert resp.json()["info"]["title"] == "Purvi.AI"

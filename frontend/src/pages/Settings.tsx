@@ -366,7 +366,7 @@ export function Settings() {
               <CardTitle>Organisation</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <Row label="Organisation" value="FlowForce Contact Centre" />
+              <Row label="Organisation" value="Purvi Technology" />
               <Row label="Plan" value="Enterprise" />
               <Row label="Timezone" value="UTC" />
               <Row label="Service window" value="07:00 – 19:00" />
@@ -504,7 +504,7 @@ export function Settings() {
           </label>
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-muted-foreground">Work email</span>
-            <Input type="email" value={email} onChange={(e) => { setEmail(e.target.value); setError("") }} placeholder="jordan.blake@flowforce.io" />
+            <Input type="email" value={email} onChange={(e) => { setEmail(e.target.value); setError("") }} placeholder="jordan.blake@company.com" />
           </label>
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-muted-foreground">Designation</span>

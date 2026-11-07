@@ -63,13 +63,13 @@ export function Reports() {
         actions={
           <>
             <ExportButton
-              filename={`flowforce-kpis-${gran}`}
+              filename={`purvi-kpis-${gran}`}
               variant="default"
               label={`Export · ${granName}`}
               sheets={() => allReportSheets(inputs, rta, { start, end: rangeEnd }, [gran])}
             />
             <ExportButton
-              filename="flowforce-kpis-all-granularities"
+              filename="purvi-kpis-all-granularities"
               label="Export · all granularities"
               sheets={() => allReportSheets(inputs, rta, { start, end: rangeEnd }, ALL_GRANULARITIES)}
             />

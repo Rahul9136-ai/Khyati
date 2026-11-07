@@ -1,3 +1,3 @@
-"""FlowForce WFM backend — FastAPI modular monolith."""
+"""Purvi.AI backend — FastAPI modular monolith."""
 
 __version__ = "0.1.0"

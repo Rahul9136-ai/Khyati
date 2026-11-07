@@ -79,7 +79,7 @@ async def seed_demo() -> dict:
 
         await seed_rbac(db)
 
-        org = Organization(name="FlowForce Demo Corp", code="DEMO")
+        org = Organization(name="Purvi Demo Corp", code="DEMO")
         db.add(org)
         await db.flush()
 

@@ -20,7 +20,7 @@ import { TEAMS } from "@/lib/domain/seed"
 import type { Agent } from "@/lib/domain/types"
 import { useWfm } from "@/store/wfm"
 
-const email = (name: string) => `${name.toLowerCase().replace(/[^a-z ]/g, "").replace(/ /g, ".")}@flowforce.io`
+const email = (name: string) => `${name.toLowerCase().replace(/[^a-z ]/g, "").replace(/ /g, ".")}@purvi.ai`
 const TEAM_NAMES = Object.keys(TEAMS)
 
 export function Employees() {

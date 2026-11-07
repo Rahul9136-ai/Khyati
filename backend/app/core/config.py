@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     )
 
     # --- App ---
-    PROJECT_NAME: str = "FlowForce WFM"
+    PROJECT_NAME: str = "Purvi.AI"
     API_V1_PREFIX: str = "/api/v1"
     ENVIRONMENT: str = "local"  # local | staging | production
     DEBUG: bool = True
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # --- Public URLs (Slack/Teams approval-bridge callbacks + deep links) ---
     # API base the messaging platforms POST their button callbacks back to.
     APP_PUBLIC_URL: str = "http://localhost:8000"
-    # Web app base used for deep links in Slack/Teams cards ("Open in FlowForce").
+    # Web app base used for deep links in Slack/Teams cards ("Open in Purvi.AI").
     APP_WEB_URL: str = "http://localhost:5173"
 
     # --- Email for scheduled reports (Resend API if a key is set, else SMTP) ---

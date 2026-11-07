@@ -112,7 +112,7 @@ def build_slack_blocks(approval: ApprovalRequest) -> dict:
                     },
                     {
                         "type": "button",
-                        "text": {"type": "plain_text", "text": "Open in FlowForce"},
+                        "text": {"type": "plain_text", "text": "Open in Purvi.AI"},
                         "url": _web_link(aid), "action_id": "approval_open",
                     },
                 ],
@@ -257,7 +257,7 @@ def build_teams_card(approval: ApprovalRequest, security_token: str) -> dict:
                     "actions": [
                         action("Approve", "approve"),
                         action("Reject", "reject"),
-                        {"type": "Action.OpenUrl", "title": "Open in FlowForce",
+                        {"type": "Action.OpenUrl", "title": "Open in Purvi.AI",
                          "url": _web_link(aid)},
                     ],
                 },

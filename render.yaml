@@ -1,4 +1,4 @@
-# Render Blueprint — one-click deploy of the FlowForce WFM backend + Postgres.
+# Render Blueprint — one-click deploy of the Purvi.AI backend + Postgres.
 # https://render.com/docs/blueprint-spec  · deploy: https://dashboard.render.com/blueprints
 #
 # After this backend is live, deploy the frontend on Vercel (see DEPLOY.md) and

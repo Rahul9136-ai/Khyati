@@ -102,7 +102,7 @@ def _reply_text(approval: ApprovalRequest, parsed: dict, attempted_auto: bool) -
     if not parsed["employee_id"]:
         return (
             "📝 Got it, but I couldn't find an employee ID in that message, so I didn't guess one — "
-            f"sent to the Operations Manager for approval. Add the ID in FlowForce to speed this up. ({link})"
+            f"sent to the Operations Manager for approval. Add the ID in Purvi.AI to speed this up. ({link})"
         )
     return (
         f"📝 Got it — {kind_label(approval.kind)} for {_who(parsed, None)} sent to the Operations Manager "

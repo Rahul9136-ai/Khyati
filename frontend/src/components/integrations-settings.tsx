@@ -130,7 +130,7 @@ export function IntegrationsSettings() {
             </label>
           </div>
           <p className="text-xs text-muted-foreground">
-            @mention the bot in the channel below on Slack or Teams with a schedule-change message (e.g. "@FlowForce
+            @mention the bot in the channel below on Slack or Teams with a schedule-change message (e.g. "@Purvi.AI
             Priya E1004 called in sick today") and it's parsed automatically — no pasting into the app. Mark Leave,
             Cancel Leave, Mark Absence and Change Shift Timing (only when the message states an explicit new start
             and end time) apply immediately once the parse meets the confidence threshold below and a directory

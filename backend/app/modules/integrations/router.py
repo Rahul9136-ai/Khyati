@@ -92,7 +92,7 @@ async def test_dispatch(db: DbSession, actor: ConfigManager):
     config = await service.get_or_create_config(db, org_scope(actor))
     probe = ApprovalRequest(
         organization_id=org_scope(actor), source="intraday", kind="overtime",
-        title="FlowForce connection test",
+        title="Purvi.AI connection test",
         summary="If you can see this card with Approve/Reject buttons, the channel is wired up.",
     )
     probe.id = uuid.uuid4()
@@ -203,7 +203,7 @@ async def slack_actions(request: Request, db: DbSession):
     except Exception as exc:  # noqa: BLE001 - report back to Slack, never 500
         return {"replace_original": False, "text": f"Could not record decision: {exc}"}
     verb = "approved ✅" if action_id == "approval_approve" else "rejected ❌"
-    return {"replace_original": True, "text": f"Decision recorded — {verb} in FlowForce WFM."}
+    return {"replace_original": True, "text": f"Decision recorded — {verb} in Purvi.AI."}
 
 
 @router.post("/teams/actions", include_in_schema=True)
@@ -221,7 +221,7 @@ async def teams_actions(request: Request, db: DbSession):
         await _decide_from_platform(db, uuid.UUID(approval_id), action == "approve", via="teams")
     except Exception as exc:  # noqa: BLE001
         return Response(status_code=200, content=f"Could not record decision: {exc}")
-    return Response(status_code=200, content=f"Decision recorded ({action}) in FlowForce WFM.")
+    return Response(status_code=200, content=f"Decision recorded ({action}) in Purvi.AI.")
 
 
 @router.post("/slack/events", include_in_schema=False)

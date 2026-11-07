@@ -1,10 +1,9 @@
-# Purvi.AI — FlowForce WFM
+# Purvi.AI
 
 A full-stack **Workforce Management** platform for contact centres — forecasting, capacity
 planning, scheduling, real-time adherence, leave, messaging, reporting, and two layers of
 automation (a client-side rules engine and a server-side autonomous-agent system). Branded as
-**Purvi.AI, a product of Purvi Technology**; "FlowForce WFM" is the underlying engine/codebase
-name still used internally. Original design inspired by the *category* (IEX / Verint / NICE /
+**Purvi.AI, a product of Purvi Technology**. Original design inspired by the *category* (IEX / Verint / NICE /
 Calabrio) — no proprietary code or assets are copied.
 
 The repo is a monorepo with two independently runnable halves:

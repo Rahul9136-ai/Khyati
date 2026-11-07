@@ -1,4 +1,4 @@
-# FlowForce WFM — Architecture (Module 1)
+# Purvi.AI — Architecture (Module 1)
 
 > Original, enterprise WFM SaaS inspired by the *category* (IEX / Verint / NICE / Calabrio).
 > No proprietary code or designs are copied.

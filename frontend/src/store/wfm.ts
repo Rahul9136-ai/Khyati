@@ -368,12 +368,12 @@ function seedAudit(user: string): AuditEntry[] {
 // Seed platform users so the Settings → Users tab isn't empty on first load.
 function seedUsers(): WfmUser[] {
   return [
-    { id: "u1", name: "Avery Owens", email: "avery.owens@flowforce.io", role: "Super Admin", status: "Active" },
-    { id: "u2", name: "Priya Nair", email: "priya.nair@flowforce.io", role: "Planner", status: "Active" },
-    { id: "u3", name: "Marcus Webb", email: "marcus.webb@flowforce.io", role: "Team Leader", status: "Active" },
-    { id: "u4", name: "Sam Okoye", email: "sam.okoye@flowforce.io", role: "RTA", status: "Active" },
-    { id: "u5", name: "Elena Faro", email: "elena.faro@flowforce.io", role: "WFM Manager", status: "Active" },
-    { id: "u6", name: "Dana Fields", email: "dana.fields@flowforce.io", role: "Read-Only Viewer", status: "Invited" },
+    { id: "u1", name: "Avery Owens", email: "avery.owens@purvi.ai", role: "Super Admin", status: "Active" },
+    { id: "u2", name: "Priya Nair", email: "priya.nair@purvi.ai", role: "Planner", status: "Active" },
+    { id: "u3", name: "Marcus Webb", email: "marcus.webb@purvi.ai", role: "Team Leader", status: "Active" },
+    { id: "u4", name: "Sam Okoye", email: "sam.okoye@purvi.ai", role: "RTA", status: "Active" },
+    { id: "u5", name: "Elena Faro", email: "elena.faro@purvi.ai", role: "WFM Manager", status: "Active" },
+    { id: "u6", name: "Dana Fields", email: "dana.fields@purvi.ai", role: "Read-Only Viewer", status: "Invited" },
   ]
 }
 

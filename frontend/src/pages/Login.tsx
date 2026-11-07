@@ -105,9 +105,6 @@ export function Login() {
           </CardContent>
         </Card>
 
-        <p className="mt-4 text-center text-[11px] text-muted-foreground">
-          Powered by FlowForce WFM · JWT + RBAC · run <code>python -m app.db.seed</code> if accounts are missing
-        </p>
       </div>
     </div>
   )

@@ -1,4 +1,4 @@
-# Deploying FlowForce WFM (public URL)
+# Deploying Purvi.AI (public URL)
 
 Get a permanent `https://…` link: **backend on Render**, **frontend on Vercel**.
 Both have free tiers and deploy straight from this GitHub repo.
