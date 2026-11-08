@@ -18,6 +18,7 @@
 import { create } from "zustand"
 
 import { api, type ApiError, tokenStore } from "@/lib/api"
+import { guardLeaving } from "@/lib/leaveGuard"
 
 import type { CapacityConfig } from "./config"
 import type { Cell, Dataset, Row, SheetData } from "./parse"
@@ -93,6 +94,7 @@ interface Ctx {
   configDirty: boolean
   clear: boolean
   timer?: ReturnType<typeof setTimeout>
+  unguard?: () => void
   poll?: ReturnType<typeof setInterval>
   lastPoll: number
   /** a check was asked for while saving: run it afterwards */
@@ -147,6 +149,8 @@ export async function startCapacitySync(canWrite: boolean) {
   stopCapacitySync()
   const me: Ctx = { canWrite, versions: {}, cells: new Map(), dirty: new Set(), configDirty: false, clear: false, flushing: false, stopped: false, lastPoll: Date.now(), pollAgain: false }
   ctx = me
+  // a change made just before leaving the page is still saved
+  me.unguard = guardLeaving({ pending: () => ctx === me && (!!me.timer || me.flushing), flush: () => { if (ctx === me && me.timer) { clearTimeout(me.timer); me.timer = undefined; return flush() } } })
   setStatus("loading")
   try {
     const state = await data<ServerState>(api.get("/capacity/state"))
@@ -244,6 +248,7 @@ function onStreamEvent(me: Ctx | null, block: string): boolean {
 export function stopCapacitySync() {
   if (!ctx) return
   ctx.stopped = true
+  ctx.unguard?.()
   if (ctx.timer) clearTimeout(ctx.timer)
   if (ctx.poll) clearInterval(ctx.poll)
   ctx.stream?.abort()
@@ -285,7 +290,8 @@ export async function poll() {
 function schedule() {
   if (!ctx || !ctx.canWrite) return
   if (ctx.timer) clearTimeout(ctx.timer)
-  ctx.timer = setTimeout(() => void flush(), DEBOUNCE_MS)
+  const c = ctx
+  ctx.timer = setTimeout(() => { c.timer = undefined; void flush() }, DEBOUNCE_MS)
 }
 
 /** Send everything waiting. */

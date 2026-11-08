@@ -20,7 +20,8 @@
 //   server is back.
 import { create } from "zustand"
 
-import { api, type ApiError } from "@/lib/api"
+import { api, type ApiError, tokenStore } from "@/lib/api"
+import { guardLeaving } from "@/lib/leaveGuard"
 import { useWfm } from "@/store/wfm"
 
 export const WORKSPACE_KEYS = [
@@ -92,6 +93,7 @@ interface Running {
   busy: boolean
   again: boolean
   unsubscribe: () => void
+  unguard: () => void
 }
 let running: Running | null = null
 
@@ -153,6 +155,28 @@ async function saveOne(r: Running, key: WorkspaceKey): Promise<"ok" | "conflict"
     }
   }
   return "error"
+}
+
+/** Areas changed here that the server hasn't got yet. */
+const unsaved = (r: Running) => WORKSPACE_KEYS.filter((k) => r.writable.has(k) && fp(local(k)) !== r.snap[k]?.fp)
+
+/** Keepalive requests can carry ~64 KB; bigger areas are saved on the next visit from this browser. */
+const BEACON_MAX = 60_000
+
+/** The page is closing: send what's unsaved with requests that outlive the page. */
+function beacon(r: Running) {
+  const token = tokenStore?.access
+  if (!token || typeof fetch === "undefined") return
+  for (const key of unsaved(r)) {
+    const body = JSON.stringify({ value: local(key), base_version: r.snap[key]?.version ?? 0 })
+    if (body.length > BEACON_MAX) continue
+    void fetch(`${api.defaults.baseURL}/workspace/data/${key}`, {
+      method: "PUT",
+      keepalive: true,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body,
+    }).catch(() => undefined)
+  }
 }
 
 async function push() {
@@ -228,10 +252,16 @@ export async function startWorkspaceSync(): Promise<void> {
     if (useWorkspaceSync.getState().status === "saved" && WORKSPACE_KEYS.some((k) => r.writable.has(k) && fp(st[k]) !== r.snap[k]?.fp))
       setStatus("saving")
     if (r.timer) clearTimeout(r.timer)
-    r.timer = setTimeout(() => void push(), DEBOUNCE_MS)
+    r.timer = setTimeout(() => { r.timer = undefined; void push() }, DEBOUNCE_MS)
   })
-  const r: Running = { snap: loadSnapshot(), writable: new Set(), busy: false, again: false, unsubscribe }
+  const r: Running = { snap: loadSnapshot(), writable: new Set(), busy: false, again: false, unsubscribe, unguard: () => {} }
   running = r
+  // a change made just before leaving the page is still saved
+  r.unguard = guardLeaving({
+    pending: () => running === r && (!!r.timer || r.busy || unsaved(r).length > 0),
+    flush: () => { if (running === r) return flushWorkspace() },
+    beacon: () => { if (running === r) beacon(r) },
+  })
   setStatus("loading")
   await pull(true)
   if (running === r) r.poll = setInterval(() => void pull(false), POLL_MS)
@@ -241,6 +271,7 @@ export function stopWorkspaceSync() {
   const r = running
   if (!r) return
   r.unsubscribe()
+  r.unguard()
   if (r.timer) clearTimeout(r.timer)
   if (r.poll) clearInterval(r.poll)
   running = null
@@ -250,6 +281,7 @@ export function stopWorkspaceSync() {
 /** Save pending changes now (tests; before signing out). */
 export async function flushWorkspace(): Promise<void> {
   if (running?.timer) clearTimeout(running.timer)
+  if (running) running.timer = undefined
   await push()
 }
 

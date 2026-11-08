@@ -264,7 +264,42 @@ export interface Backtest {
   holdoutDow: number
 }
 
+/** Backtests already run: one queue's result only changes with its imported
+ *  actuals (and the day), and running all 12 models takes ~1 s per queue, so
+ *  Reports, Scenario Studio, the Copilot and the store share these. */
+const backtestCache = new Map<string, Backtest>()
+const BACKTEST_CACHE_SIZE = 64
+
+function overlayKey(overlay?: ActualRow[]): string {
+  if (!overlay?.length) return "-"
+  let sum = 0
+  for (const r of overlay) sum += r.volume
+  return `${overlay.length}:${overlay[0].date}:${overlay[overlay.length - 1].date}:${sum}`
+}
+
 export function backtest(queueId: string, overlay?: ActualRow[]): Backtest {
+  const key = `${new Date().toDateString()}|${queueId}|${overlayKey(overlay)}`
+  const hit = backtestCache.get(key)
+  if (hit) return hit
+  const result = runBacktest(queueId, overlay)
+  backtestCache.set(key, result)
+  if (backtestCache.size > BACKTEST_CACHE_SIZE) backtestCache.delete(backtestCache.keys().next().value!)
+  return result
+}
+
+/** Whether a queue's backtest is ready (so pages can show it without waiting). */
+export const backtestReady = (queueId: string, overlay?: ActualRow[]) =>
+  backtestCache.has(`${new Date().toDateString()}|${queueId}|${overlayKey(overlay)}`)
+
+/** Store a backtest calculated elsewhere (the background worker). */
+export function primeBacktest(queueId: string, overlay: ActualRow[] | undefined, result: Backtest) {
+  backtestCache.set(`${new Date().toDateString()}|${queueId}|${overlayKey(overlay)}`, result)
+}
+
+/** The calculation itself, for the background worker (no cache there). */
+export const computeBacktest = (queueId: string, overlay?: ActualRow[]) => runBacktest(queueId, overlay)
+
+function runBacktest(queueId: string, overlay?: ActualRow[]): Backtest {
   const { days, dows, doys } = historyFor(queueId, overlay)
   const L = days.length - 1
   const train = days.slice(0, L)

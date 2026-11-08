@@ -1,5 +1,6 @@
-import { ChevronRight } from "lucide-react"
+import { ChevronRight, Menu, X } from "lucide-react"
 import { useEffect, useState } from "react"
+import { createPortal } from "react-dom"
 import { NavLink, useLocation } from "react-router-dom"
 
 import { PurviLogo } from "@/components/purvi-logo"
@@ -80,21 +81,39 @@ function Section({ group, items, open, active, onToggle }: {
  * underneath (one section at a time); the section of the page you're on is
  * open when you arrive and is marked.
  */
-export function Sidebar({ canSee, footer, lobs }: { canSee: (item: NavItem) => boolean; footer?: React.ReactNode; lobs?: React.ReactNode }) {
+interface SidebarProps {
+  canSee: (item: NavItem) => boolean
+  footer?: React.ReactNode
+  lobs?: React.ReactNode
+}
+
+export function Sidebar({ canSee, footer, lobs, drawer, onClose }: SidebarProps & {
+  /** Inside the small-screen slide-out menu (see MobileNav) instead of the fixed left pane. */
+  drawer?: boolean
+  onClose?: () => void
+}) {
   const { pathname } = useLocation()
   const current = findNav(pathname)?.group.group ?? null
   const [open, setOpen] = useState<string | null>(current)
   useEffect(() => { if (current) setOpen(current) }, [current])
 
   return (
-    <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border/60 bg-gradient-to-b from-card to-background md:flex">
-      <div className="flex h-14 items-center border-b border-border/60 px-5">
+    <aside className={drawer
+      ? "flex h-full w-72 max-w-[85vw] flex-col border-r border-border/60 bg-card shadow-2xl"
+      : "sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border/60 bg-gradient-to-b from-card to-background md:flex"}>
+      <div className="flex h-14 items-center justify-between border-b border-border/60 px-5">
         <div className="flex flex-col gap-0.5">
           <PurviLogo size="sm" orientation="horizontal" />
           <span className="pl-8 text-[8px] font-medium uppercase leading-tight tracking-[0.1em] text-muted-foreground">
             A Product of Purvi Technology
           </span>
         </div>
+        {drawer && (
+          <button type="button" onClick={onClose} aria-label="Close menu"
+            className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
+            <X className="h-5 w-5" />
+          </button>
+        )}
       </div>
 
       <nav aria-label="Main" className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
@@ -122,6 +141,40 @@ export function Sidebar({ canSee, footer, lobs }: { canSee: (item: NavItem) => b
 
       {footer && <div className="m-3 rounded-lg border border-border/60 bg-muted/30 p-3 text-[11px] text-muted-foreground">{footer}</div>}
     </aside>
+  )
+}
+
+/**
+ * Small screens (under 768 px) have no room for the left pane: a menu button in
+ * the top bar opens it as a slide-out drawer. It closes when you pick a page,
+ * tap outside it or press Escape.
+ */
+export function MobileNav(props: SidebarProps) {
+  const [open, setOpen] = useState(false)
+  const { pathname } = useLocation()
+  useEffect(() => { setOpen(false) }, [pathname])
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false) }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [open])
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} aria-label="Open menu" aria-expanded={open}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:hidden">
+        <Menu className="h-5 w-5" />
+      </button>
+      {open && createPortal(
+        <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+          <div className="absolute inset-0 bg-black/50 animate-fade-in" onClick={() => setOpen(false)} />
+          <div className="absolute inset-y-0 left-0 animate-fade-in">
+            <Sidebar {...props} drawer onClose={() => setOpen(false)} />
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
   )
 }
 

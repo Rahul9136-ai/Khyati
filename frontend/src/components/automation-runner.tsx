@@ -1,5 +1,6 @@
 import { useEffect } from "react"
 
+import { warmBacktests } from "@/lib/backtests"
 import { startCrossTabSync } from "@/lib/crossTabSync"
 import { DEMO_RUN_INTERVAL_MS, PIPELINE } from "@/lib/domain/automation"
 import { useWfm } from "@/store/wfm"
@@ -68,6 +69,15 @@ export function AutomationRunner() {
 
   // Other open tabs of the app stay in step with this one.
   useEffect(() => startCrossTabSync(), [])
+
+  // Forecast backtests (~1 s per queue) are worked out in a background worker
+  // soon after the app opens, so Reports and Scenario Studio open at once.
+  const queues = useWfm((s) => s.queues)
+  const importedActuals = useWfm((s) => s.importedActuals)
+  useEffect(() => {
+    const t = window.setTimeout(() => warmBacktests(queues, importedActuals), 1500)
+    return () => window.clearTimeout(t)
+  }, [queues, importedActuals])
 
   // Every LOB and queue keeps a colour of its own (saved data from before, or
   // loaded from the server, may share one): fixed now and whenever they change.

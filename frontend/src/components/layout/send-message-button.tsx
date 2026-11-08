@@ -53,8 +53,8 @@ export function SendMessageButton() {
 
   return (
     <>
-      <Button variant="outline" size="sm" onClick={() => { reset(); setOpen(true) }}>
-        <MessageSquarePlus className="h-4 w-4" /> Send message
+      <Button variant="outline" size="sm" onClick={() => { reset(); setOpen(true) }} title="Send message" aria-label="Send message">
+        <MessageSquarePlus className="h-4 w-4" /> <span className="hidden sm:inline">Send message</span>
       </Button>
 
       <Dialog

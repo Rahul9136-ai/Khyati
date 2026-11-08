@@ -8,7 +8,7 @@ import { CurrentQueue, LobTree } from "@/components/layout/lob-tree"
 import { SaveStatus } from "@/components/layout/save-status"
 import { SchedulePopup } from "@/components/layout/schedule-popup"
 import { SendMessageButton } from "@/components/layout/send-message-button"
-import { Breadcrumb, Sidebar } from "@/components/layout/sidebar"
+import { Breadcrumb, MobileNav, Sidebar } from "@/components/layout/sidebar"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Select } from "@/components/ui/select"
 import { initialsOf } from "@/lib/auth"
@@ -28,18 +28,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const user = useAuth((s) => s.user)
   const logout = useAuth((s) => s.logout)
   const visible = (moduleId: ModuleId) => effectiveLevel(permissions, currentRole, moduleId) !== "none"
+  const navProps = {
+    canSee: (it: { module: ModuleId }) => visible(it.module),
+    footer: <><p className="font-medium text-foreground/80">Purvi.AI</p><p>v0.1 · Erlang-C engine · {METHODS.length} models</p></>,
+    lobs: <LobTree />,
+  }
 
   return (
     <div className="flex min-h-screen bg-background">
-      <Sidebar
-        canSee={(it) => visible(it.module)}
-        footer={<><p className="font-medium text-foreground/80">Purvi.AI</p><p>v0.1 · Erlang-C engine · {METHODS.length} models</p></>}
-        lobs={<LobTree />}
-      />
+      <Sidebar {...navProps} />
 
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-10 flex h-14 items-center gap-3 border-b bg-card/60 px-5 backdrop-blur-xl">
+        <header className="sticky top-0 z-10 flex h-14 items-center gap-1.5 border-b bg-card/60 px-3 backdrop-blur-xl sm:gap-3 sm:px-5">
+          <MobileNav {...navProps} />
           <Breadcrumb />
           <GlobalSearch />
           <div className="flex-1" />

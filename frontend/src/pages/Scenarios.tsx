@@ -5,6 +5,7 @@ import { SeriesChart } from "@/components/charts/series-chart"
 import { ExportButton } from "@/components/export-button"
 import { ExternalFactorsPanel } from "@/components/external-factors-panel"
 import { KpiCard } from "@/components/kpi-card"
+import { BacktestGate } from "@/components/backtest-gate"
 import { PageHeader } from "@/components/page-header"
 import { PermissionGate } from "@/components/permission-gate"
 import { Badge } from "@/components/ui/badge"
@@ -40,7 +41,16 @@ function DeltaChip({ value, suffix = "", goodWhenUp = true }: { value: number; s
   )
 }
 
+/** Scenario Studio: shown once the forecast backtests are ready (they run in the background). */
 export function Scenarios() {
+  return (
+    <BacktestGate title="Scenario Studio" subtitle="Events (past & future) → forecast volume → staffing requirement, in one place">
+      <ScenariosContent />
+    </BacktestGate>
+  )
+}
+
+function ScenariosContent() {
   const {
     queues, forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents,
     scenarios, addScenario, removeScenario,

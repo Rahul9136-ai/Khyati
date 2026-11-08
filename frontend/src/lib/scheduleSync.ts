@@ -16,6 +16,7 @@
 import { create } from "zustand"
 
 import { api, type ApiError } from "@/lib/api"
+import { guardLeaving } from "@/lib/leaveGuard"
 import { agentDay, dayToPatch, type AgentDay } from "@/lib/domain/channels"
 import { localISODate } from "@/lib/domain/horizon"
 import type { LawOverrides } from "@/lib/domain/labourLaw"
@@ -321,8 +322,15 @@ export async function pull(): Promise<void> {
   }
 }
 
+let unguardSchedule: (() => void) | null = null
+
 export async function startScheduleSync(opts: { canWrite: boolean; date?: string }): Promise<void> {
   stopScheduleSync()
+  // a change made just before leaving the page is still saved
+  unguardSchedule = guardLeaving({
+    pending: () => useScheduleSync.getState().status === "saving",
+    flush: () => flush(),
+  })
   const date = opts.date ?? useWfm.getState().scheduleDate
   const prev = loadSnapshot(date)
   running = {
@@ -418,6 +426,8 @@ export async function startScheduleSync(opts: { canWrite: boolean; date?: string
 }
 
 export function stopScheduleSync() {
+  unguardSchedule?.()
+  unguardSchedule = null
   if (!running) return
   running.unsubscribe()
   if (running.timer) clearTimeout(running.timer)

@@ -14,6 +14,7 @@
 import { create } from "zustand"
 
 import { api, type ApiError } from "@/lib/api"
+import { guardLeaving } from "@/lib/leaveGuard"
 import { parseWorkRulePatternId } from "@/lib/domain/workRules"
 import { useWfm, type ServerSettings } from "@/store/wfm"
 
@@ -77,7 +78,7 @@ function saveSnapshot(s: Snapshot) {
   }
 }
 
-let running: { canWrite: boolean; snap: Snapshot; timer?: ReturnType<typeof setTimeout>; poll?: ReturnType<typeof setInterval>; unsubscribe: () => void } | null = null
+let running: { canWrite: boolean; snap: Snapshot; timer?: ReturnType<typeof setTimeout>; poll?: ReturnType<typeof setInterval>; unsubscribe: () => void; unguard?: () => void } | null = null
 
 const isNetwork = (e: unknown) => !(e as ApiError)?.status
 
@@ -156,9 +157,12 @@ export async function startSettingsSync(opts: { canWrite: boolean }): Promise<vo
     if (!r || !r.canWrite) return
     if (s.workRules === p.workRules && s.workCompliance === p.workCompliance && s.shiftPatterns === p.shiftPatterns && s.agents === p.agents) return
     if (r.timer) clearTimeout(r.timer)
-    r.timer = setTimeout(() => void push(KEYS), DEBOUNCE_MS)
+    r.timer = setTimeout(() => { r.timer = undefined; void push(KEYS) }, DEBOUNCE_MS)
   })
   running = { canWrite: opts.canWrite, snap, unsubscribe }
+  const me = running
+  // a change made just before leaving the page is still saved
+  me.unguard = guardLeaving({ pending: () => running === me && !!me.timer, flush: () => { if (running === me && me.timer) return flushSettings() } })
   setStatus("loading")
   await pull(true)
   if (running) running.poll = setInterval(() => void pull(false), POLL_MS)
@@ -167,6 +171,7 @@ export async function startSettingsSync(opts: { canWrite: boolean }): Promise<vo
 export function stopSettingsSync() {
   if (!running) return
   running.unsubscribe()
+  running.unguard?.()
   if (running.timer) clearTimeout(running.timer)
   if (running.poll) clearInterval(running.poll)
   running = null
@@ -176,5 +181,6 @@ export function stopSettingsSync() {
 /** Save pending changes now (e.g. before a test asserts). */
 export async function flushSettings(): Promise<void> {
   if (running?.timer) clearTimeout(running.timer)
+  if (running) running.timer = undefined
   await push(KEYS)
 }

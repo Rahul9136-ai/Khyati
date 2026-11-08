@@ -3,6 +3,7 @@ import { useMemo, useState } from "react"
 import { SeriesChart } from "@/components/charts/series-chart"
 import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
+import { BacktestGate } from "@/components/backtest-gate"
 import { PageHeader } from "@/components/page-header"
 import { PerformanceReports } from "@/components/performance-reports"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -31,7 +32,16 @@ const REPORTS = [
 
 const PREVIEW_ROWS = 10
 
+/** Reports & KPIs: shown once the forecast backtests are ready (they run in the background). */
 export function Reports() {
+  return (
+    <BacktestGate title="Reports & KPIs" subtitle="Centre-wide analytics across all queues">
+      <ReportsContent />
+    </BacktestGate>
+  )
+}
+
+function ReportsContent() {
   const { forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents, rta, queues } = useWfm()
 
   const [gran, setGran] = useState<ReportGran>("day")
