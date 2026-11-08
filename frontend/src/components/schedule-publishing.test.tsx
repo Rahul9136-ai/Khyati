@@ -84,13 +84,16 @@ describe("schedule change pop-up", () => {
 })
 
 describe("3-month overview", () => {
-  it("draws the next 3 months 4 weeks at a time, published vs draft, and opens a day on click", async () => {
+  it("draws the past 12 weeks and next 3 months 4 weeks at a time, published vs draft, and opens a day on click", async () => {
+    const lastMonth = addDays(today, -10)
     get.mockResolvedValue({ data: { data: [
       { plan_date: tomorrow, agent_key: a01.id, agent_name: a01.name, team: a01.team, shift_start: 9 * 60, shift_end: 17 * 60 + 30, ot_minutes: 60, activities: ["meeting"], version: 2, published: true },
+      { plan_date: lastMonth, agent_key: a01.id, agent_name: a01.name, team: a01.team, shift_start: 8 * 60, shift_end: 16 * 60 + 30, ot_minutes: 0, activities: [], version: 1, published: true },
     ] } })
     const onOpen = vi.fn()
     renderWith(<ScheduleOverview agents={[a01, a02]} onOpenDate={onOpen} />)
-    const { start, end } = scheduleHorizon(today)
+    const { end } = scheduleHorizon(today)
+    const start = addDays(today, -12 * 7)
     expect(get).toHaveBeenCalledWith("/scheduling/day-plans", { params: { start, end } })
 
     // ~190 cells: allow for a slow role query when the whole suite runs in parallel.
@@ -104,21 +107,33 @@ describe("3-month overview", () => {
     const draft = () => screen.getAllByRole("button", { name: new RegExp(`^${a02.name} · .* · 07:00–15:30 · draft$`) })
     expect(draft()).toHaveLength(28) // the first 4 weeks, not all ~13 at once
     const total = Math.ceil(datesBetween(start, end).length / 7)
-    expect(screen.getByText(`· weeks 1–4 of ${total}`)).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /Previous 4 weeks/ })).toBeDisabled()
+    // opens on the 4 weeks from today (weeks 13–16: twelve past weeks come first)
+    expect(screen.getByText(`· weeks 13–16 of ${total}`)).toBeInTheDocument()
 
     // Step through the horizon and back.
     fireEvent.click(screen.getByRole("button", { name: /Next 4 weeks/ }))
-    expect(screen.getByText(`· weeks 5–8 of ${total}`)).toBeInTheDocument()
+    expect(screen.getByText(`· weeks 17–20 of ${total}`)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: `Open ${fmtDay(addDays(today, 28))}` })).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: `Open ${fmtDay(tomorrow)}` })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "This week" }))
+    expect(screen.getByText(`· weeks 13–16 of ${total}`)).toBeInTheDocument()
+
+    // Look back: past days show what was saved then; nothing is made up for the rest.
+    fireEvent.click(screen.getByRole("button", { name: /Previous 4 weeks/ }))
+    expect(screen.getByText(`· weeks 9–12 of ${total}`)).toBeInTheDocument()
+    expect(screen.getByText(/Past days show what was saved then/)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: new RegExp(`^${a01.name} · .* · 08:00–16:30 · published$`) })).toBeInTheDocument()
+    expect(screen.queryAllByRole("button", { name: new RegExp(`^${a02.name} · .* · draft$`) })).toHaveLength(0)
+    fireEvent.click(screen.getByRole("button", { name: /Previous 4 weeks/ }))
+    fireEvent.click(screen.getByRole("button", { name: /Previous 4 weeks/ }))
     expect(screen.getByText(`· weeks 1–4 of ${total}`)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Previous 4 weeks/ })).toBeDisabled()
+    fireEvent.click(screen.getByRole("button", { name: "This week" }))
 
     // Paging redraws the cells — find it again.
     fireEvent.click(screen.getByRole("button", { name: published.getAttribute("aria-label")! }))
     expect(onOpen).toHaveBeenCalledWith(tomorrow)
-    fireEvent.click(screen.getByRole("button", { name: /Schedules — next 3 months/ })) // collapses
+    fireEvent.click(screen.getByRole("button", { name: /Schedules — past 12 weeks and next 3 months/ })) // collapses
     expect(screen.queryByRole("table")).not.toBeInTheDocument()
   })
 
@@ -186,6 +201,24 @@ describe("date bar", () => {
     expect(post).toHaveBeenCalledWith("/scheduling/day-plans/publish", { start: today, end: today, note: "" })
   })
 
+  it("flags changes to published schedules until they're published, then reports them as updated", async () => {
+    useScheduleSync.setState({ serverAgents: Object.fromEntries(AGENTS.map((a, i) => [a.id, { published: true, changed: i < 2 }])) })
+    get.mockResolvedValue({ data: { data: [] } })
+    post.mockImplementation(async (url: string) => (url.endsWith("/fill")
+      ? { data: { data: { created: 0, existing: 0 } } }
+      : { data: { data: { start: today, end: today, days: 1, agents: AGENTS.length, published: 0, updated: 2, unchanged: AGENTS.length - 2, notified: 3 } } }))
+    renderWith(<ScheduleDateBar canPublish />)
+    expect(screen.getByText("2 changes not published")).toHaveAttribute("title", expect.stringMatching(/one notification/))
+
+    fireEvent.click(screen.getByRole("button", { name: "Publish" }))
+    const dialog = screen.getByRole("dialog")
+    expect(within(dialog).getByText(/wait until you publish again; then each agent and their team leader get one notification/)).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByLabelText(/^This day/))
+    fireEvent.click(within(dialog).getByRole("button", { name: "Publish" }))
+    expect(await within(dialog).findByText(/agent-days published/)).toHaveTextContent(`· 2 updated with your changes · ${AGENTS.length - 2} already published, unchanged`)
+    expect(within(dialog).getByText("3 agent/team-leader logins notified.")).toBeInTheDocument()
+  })
+
   it("hides Publish from people who can't publish", () => {
     renderWith(<ScheduleDateBar canPublish={false} />)
     expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument()
@@ -227,7 +260,7 @@ describe("date bar", () => {
     get.mockImplementation(async (url: string) => ({ data: { data: url.endsWith("/schedule_horizon") ? { key: "schedule_horizon", value: { through }, version: 1 } : [] } }))
     renderWith(<ScheduleDateBar canPublish />)
     await waitFor(() => expect(screen.getByLabelText("Schedule date")).toHaveAttribute("max", through))
-    expect(screen.getByText(/^Generated through/)).toBeInTheDocument()
+    expect(screen.getByText(/^Past year and generated through/)).toBeInTheDocument()
   })
 
   it("hides Generate from people who can't edit schedules", () => {

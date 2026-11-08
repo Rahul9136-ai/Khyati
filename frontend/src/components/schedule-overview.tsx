@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { ACTIVITY_BY_ID, fmtHM, shiftBounds } from "@/lib/domain/channels"
 import { employedOn } from "@/lib/domain/employeeProfile"
-import { datesBetween, fmtDay, isWeekend, localISODate, parseISODate, scheduleHorizon } from "@/lib/domain/horizon"
+import { addDays, datesBetween, fmtDay, isWeekend, localISODate, parseISODate, scheduleHorizon } from "@/lib/domain/horizon"
 import type { Agent } from "@/lib/domain/types"
 import { fetchRange, useScheduleHorizon, type DaySummary } from "@/lib/schedulePublish"
 import { useScheduleSync } from "@/lib/scheduleSync"
@@ -38,13 +38,27 @@ function windowStartFor(dates: string[], date: string): number {
   return i < 0 ? 0 : Math.floor(i / WINDOW_DAYS) * WINDOW_DAYS
 }
 
+/** Weeks of history the overview shows before today (whole 4-week pages, so a
+ *  page starts on today); fewer when the generated horizon is very long, so the
+ *  whole range stays within one server request (380 days). */
+export const PAST_WEEKS = 12
+const MAX_RANGE_DAYS = 380
+function pastDays(today: string, end: string): number {
+  const ahead = datesBetween(today, end).length
+  const room = Math.max(0, MAX_RANGE_DAYS - ahead)
+  return Math.min(PAST_WEEKS * 7, Math.floor(room / WINDOW_DAYS) * WINDOW_DAYS)
+}
+
 /** Every agent's shift for every day of the next 3 months (or as far as
  *  schedules have been generated): published days are solid, drafts dashed. Click a day (or a cell) to open it on the timeline. */
 export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOpenDate: (date: string) => void }) {
   const [open, setOpen] = useState(true)
   const today = localISODate()
-  const { start, end } = useScheduleHorizon()
+  const { end } = useScheduleHorizon()
   const extended = end !== scheduleHorizon(today).end
+  // History too: past days show what was saved (and published) then.
+  const back = pastDays(today, end)
+  const start = addDays(today, -back)
   const allDates = useMemo(() => datesBetween(start, end), [start, end])
   // Four weeks on screen at a time: a long generated horizon (up to 52 weeks ×
   // every agent) drawn at once froze the page for seconds.
@@ -92,6 +106,10 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
           continue
         }
         const srv = byKey.get(key)
+        if (date < today && !srv && !(date === scheduleDate && serverAgents?.[a.id])) {
+          out.set(key, null) // a past day nobody saved: there's no record, so nothing is made up
+          continue
+        }
         if (date === scheduleDate) {
           // The selected day comes from the live timeline so edits show at once.
           const [s, e] = shiftBounds(a)
@@ -113,7 +131,7 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
       }
     }
     return out
-  }, [dates, agents, server, scheduleDate, dayStore, shiftPatterns, overtimePlan, activityPlan, serverAgents, canWrite, online, roster, breakOverrides, channelPlan, outside])
+  }, [dates, agents, server, scheduleDate, dayStore, shiftPatterns, overtimePlan, activityPlan, serverAgents, canWrite, online, roster, breakOverrides, channelPlan, outside, today])
 
   // Days off / leave / absence per agent and in total over the period.
   const counts = useMemo(() => {
@@ -153,7 +171,7 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
         onClick={() => setOpen((v) => !v)}
       >
         {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-        <span className="font-semibold">Schedules — {extended ? `through ${fmtDay(end)}` : "next 3 months"}</span>
+        <span className="font-semibold">Schedules — {back ? `past ${back / 7} weeks and ` : ""}{extended ? `through ${fmtDay(end)}` : "next 3 months"}</span>
         <span className="text-xs text-muted-foreground">
           {fmtDay(start)} – {fmtDay(end)} · {allDates.length} days · {agents.length} agents
         </span>
@@ -185,10 +203,11 @@ export function ScheduleOverview({ agents, onOpenDate }: { agents: Agent[]; onOp
               Next 4 weeks <ChevronRight className="h-3.5 w-3.5" />
             </Button>
             {windows > 1 && (
-              <Button variant="ghost" size="sm" className="h-7" disabled={first === 0} onClick={() => setOffset(0)}>
+              <Button variant="ghost" size="sm" className="h-7" disabled={first === back} onClick={() => setOffset(back)}>
                 This week
               </Button>
             )}
+            {dates[0] < today && <span className="text-muted-foreground">Past days show what was saved then (view only).</span>}
           </div>
           <div className="max-h-[420px] overflow-auto rounded-md border">
             <table className="border-separate border-spacing-0 text-[10px]">

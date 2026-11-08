@@ -18,6 +18,7 @@ import { Forecasting } from "@/pages/Forecasting"
 import { HcTracker } from "@/pages/HcTracker"
 import { Help } from "@/pages/Help"
 import { Intraday } from "@/pages/Intraday"
+import { Legends } from "@/pages/Legends"
 import { Planning } from "@/pages/Planning"
 import { Pto } from "@/pages/Pto"
 import { Reports } from "@/pages/Reports"
@@ -53,6 +54,7 @@ export default function App() {
         <Route path="/automation" element={<RoleGuard module="automation"><Automation /></RoleGuard>} />
         <Route path="/autonomy" element={<RoleGuard module="automation"><Autonomy /></RoleGuard>} />
         <Route path="/help" element={<RoleGuard module="help"><Help /></RoleGuard>} />
+        <Route path="/legends" element={<RoleGuard module="help"><Legends /></RoleGuard>} />
         <Route path="/employees" element={<RoleGuard module="employees"><Employees /></RoleGuard>} />
         <Route path="/employees/:id" element={<RoleGuard module="employees"><EmployeeProfile /></RoleGuard>} />
         <Route path="/hc-tracker" element={<RoleGuard module="employees"><HcTracker /></RoleGuard>} />

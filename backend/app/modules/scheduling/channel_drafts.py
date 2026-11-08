@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import UTC, date, datetime
+from datetime import date
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -140,7 +140,7 @@ async def publish(
     applied = 0
     stale: list[dict] = []
     newly_published: list[DaySchedulePlan] = []
-    now = datetime.now(UTC)
+    changed_days: list[tuple[DaySchedulePlan, str]] = []
     for plan_date, items in sorted(by_date.items()):
         rows = {
             r.agent_key: r
@@ -182,14 +182,17 @@ async def publish(
         stale += [
             {"agent_key": s["agent_key"], "reason": f"{plan_date}: {s['reason']}"} for s in skipped
         ]
-        for r in saved:
-            if r.published_at is None:
-                r.published_at, r.published_by = now, actor.id
-                newly_published.append(r)
+        first_time, republished = days.mark_published(saved, actor)
+        newly_published.extend(first_time)
+        changed_days.extend(republished)
     await db.execute(delete(ChannelPlanDraft).where(*_in_range(org_id, body.start, body.end)))
     await db.flush()
-    notified = await schedule_notify.notify_published(db, org_id, newly_published, actor=actor)
-    await events.schedule_published(db, org_id, body.start, body.end, newly_published)
+    notified = await schedule_notify.notify_publish(
+        db, org_id, newly_published, changed_days, actor=actor
+    )
+    await events.schedule_published(
+        db, org_id, body.start, body.end, [*newly_published, *(r for r, _ in changed_days)]
+    )
     await record_audit(
         db,
         actor=actor,

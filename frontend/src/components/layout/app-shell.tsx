@@ -1,9 +1,10 @@
 import { LogOut } from "lucide-react"
 
+import { ChangePasswordButton } from "@/components/layout/change-password"
 import { GlobalSearch } from "@/components/layout/global-search"
 import { MessagePopup } from "@/components/layout/message-popup"
 import { NotificationsBell } from "@/components/layout/notifications-bell"
-import { QueuePicker } from "@/components/layout/queue-picker"
+import { CurrentQueue, LobTree } from "@/components/layout/lob-tree"
 import { SaveStatus } from "@/components/layout/save-status"
 import { SchedulePopup } from "@/components/layout/schedule-popup"
 import { SendMessageButton } from "@/components/layout/send-message-button"
@@ -33,6 +34,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Sidebar
         canSee={(it) => visible(it.module)}
         footer={<><p className="font-medium text-foreground/80">Purvi.AI</p><p>v0.1 · Erlang-C engine · {METHODS.length} models</p></>}
+        lobs={<LobTree />}
       />
 
       {/* Main */}
@@ -41,7 +43,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Breadcrumb />
           <GlobalSearch />
           <div className="flex-1" />
-          <QueuePicker />
+          <CurrentQueue />
           {user?.is_superuser && (
             <div className="hidden lg:block" title="Superuser: simulate any designation to preview access">
               <Select
@@ -78,6 +80,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <p className="max-w-[140px] truncate text-xs font-medium">{user.full_name || user.email}</p>
                 <p className="text-[10px] text-muted-foreground">{currentRole}</p>
               </div>
+              <ChangePasswordButton />
               <button
                 onClick={() => void logout()}
                 className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"

@@ -11,21 +11,26 @@ import { Dialog } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import type { Agent } from "@/lib/domain/types"
 import { cn } from "@/lib/utils"
+import { colourName, nextFreeColour, USER_PALETTE } from "@/lib/domain/colours"
+import { effectiveLobs } from "@/lib/domain/lob"
 import { useWfm } from "@/store/wfm"
 
 const ORDINAL = ["1st", "2nd", "3rd", "4th", "5th"]
 const ordinal = (rank: number) => ORDINAL[rank] ?? `${rank + 1}th`
 
-const COLOR_PRESETS = ["#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#06b6d4", "#d946ef", "#84cc16", "#f472b6"]
 
 export function Skills() {
   const { agents, queues, addQueue } = useWfm()
+  const lobs = useWfm((s) => s.lobs)
+  // colours nobody uses yet (each LOB / queue has its own)
+  const used = useMemo(() => new Set([...effectiveLobs(lobs), ...queues].map((x) => x.color.toLowerCase())), [lobs, queues])
+  const free = useMemo(() => USER_PALETTE.filter((c) => !used.has(c.hex.toLowerCase())), [used])
   const [editing, setEditing] = useState<Agent | null>(null)
 
   // add-skill form state
   const [open, setOpen] = useState(false)
   const [name, setName] = useState("")
-  const [color, setColor] = useState(COLOR_PRESETS[0])
+  const [color, setColor] = useState(() => nextFreeColour([...queues.map((q) => q.color)]))
   const [aht, setAht] = useState(300)
   const [slTarget, setSlTarget] = useState(80)
   const [targetTime, setTargetTime] = useState(20)
@@ -43,7 +48,7 @@ export function Skills() {
 
   function resetForm() {
     setName("")
-    setColor(COLOR_PRESETS[queues.length % COLOR_PRESETS.length])
+    setColor(nextFreeColour([...effectiveLobs(lobs), ...queues].map((x) => x.color)))
     setAht(300)
     setSlTarget(80)
     setTargetTime(20)
@@ -179,16 +184,19 @@ export function Skills() {
           </label>
 
           <div>
-            <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Colour</span>
+            <span className="mb-1.5 block text-xs font-medium text-muted-foreground">
+              Colour: <span className="text-foreground">{colourName(color)}</span> <span className="text-muted-foreground/70">(only colours no other LOB, queue or segment uses)</span>
+            </span>
             <div className="flex flex-wrap gap-2">
-              {COLOR_PRESETS.map((c) => (
+              {free.map((c) => (
                 <button
-                  key={c}
+                  key={c.hex}
                   type="button"
-                  onClick={() => setColor(c)}
-                  className={cn("h-7 w-7 rounded-full ring-offset-2 ring-offset-card transition-shadow", color === c && "ring-2 ring-foreground")}
-                  style={{ background: c }}
-                  aria-label={`Colour ${c}`}
+                  onClick={() => setColor(c.hex)}
+                  className={cn("h-7 w-7 rounded-full ring-offset-2 ring-offset-card transition-shadow", color === c.hex && "ring-2 ring-foreground")}
+                  style={{ background: c.hex }}
+                  title={c.name}
+                  aria-label={`Colour ${c.name}`}
                 />
               ))}
             </div>

@@ -13,7 +13,7 @@ export type SlotKind = "vto" | "pto" | "ot" | "leave"
 export const SLOT_KINDS: { id: SlotKind; label: string; long: string; color: string }[] = [
   { id: "vto", label: "VTO", long: "Voluntary time off (unpaid)", color: "#0f766e" },
   { id: "pto", label: "PTO", long: "Paid time off", color: "#4f46e5" },
-  { id: "ot", label: "OT", long: "Overtime", color: "#d97706" },
+  { id: "ot", label: "OT", long: "Overtime", color: "#ea580c" },
   { id: "leave", label: "Leave", long: "Full-day leave", color: "#c026d3" },
 ]
 export const SLOT_KIND_BY_ID = Object.fromEntries(SLOT_KINDS.map((k) => [k.id, k])) as Record<SlotKind, (typeof SLOT_KINDS)[number]>

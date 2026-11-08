@@ -80,7 +80,7 @@ function Section({ group, items, open, active, onToggle }: {
  * underneath (one section at a time); the section of the page you're on is
  * open when you arrive and is marked.
  */
-export function Sidebar({ canSee, footer }: { canSee: (item: NavItem) => boolean; footer?: React.ReactNode }) {
+export function Sidebar({ canSee, footer, lobs }: { canSee: (item: NavItem) => boolean; footer?: React.ReactNode; lobs?: React.ReactNode }) {
   const { pathname } = useLocation()
   const current = findNav(pathname)?.group.group ?? null
   const [open, setOpen] = useState<string | null>(current)
@@ -98,6 +98,7 @@ export function Sidebar({ canSee, footer }: { canSee: (item: NavItem) => boolean
       </div>
 
       <nav aria-label="Main" className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+        {lobs && <div className="mb-3 border-b border-border/60 pb-2">{lobs}</div>}
         <p className="px-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/60">Menu</p>
         {NAV.map((g) => {
           const items = g.items.filter(canSee)

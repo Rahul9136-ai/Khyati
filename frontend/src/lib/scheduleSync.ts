@@ -33,9 +33,10 @@ interface SyncState {
   planDate: string | null
   /** Whether this session saves to the server (the server's schedule:write). */
   canWrite: boolean
-  /** Agents the server has a day for on `planDate`, and whether it's published.
-   *  null until loaded. For view-only users these are the published days only. */
-  serverAgents: Record<string, { published: boolean }> | null
+  /** Agents the server has a day for on `planDate`, whether it's published, and
+   *  whether it was changed since (waiting for the next publish). null until
+   *  loaded. For view-only users these are the published days only. */
+  serverAgents: Record<string, { published: boolean; changed?: boolean }> | null
 }
 
 export const useScheduleSync = create<SyncState>(() => ({
@@ -47,7 +48,7 @@ const setSync = (patch: Partial<SyncState>) => useScheduleSync.setState(patch)
 function noteServerRows(rows: ServerDayPlan[], replace: boolean) {
   const prev = replace ? {} : (useScheduleSync.getState().serverAgents ?? {})
   setSync({
-    serverAgents: { ...prev, ...Object.fromEntries(rows.map((r) => [r.agent_key, { published: !!r.published_at }])) },
+    serverAgents: { ...prev, ...Object.fromEntries(rows.map((r) => [r.agent_key, { published: !!r.published_at, changed: !!r.unpublished_changes }])) },
   })
 }
 
@@ -67,6 +68,8 @@ export interface ServerDayPlan {
   team_lead?: string
   version?: number
   published_at?: string | null
+  /** Published, and edited since: the edit reaches agents at the next publish. */
+  unpublished_changes?: boolean
 }
 
 /** An agent's current day as the backend stores it (deterministic key order,
@@ -275,6 +278,13 @@ async function push(plans: ServerDayPlan[], detail: string) {
 export async function flush(): Promise<void> {
   if (!running || !running.canWrite) return
   const r = running
+  if (r.date < localISODate()) {
+    // Past days are view only: they're the record of what happened.
+    if (r.timer) clearTimeout(r.timer)
+    r.timer = null
+    if (useScheduleSync.getState().status === "saving") setSync({ status: "synced" })
+    return
+  }
   if (r.timer) clearTimeout(r.timer)
   r.timer = null
   if (r.saving) await r.saving
@@ -349,10 +359,13 @@ export async function startScheduleSync(opts: { canWrite: boolean; date?: string
   const toPush: ServerDayPlan[] = []
   const toApply: ServerDayPlan[] = []
   let overridden = 0
+  // A past day is a record: what the server has is what happened. Defaults for
+  // agents it has nothing for are never uploaded as if they'd been the schedule.
+  const past = date < localISODate()
   for (const [key, plan] of local) {
     const srv = server.get(key)
     if (!srv) {
-      toPush.push(plan)
+      if (!past) toPush.push(plan)
       continue
     }
     const offlineEdit = prev?.synced[key] !== undefined && prev.synced[key] !== fingerprint(plan)
@@ -384,7 +397,7 @@ export async function startScheduleSync(opts: { canWrite: boolean; date?: string
       s.agents === p.agents && s.breakOverrides === p.breakOverrides && s.channelPlan === p.channelPlan &&
       s.overtimePlan === p.overtimePlan && s.activityPlan === p.activityPlan && s.shiftPatterns === p.shiftPatterns
     ) return
-    if (!r.canWrite) return
+    if (!r.canWrite || r.date < localISODate()) return // past days are view only
     if (r.timer) clearTimeout(r.timer)
     setSync({ status: "saving", message: null })
     r.timer = setTimeout(() => void flush(), SAVE_DEBOUNCE_MS)
@@ -394,7 +407,7 @@ export async function startScheduleSync(opts: { canWrite: boolean; date?: string
   }, POLL_MS)
 
   if (pushLaw && r.canWrite) await pushLabourLaw()
-  if (r.canWrite && toPush.length) {
+  if (r.canWrite && toPush.length && !past) {
     await push(toPush, rows.length ? "Uploaded schedules missing on the server" : "Initial upload of the day's schedules")
   } else {
     setSync({ status: r.canWrite ? "synced" : "readonly", lastSyncedAt: Date.now() })

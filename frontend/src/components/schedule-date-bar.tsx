@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { CalendarDays, CalendarPlus, CheckCircle2, ChevronLeft, ChevronRight, Loader2, Send } from "lucide-react"
+import { CalendarDays, CalendarPlus, CheckCircle2, ChevronLeft, ChevronRight, History, Loader2, Send } from "lucide-react"
 import { useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
@@ -12,9 +12,9 @@ import { switchScheduleDate, useScheduleSync } from "@/lib/scheduleSync"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
 
-/** How far back the date picker goes (the rest of the range is the next 3 months,
- *  or as far as schedules have been generated). */
-export const LOOK_BACK_DAYS = 14
+/** How far back the date picker goes: past days can be looked at (view only)
+ *  for a year. Ahead it's the next 3 months, or as far as schedules are generated. */
+export const LOOK_BACK_DAYS = 365
 
 /** Pick the day shown on the Scheduling page (within the scheduling window),
  *  see whether it's published, generate future weeks and publish schedules to agents. */
@@ -31,6 +31,7 @@ export function ScheduleDateBar({ canPublish }: { canPublish: boolean }) {
   const go = (d: string) => void switchScheduleDate(d < min ? min : d > horizon.end ? horizon.end : d)
   const online = status !== "idle" && status !== "offline" && serverAgents !== null
   const published = serverAgents ? Object.values(serverAgents).filter((a) => a.published).length : 0
+  const pending = serverAgents ? Object.values(serverAgents).filter((a) => a.published && a.changed).length : 0
 
   return (
     <div className="glass mb-4 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2">
@@ -52,7 +53,12 @@ export function ScheduleDateBar({ canPublish }: { canPublish: boolean }) {
       </Button>
       <Button variant="ghost" size="sm" className="h-8 text-xs" disabled={date === today} onClick={() => go(today)}>Today</Button>
       <span className="text-sm font-semibold">{fmtDayLong(date)}</span>
-      {online && canWrite && (
+      {date < today && (
+        <Badge variant="secondary" title="Past days show the schedules saved for them and can't be changed">
+          <History className="h-3 w-3" /> Past · view only
+        </Badge>
+      )}
+      {online && canWrite && date >= today && (
         published === 0 ? (
           <Badge variant="warning" title="Agents, team leaders and operations can't see this day until it's published">Draft</Badge>
         ) : published >= agentCount ? (
@@ -61,9 +67,14 @@ export function ScheduleDateBar({ canPublish }: { canPublish: boolean }) {
           <Badge variant="warning" title="Some agents' schedules for this day aren't published yet">Published for {published}/{agentCount}</Badge>
         )
       )}
+      {online && canWrite && pending > 0 && date >= today && (
+        <Badge variant="warning" title="You changed these agents' published schedules. They still see the old version; publish to send the change. Each agent and their team leader get one notification.">
+          {pending} change{pending === 1 ? "" : "s"} not published
+        </Badge>
+      )}
       {online && !canWrite && <Badge variant="secondary">Published schedules</Badge>}
       <span className="ml-auto text-xs text-muted-foreground">
-        {extended ? "Generated through" : "Next 3 months"}: {fmtDay(horizon.start)} – {fmtDay(horizon.end)}
+        Past year and {extended ? "generated through" : "next 3 months"}: {fmtDay(min)} – {fmtDay(horizon.end)}
       </span>
       {canWrite && (
         <Button
@@ -251,7 +262,7 @@ function PublishDialog({ date, initial, onClose }: { date: string; initial?: { s
       open
       onClose={step ? () => {} : onClose}
       title="Publish schedules"
-      description="Once published, agents see their own schedule and team leaders and operations see the team's. Every later change pops up on their screens."
+      description="Once published, agents see their own schedule and team leaders and operations see the team's. Changes you make afterwards wait until you publish again; then each agent and their team leader get one notification with what changed."
       footer={
         result ? (
           <Button onClick={onClose}>Done</Button>
@@ -272,7 +283,8 @@ function PublishDialog({ date, initial, onClose }: { date: string; initial?: { s
           </p>
           <p>
             {result.published.toLocaleString()} agent-day{result.published === 1 ? "" : "s"} published ({result.days} day{result.days === 1 ? "" : "s"} · {result.agents} agent{result.agents === 1 ? "" : "s"})
-            {result.unchanged > 0 && ` · ${result.unchanged.toLocaleString()} already published`}
+            {(result.updated ?? 0) > 0 && ` · ${result.updated!.toLocaleString()} updated with your changes`}
+            {result.unchanged > 0 && ` · ${result.unchanged.toLocaleString()} already published, unchanged`}
           </p>
           {result.created > 0 && <p className="text-muted-foreground">{result.created.toLocaleString()} schedules nobody had opened were created from their shift patterns first.</p>}
           <p className="text-muted-foreground">
@@ -299,7 +311,7 @@ function PublishDialog({ date, initial, onClose }: { date: string; initial?: { s
           )}
           <Input placeholder="Note for the audit log (optional)" value={note} maxLength={255} onChange={(e) => setNote(e.target.value)} />
           <p className="text-xs text-muted-foreground">
-            Days nobody has opened yet are published as their shift-pattern defaults. Days already published stay as they are; edits to them are live for agents straight away.
+            Days nobody has opened yet are published as their shift-pattern defaults. Days already published are sent again only if you changed them; agents see those changes once you publish.
           </p>
           {step && <p role="status" className="flex items-center gap-1.5 text-xs text-primary"><Loader2 className="h-3 w-3 animate-spin" /> {step}</p>}
           {error && <p role="alert" className="text-xs text-destructive">✕ {error}</p>}

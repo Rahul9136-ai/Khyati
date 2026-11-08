@@ -96,3 +96,28 @@ describe("Scheduling sub-tabs", () => {
     expect(screen.getByRole("tab", { name: "My schedule" })).toHaveAttribute("aria-selected", "true")
   })
 })
+
+describe("past days", () => {
+  it("are view only and show just the schedules saved for that day", () => {
+    const [a, b] = AGENTS
+    const yesterday = new Date(Date.now() - 86_400_000)
+    const past = localISODate(yesterday)
+    useWfm.setState({ scheduleDate: past })
+    useScheduleSync.setState({ status: "synced", canWrite: true, planDate: past, serverAgents: { [a.id]: { published: true } } })
+    renderPage()
+    expect(screen.getByRole("note")).toHaveTextContent(/Past day, view only: showing the schedule saved for .* \(1 agent\)/)
+    expect(screen.getAllByText(a.name).length).toBeGreaterThan(0)
+    expect(screen.queryByText(b.name)).not.toBeInTheDocument() // nothing saved for them: not made up
+    expect(screen.queryByRole("button", { name: /Optimise breaks/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /Auto-schedule/ })).not.toBeInTheDocument()
+    expect(screen.getAllByText("Past · view only").length).toBeGreaterThan(0)
+  })
+
+  it("say so when nothing was saved that day", () => {
+    const past = localISODate(new Date(Date.now() - 3 * 86_400_000))
+    useWfm.setState({ scheduleDate: past })
+    useScheduleSync.setState({ status: "synced", canWrite: true, planDate: past, serverAgents: {} })
+    renderPage()
+    expect(screen.getByText(/No schedule was saved for/)).toBeInTheDocument()
+  })
+})

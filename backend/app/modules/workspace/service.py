@@ -40,6 +40,7 @@ KEYS: dict[str, tuple[str, ...] | None] = {
     "permissions": ("admin:roles",),
     # demand
     "queues": ("admin:org", "forecast:write", "plan:write", "planning:write"),
+    "lobs": ("admin:org", "forecast:write", "plan:write", "planning:write"),
     "forecasts": ("forecast:write",),
     "forecastMethod": ("forecast:write",),
     "importedActuals": ("forecast:write",),

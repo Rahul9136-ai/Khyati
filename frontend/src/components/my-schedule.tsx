@@ -1,12 +1,14 @@
 import { useQuery } from "@tanstack/react-query"
+import { useState } from "react"
 import { CalendarCheck } from "lucide-react"
 
 import { ExportButton } from "@/components/export-button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { api } from "@/lib/api"
 import { lanes } from "@/lib/domain/channelPlanner"
 import { ACTIVITY_BY_ID, CHANNEL_BY_ID, fmtHM } from "@/lib/domain/channels"
-import { fmtDay, localISODate, scheduleHorizon, weekStart } from "@/lib/domain/horizon"
+import { addDays, datesBetween, fmtDay, localISODate, scheduleHorizon, weekStart } from "@/lib/domain/horizon"
 import type { Row } from "@/lib/export"
 import { dayStatus } from "@/lib/performanceReport"
 import { useScheduleHorizon } from "@/lib/schedulePublish"
@@ -42,11 +44,12 @@ export function scheduleExportRows(days: PublishedDay[]): Row[] {
  *  have been generated): a signed-in agent's own
  *  (GET /scheduling/my-schedule), or — for staff previewing the Agent view —
  *  that roster agent's, exactly as the agent sees them. */
-export function usePublishedDays(agentId: string) {
+export function usePublishedDays(agentId: string, range?: { start: string; end: string } | null) {
   const user = useAuth((s) => s.user)
   const status = useScheduleSync((s) => s.status)
   const staff = !!user && (user.is_superuser || user.permission_codes.includes("employee:read"))
-  const { start, end } = useScheduleHorizon()
+  const horizon = useScheduleHorizon()
+  const { start, end } = range ?? horizon
   const online = status !== "idle" && status !== "offline"
   const query = useQuery({
     queryKey: ["my-schedule", staff ? agentId : "me", start, end],
@@ -54,16 +57,34 @@ export function usePublishedDays(agentId: string) {
       if (staff) return (await api.get(`/scheduling/agent-schedule/${agentId}`, { params: { start, end } })).data.data as PublishedDay[]
       return ((await api.get("/scheduling/my-schedule", { params: { start, end } })).data.data as { days: PublishedDay[] }).days
     },
-    enabled: online && !!user,
+    enabled: online && !!user && start <= end,
     refetchInterval: 30_000,
   })
   return { ...query, online, start, end }
 }
 
-/** An agent's published schedule for the next 3 months (see usePublishedDays). */
+type Period = "upcoming" | "past4" | "past13" | "custom"
+/** Longest custom period (the server's limit for one request). */
+const MAX_DAYS = 380
+
+/** An agent's published schedule: the next 3 months, or past weeks to look back
+ *  at what they worked (see usePublishedDays). */
 export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDate: (date: string) => void }) {
-  const { data, isLoading, online, start, end } = usePublishedDays(agentId)
   const today = localISODate()
+  const [period, setPeriod] = useState<Period>("upcoming")
+  const [custom, setCustom] = useState({ start: addDays(today, -30), end: addDays(today, -1) })
+  const range =
+    period === "past4" ? { start: addDays(today, -28), end: addDays(today, -1) }
+    : period === "past13" ? { start: addDays(today, -91), end: addDays(today, -1) }
+    : period === "custom" ? custom
+    : null
+  const customProblem = period !== "custom" ? null
+    : !custom.start || !custom.end ? "Pick both dates"
+    : custom.start > custom.end ? "The end date is before the start"
+    : datesBetween(custom.start, custom.end).length > MAX_DAYS ? `Pick at most ${MAX_DAYS} days`
+    : null
+  const { data, isLoading, online, start, end } = usePublishedDays(agentId, customProblem ? { start: today, end: addDays(today, -1) } : range)
+  const past = end < today
   const weeks = new Map<string, PublishedDay[]>()
   for (const d of data ?? []) weeks.set(weekStart(d.plan_date), [...(weeks.get(weekStart(d.plan_date)) ?? []), d])
 
@@ -72,12 +93,30 @@ export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDat
       <CardHeader className="pb-2">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <CardTitle className="flex items-center gap-2"><CalendarCheck className="h-4 w-4 text-primary" /> My schedule — {end === scheduleHorizon(localISODate()).end ? "next 3 months" : `through ${fmtDay(end)}`}</CardTitle>
+            <CardTitle className="flex items-center gap-2"><CalendarCheck className="h-4 w-4 text-primary" /> My schedule — {
+              period === "upcoming" ? (end === scheduleHorizon(today).end ? "next 3 months" : `through ${fmtDay(end)}`)
+              : period === "past4" ? "last 4 weeks" : period === "past13" ? "last 3 months" : "custom dates"}</CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
-              {fmtDay(start)} – {fmtDay(end)} · published shifts only. You get a pop-up whenever one of them changes.
+              {customProblem ?? `${fmtDay(start)} – ${fmtDay(end)} · ${past ? "what was published for you then" : "published shifts only. You get a pop-up whenever one of them changes."}`}
             </p>
           </div>
-          {!!data?.length && <ExportButton label="Export my schedule" filename="my-schedule" sheets={() => [{ name: "My schedule", rows: scheduleExportRows(data) }]} />}
+          {!!data?.length && <ExportButton label="Export my schedule" filename={`my-schedule-${start}-to-${end}`} sheets={() => [{ name: "My schedule", rows: scheduleExportRows(data) }]} />}
+        </div>
+        <div role="group" aria-label="Schedule period" className="mt-2 flex flex-wrap items-center gap-1.5">
+          {([["upcoming", "Upcoming"], ["past4", "Last 4 weeks"], ["past13", "Last 3 months"], ["custom", "Custom dates"]] as const).map(([id, label]) => (
+            <button key={id} type="button" aria-pressed={period === id} onClick={() => setPeriod(id)}
+              className={cn("rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                period === id ? "border-primary bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}>
+              {label}
+            </button>
+          ))}
+          {period === "custom" && (
+            <span className="flex items-center gap-1.5">
+              <Input type="date" aria-label="Schedule from" className="h-7 w-[140px] text-xs" value={custom.start} onChange={(e) => setCustom({ ...custom, start: e.target.value })} />
+              <span className="text-xs text-muted-foreground">to</span>
+              <Input type="date" aria-label="Schedule to" className="h-7 w-[140px] text-xs" value={custom.end} onChange={(e) => setCustom({ ...custom, end: e.target.value })} />
+            </span>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -86,7 +125,7 @@ export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDat
         ) : isLoading ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : !data?.length ? (
-          <p className="text-sm text-muted-foreground">No published schedule yet — it appears here as soon as your scheduler publishes it.</p>
+          <p className="text-sm text-muted-foreground">{customProblem ? "Pick a valid period above." : past ? "Nothing was published for you in this period." : "No published schedule yet — it appears here as soon as your scheduler publishes it."}</p>
         ) : (
           <div className="space-y-3">
             {[...weeks].map(([ws, days]) => (

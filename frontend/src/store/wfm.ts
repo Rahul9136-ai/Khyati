@@ -54,6 +54,8 @@ import { addDays, localISODate } from "@/lib/domain/horizon"
 import { liveMinute, liveSecs, scheduledAux } from "@/lib/domain/liveState"
 import { LABOUR_LAW_BY_CODE, type LawOverrides } from "@/lib/domain/labourLaw"
 import { buildPlan, summarisePlan } from "@/lib/domain/planning"
+import { fixColourClashes, nextFreeColour } from "@/lib/domain/colours"
+import { DEFAULT_CHANNELS, effectiveLobs, placeOf, uniqueId, type Lob } from "@/lib/domain/lob"
 import type { Scenario } from "@/lib/domain/scenario"
 import { AGENTS, forecastFor, inAdherence, makeRTA, QUEUES, SHRINKAGE, TEAMS } from "@/lib/domain/seed"
 import { recommendSkillChanges } from "@/lib/domain/skillRecommend"
@@ -86,6 +88,9 @@ export interface NewQueue {
   aht: number
   slTarget: number
   targetTime: number
+  /** Where it goes in the LOB → Channel → Queue tree (default: the first LOB's first channel). */
+  lobId?: string
+  channel?: string
 }
 
 export type UserStatus = "Active" | "Invited"
@@ -412,6 +417,24 @@ interface WfmState {
   setQueueId: (id: string) => void
   queue: () => Queue
 
+  // Lines of business: LOB → Channel → Queue (lib/domain/lob.ts). Empty = the
+  // default LOB until someone edits the tree.
+  lobs: Lob[]
+  addLob: (name: string) => string
+  renameLob: (id: string, name: string) => void
+  /** Only an LOB with no queues can be removed. */
+  removeLob: (id: string) => void
+  addChannel: (lobId: string, name: string) => void
+  /** Renames it on the LOB and on every queue in it. */
+  renameChannel: (lobId: string, from: string, to: string) => void
+  /** Only a channel with no queues can be removed. */
+  removeChannel: (lobId: string, name: string) => void
+  renameQueue: (id: string, name: string) => void
+  /** Removes a queue no agent is skilled on (never the last one); its forecast goes too. */
+  removeQueue: (id: string) => void
+  /** Gives every LOB and queue a colour of its own (none shared, none a built-in segment's). */
+  fixColours: () => void
+
   agents: Agent[]
   rta: RtaEntry[]
   /** Adds the agent to the roster and returns their new id. */
@@ -640,18 +663,116 @@ export const useWfm = create<WfmState>()(
           while (s.queues.some((x) => x.id === `${id}-${n}`)) n++
           id = `${id}-${n}`
         }
-        const queue: Queue = { id, name: q.name.trim(), color: q.color, aht: q.aht, slTarget: q.slTarget, targetTime: q.targetTime }
+        const where = placeOf(s.lobs, { lobId: q.lobId, channel: q.channel })
+        const queue: Queue = { id, name: q.name.trim(), color: q.color, aht: q.aht, slTarget: q.slTarget, targetTime: q.targetTime, lobId: where.lob.id, channel: where.channel }
         set((s2) => ({
           queues: [...s2.queues, queue],
           forecasts: { ...s2.forecasts, [id]: forecastFor(id) },
           forecastMethod: { ...s2.forecastMethod, [id]: "baseline" },
-          auditLog: [entry(s2.currentUser, "Config", "Added skill", `${queue.name} · AHT ${queue.aht}s · SL ${(queue.slTarget * 100).toFixed(0)}%/${queue.targetTime}s`), ...s2.auditLog],
+          // keep the tree as it's shown (the default LOB becomes a saved one)
+          lobs: effectiveLobs(s2.lobs),
+          auditLog: [entry(s2.currentUser, "Config", "Added skill", `${queue.name} · ${where.lob.name} › ${where.channel} · AHT ${queue.aht}s · SL ${(queue.slTarget * 100).toFixed(0)}%/${queue.targetTime}s`), ...s2.auditLog],
         }))
         return id
       },
       queueId: QUEUES[0].id,
       setQueueId: (id) => set({ queueId: id }),
-      queue: () => get().queues.find((q) => q.id === get().queueId)!,
+      queue: () => get().queues.find((q) => q.id === get().queueId) ?? get().queues[0],
+
+      lobs: [],
+      addLob: (name) => {
+        const s = get()
+        const all = effectiveLobs(s.lobs)
+        const id = uniqueId(name, (x) => all.some((l) => l.id === x), "lob")
+        const lob: Lob = { id, name: name.trim(), color: nextFreeColour([...all, ...s.queues].map((x) => x.color)), channels: [...DEFAULT_CHANNELS] }
+        set({ lobs: [...all, lob], auditLog: [entry(s.currentUser, "Config", "Added LOB", lob.name), ...s.auditLog] })
+        return id
+      },
+      renameLob: (id, name) => {
+        const s = get()
+        const all = effectiveLobs(s.lobs)
+        const old = all.find((l) => l.id === id)
+        if (!old || !name.trim() || old.name === name.trim()) return
+        set({
+          lobs: all.map((l) => (l.id === id ? { ...l, name: name.trim() } : l)),
+          auditLog: [entry(s.currentUser, "Config", "Renamed LOB", `${old.name} → ${name.trim()}`), ...s.auditLog],
+        })
+      },
+      removeLob: (id) => {
+        const s = get()
+        const all = effectiveLobs(s.lobs)
+        const lob = all.find((l) => l.id === id)
+        if (!lob || all.length < 2 || s.queues.some((q) => placeOf(all, q).lob.id === id)) return
+        set({ lobs: all.filter((l) => l.id !== id), auditLog: [entry(s.currentUser, "Config", "Removed LOB", lob.name), ...s.auditLog] })
+      },
+      addChannel: (lobId, name) => {
+        const s = get()
+        const all = effectiveLobs(s.lobs)
+        const lob = all.find((l) => l.id === lobId)
+        if (!lob || !name.trim() || lob.channels.some((c) => c.toLowerCase() === name.trim().toLowerCase())) return
+        set({
+          lobs: all.map((l) => (l.id === lobId ? { ...l, channels: [...l.channels, name.trim()] } : l)),
+          auditLog: [entry(s.currentUser, "Config", "Added channel", `${lob.name} › ${name.trim()}`), ...s.auditLog],
+        })
+      },
+      renameChannel: (lobId, from, to) => {
+        const s = get()
+        const all = effectiveLobs(s.lobs)
+        const lob = all.find((l) => l.id === lobId)
+        const next = to.trim()
+        if (!lob || !next || from === next) return
+        if (lob.channels.some((c) => c !== from && c.toLowerCase() === next.toLowerCase())) return
+        const listed = lob.channels.includes(from)
+        set({
+          lobs: all.map((l) => (l.id === lobId ? { ...l, channels: listed ? l.channels.map((c) => (c === from ? next : c)) : [...l.channels, next] } : l)),
+          queues: s.queues.map((q) => {
+            const at = placeOf(all, q)
+            return at.lob.id === lobId && at.channel === from ? { ...q, lobId, channel: next } : q
+          }),
+          auditLog: [entry(s.currentUser, "Config", "Renamed channel", `${lob.name} › ${from} → ${next}`), ...s.auditLog],
+        })
+      },
+      removeChannel: (lobId, name) => {
+        const s = get()
+        const all = effectiveLobs(s.lobs)
+        const lob = all.find((l) => l.id === lobId)
+        if (!lob || s.queues.some((q) => { const at = placeOf(all, q); return at.lob.id === lobId && at.channel === name })) return
+        set({
+          lobs: all.map((l) => (l.id === lobId ? { ...l, channels: l.channels.filter((c) => c !== name) } : l)),
+          auditLog: [entry(s.currentUser, "Config", "Removed channel", `${lob.name} › ${name}`), ...s.auditLog],
+        })
+      },
+      renameQueue: (id, name) => {
+        const s = get()
+        const q = s.queues.find((x) => x.id === id)
+        const next = name.trim()
+        if (!q || !next || q.name === next || s.queues.some((x) => x.id !== id && x.name.toLowerCase() === next.toLowerCase())) return
+        set({
+          queues: s.queues.map((x) => (x.id === id ? { ...x, name: next } : x)),
+          auditLog: [entry(s.currentUser, "Config", "Renamed queue", `${q.name} → ${next}`), ...s.auditLog],
+        })
+      },
+      fixColours: () => {
+        const s = get()
+        const fixed = fixColourClashes(effectiveLobs(s.lobs), s.queues)
+        if (fixed) set({ lobs: fixed.lobs, queues: fixed.queues })
+      },
+      removeQueue: (id) => {
+        const s = get()
+        const q = s.queues.find((x) => x.id === id)
+        if (!q || s.queues.length < 2 || s.agents.some((a) => a.skills.includes(id))) return
+        const rest = <T,>(r: Record<string, T>) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== id))
+        const queues = s.queues.filter((x) => x.id !== id)
+        set({
+          queues,
+          queueId: s.queueId === id ? queues[0].id : s.queueId,
+          forecasts: rest(s.forecasts),
+          forecastMethod: rest(s.forecastMethod),
+          importedActuals: rest(s.importedActuals),
+          lobs: effectiveLobs(s.lobs),
+          auditLog: [entry(s.currentUser, "Config", "Removed queue", q.name), ...s.auditLog],
+        })
+      },
 
       agents: AGENTS,
       rta: makeRTA(AGENTS),
@@ -1816,6 +1937,7 @@ export const useWfm = create<WfmState>()(
         permissions: s.permissions,
         queues: s.queues,
         queueId: s.queueId,
+        lobs: s.lobs,
         agents: s.agents,
         employeeProfiles: s.employeeProfiles,
         formerEmployees: s.formerEmployees,

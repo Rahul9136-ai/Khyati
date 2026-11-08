@@ -1,5 +1,9 @@
 """Who hears about published schedules and later changes, and what they're told.
 
+Publishing sends each agent one notification (their newly published days and
+what changed on days published before) and each team leader one summary of
+their team. Edits in between don't notify anyone: they wait for the publish.
+
 Agents are the user accounts linked to a day plan's employee. Team leaders are
 the accounts linked to the leader of that employee's team or to their manager,
 plus Team Leader accounts whose name matches the plan's `team_lead` (the
@@ -269,5 +273,94 @@ async def notify_published(
             body=f"{fmt_day(dates[0])} – {fmt_day(dates[-1])} · {len(names)} agent"
             f"{'s' if len(names) > 1 else ''}: {shown}",
         )
+        notified.add(uid)
+    return len(notified)
+
+
+KIND_PUBLISH = "schedule_published"
+LINES_SHOWN = 12
+
+
+def _span(dates: list[date]) -> str:
+    dates = sorted(dates)
+    span = fmt_day(dates[0]) + (f" – {fmt_day(dates[-1])}" if len(dates) > 1 else "")
+    return f"{span} · {len(dates)} day{'s' if len(dates) > 1 else ''}"
+
+
+def _cap(lines: list[str]) -> str:
+    shown = lines[:LINES_SHOWN]
+    if len(lines) > LINES_SHOWN:
+        shown.append(f"+{len(lines) - LINES_SHOWN} more")
+    return "\n".join(shown)
+
+
+async def notify_publish(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    fresh: list[DaySchedulePlan],
+    changed: list[tuple[DaySchedulePlan, str]],
+    *,
+    actor: User,
+) -> int:
+    """One notification per agent and one per team leader for this publish:
+    newly published days, and what changed on days published before.
+    Returns how many people were notified."""
+    rows = [*fresh, *(r for r, _ in changed)]
+    if not rows:
+        return 0
+    aud = await resolve_audience(db, org_id, rows)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    new_by: dict[str, list[date]] = defaultdict(list)
+    chg_by: dict[str, list[tuple[date, str]]] = defaultdict(list)
+    name_of: dict[str, str] = {}
+    for r in fresh:
+        new_by[r.agent_key].append(r.plan_date)
+        name_of[r.agent_key] = r.agent_name or r.agent_key
+    for r, text in changed:
+        chg_by[r.agent_key].append((r.plan_date, text))
+        name_of[r.agent_key] = r.agent_name or r.agent_key
+    first = min(r.plan_date for r in rows)
+
+    notified: set[uuid.UUID] = set()
+    team: dict[uuid.UUID, list[str]] = defaultdict(list)
+    team_dates: dict[uuid.UUID, list[date]] = defaultdict(list)
+    team_changed: set[uuid.UUID] = set()
+    for key in sorted(name_of, key=lambda k: name_of[k].lower()):
+        new = sorted(new_by.get(key, []))
+        chg = sorted(chg_by.get(key, []))
+        lines = ([f"New: {_span(new)}"] if new else []) + [f"{fmt_day(d)}: {t}" for d, t in chg]
+        if new and chg:
+            title = "Your schedule is published, with changes"
+        elif chg:
+            title = "Your schedule changed"
+        else:
+            title = "Your schedule is published"
+        dates = [*new, *(d for d, _ in chg)]
+        link = f"/scheduling?date={min(dates).isoformat()}"
+        for uid in aud.agents.get(key, set()) - {actor.id}:
+            db.add(Notification(
+                organization_id=org_id, user_id=uid, ref=f"schedule-publish:{key}:{stamp}",
+                kind=KIND_CHANGED if chg else KIND_PUBLISH, title=title, link=link,
+                body=_cap(lines)[:BODY_MAX],
+            ))
+            notified.add(uid)
+        summary = "; ".join(
+            ([f"new {_span(new)}"] if new else [])
+            + [f"{fmt_day(d)} {t}" for d, t in chg]
+        )
+        for uid in aud.leads.get(key, set()) - {actor.id}:
+            team[uid].append(f"{name_of[key]}: {summary}")
+            team_dates[uid].extend(dates)
+            if chg:
+                team_changed.add(uid)
+    for uid, lines in team.items():
+        n = len(lines)
+        db.add(Notification(
+            organization_id=org_id, user_id=uid, ref=f"schedule-publish-team:{stamp}",
+            kind=KIND_CHANGED if uid in team_changed else KIND_PUBLISH,
+            title=f"Team schedules published · {n} agent{'s' if n > 1 else ''}",
+            link=f"/scheduling?date={min(team_dates[uid] or [first]).isoformat()}",
+            body=_cap(lines)[:BODY_MAX],
+        ))
         notified.add(uid)
     return len(notified)

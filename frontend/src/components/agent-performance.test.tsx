@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -77,6 +77,38 @@ describe("agent's own workspace", () => {
     renderIt()
     fireEvent.click(await screen.findByRole("button", { name: "Last 30 days" }))
     await waitFor(() => expect(get).toHaveBeenCalledWith("/reports/my-performance", { params: { start: addDays(today, -29), end: today } }))
+  })
+
+  it("looks back further: the last 3 months, or any dates (up to 190 days)", async () => {
+    renderIt()
+    const perf = within((await screen.findByText("My performance")).closest(".glass") as HTMLElement)
+    fireEvent.click(perf.getByRole("button", { name: "Last 3 months" }))
+    await waitFor(() => expect(get).toHaveBeenCalledWith("/reports/my-performance", { params: { start: addDays(today, -90), end: today } }))
+
+    fireEvent.click(perf.getByRole("button", { name: "Custom dates" }))
+    fireEvent.change(screen.getByLabelText("Performance from"), { target: { value: addDays(today, -150) } })
+    fireEvent.change(screen.getByLabelText("Performance to"), { target: { value: addDays(today, -120) } })
+    await waitFor(() => expect(get).toHaveBeenCalledWith("/reports/my-performance", { params: { start: addDays(today, -150), end: addDays(today, -120) } }))
+    expect(get).toHaveBeenCalledWith("/scheduling/my-schedule", { params: { start: addDays(today, -150), end: addDays(today, -120) } })
+
+    fireEvent.change(screen.getByLabelText("Performance from"), { target: { value: addDays(today, -330) } }) // 211 days
+    expect(screen.getByRole("alert")).toHaveTextContent("Pick at most 190 days")
+    fireEvent.change(screen.getByLabelText("Performance from"), { target: { value: addDays(today, -100) } })
+    expect(screen.getByRole("alert")).toHaveTextContent("The end date is before the start")
+  })
+
+  it("My schedule looks back too: the last 4 weeks, 3 months, or any dates", async () => {
+    renderIt()
+    const period = await screen.findByRole("group", { name: "Schedule period" })
+    fireEvent.click(within(period).getByRole("button", { name: "Last 4 weeks" }))
+    await waitFor(() => expect(get).toHaveBeenCalledWith("/scheduling/my-schedule", { params: { start: addDays(today, -28), end: addDays(today, -1) } }))
+    expect(screen.getByText(/My schedule — last 4 weeks/)).toBeInTheDocument()
+    fireEvent.click(within(period).getByRole("button", { name: "Last 3 months" }))
+    await waitFor(() => expect(get).toHaveBeenCalledWith("/scheduling/my-schedule", { params: { start: addDays(today, -91), end: addDays(today, -1) } }))
+    fireEvent.click(within(period).getByRole("button", { name: "Custom dates" }))
+    fireEvent.change(screen.getByLabelText("Schedule from"), { target: { value: "2026-01-01" } })
+    fireEvent.change(screen.getByLabelText("Schedule to"), { target: { value: "2026-01-31" } })
+    await waitFor(() => expect(get).toHaveBeenCalledWith("/scheduling/my-schedule", { params: { start: "2026-01-01", end: "2026-01-31" } }))
   })
 })
 

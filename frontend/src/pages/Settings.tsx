@@ -13,7 +13,9 @@ import { Dialog } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { AccountResets } from "@/components/account-resets"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useAuth } from "@/store/auth"
 import { api, type ApiError } from "@/lib/api"
 import { SERVER_ROLE_MAP } from "@/lib/auth"
 import { THRESHOLD_META } from "@/lib/domain/automation"
@@ -55,6 +57,10 @@ const CELL_STYLE: Record<AccessLevel, string> = {
 const CELL_LABEL: Record<AccessLevel, string> = { none: "—", view: "View", edit: "Edit" }
 
 export function Settings() {
+  // Real sign-in accounts (password resets) need the server's admin:users permission.
+  const authUser = useAuth((st) => st.user)
+  const canManageAccounts = !!authUser && (authUser.is_superuser || authUser.permission_codes.includes("admin:users"))
+  const initialTab = new URLSearchParams(window.location.search).get("tab")
   const {
     permissions, setPermission, can, users, inviteUser, setUserRole, removeUser,
     thresholds, setThreshold, addAgent, shiftPatterns,
@@ -180,7 +186,7 @@ export function Settings() {
         }
       />
 
-      <Tabs defaultValue="roles">
+      <Tabs defaultValue={initialTab === "accounts" && canManageAccounts ? "accounts" : "roles"}>
         <TabsList>
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="roles">Roles & Permissions</TabsTrigger>
@@ -188,7 +194,14 @@ export function Settings() {
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="connect">API & Webhooks</TabsTrigger>
           <TabsTrigger value="org">Organisation</TabsTrigger>
+          {canManageAccounts && <TabsTrigger value="accounts">Sign-in accounts</TabsTrigger>}
         </TabsList>
+
+        {canManageAccounts && (
+          <TabsContent value="accounts">
+            <AccountResets />
+          </TabsContent>
+        )}
 
         <TabsContent value="integrations">
           <IntegrationsSettings />

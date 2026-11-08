@@ -7,13 +7,15 @@ server with identical rules (`dayplan.py`) for API / integration callers.
 Every write bumps the row's `version` and records an audit entry.
 
 Rows are drafts until published (`publish`); agents and team leaders only see
-published rows, and any change to a published row notifies them.
+published rows, as they were last published. Changes to a published row wait
+for the next publish, which notifies each agent and team leader once.
 """
 
 from __future__ import annotations
 
 import csv
 import io
+import json
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict
@@ -66,13 +68,36 @@ def sees_everyone(user: User) -> bool:
     return sees_drafts(user) or "employee:read" in user.permission_codes
 
 
+def as_published(row: DaySchedulePlan) -> DaySchedulePlan:
+    """The day as agents and team leaders see it: as last published. Edits made
+    since wait for the next publish. (A detached copy; never saved.)"""
+    snap = row.published_snapshot
+    if row.published_at is None or not snap or snap == row.plan():
+        return row
+    view = DaySchedulePlan(
+        id=row.id, organization_id=row.organization_id, plan_date=row.plan_date,
+        agent_key=row.agent_key, employee_id=row.employee_id, agent_name=row.agent_name,
+        team=row.team, team_lead=row.team_lead, version=row.version,
+        updated_by=row.updated_by, published_at=row.published_at,
+        published_by=row.published_by, published_snapshot=snap,
+        created_at=row.created_at, updated_at=row.updated_at, **snap,
+    )
+    return view
+
+
 def visible(rows: list[DaySchedulePlan], user: User) -> list[DaySchedulePlan]:
     if sees_drafts(user):
         return rows
-    rows = [r for r in rows if r.published_at is not None]
+    rows = [as_published(r) for r in rows if r.published_at is not None]
     if sees_everyone(user):
         return rows
     return [r for r in rows if user.employee_id and r.employee_id == user.employee_id]
+
+
+def _keep_published(row: DaySchedulePlan) -> None:
+    """Before editing a published day saved before snapshots existed, keep what was published."""
+    if row.published_at is not None and row.published_snapshot is None:
+        row.published_snapshot = json.loads(json.dumps(row.plan()))
 
 # ------------------------------------------------------------- row <-> domain
 
@@ -222,17 +247,14 @@ async def save_day_plans(
     unlinked = [k for k in keys if k not in existing or existing[k].employee_id is None]
     employee_ids = await _employee_ids_by_code(db, org_id, unlinked)
     saved: list[DaySchedulePlan] = []
-    changes: list[tuple[DaySchedulePlan, str]] = []
     for item in payload.items:
         row = existing.get(item.agent_key)
         if row is None:
             row = DaySchedulePlan(organization_id=org_id, plan_date=plan_date,
                                   agent_key=item.agent_key, version=0)
             db.add(row)
-        elif row.published_at is not None:
-            before = _row_to_day(row)
-            if before != days[item.agent_key]:
-                changes.append((row, schedule_notify.describe_change(before, days[item.agent_key])))
+        else:
+            _keep_published(row)  # agents keep seeing it until the next publish
         row.employee_id = row.employee_id or employee_ids.get(item.agent_key)
         row.agent_name = item.agent_name or row.agent_name
         row.team = item.team or row.team
@@ -241,7 +263,6 @@ async def save_day_plans(
         saved.append(row)
     await db.flush()
     await _refresh(db, saved)
-    await schedule_notify.notify_changes(db, org_id, plan_date, changes, actor=actor)
     await events.schedule_updated(db, org_id, saved, action="dayplan.save")
     await record_audit(
         db,
@@ -286,13 +307,18 @@ async def _apply_each(
     action: str,
     detail: str,
     fn: Callable[[int, str, dp.AgentDay], dp.AgentDay | str],
+    publish_now: bool = False,
 ) -> tuple[list[DaySchedulePlan], list[dict]]:
     """Run `fn(index, key, day)` over each agent's current day. A string result
-    skips that agent with a reason; otherwise the new day is validated + saved."""
+    skips that agent with a reason; otherwise the new day is validated + saved.
+
+    A published day's change normally waits for the next publish. `publish_now`
+    (self-service: an agent claiming or giving back a slot) publishes it at once
+    and tells the agent's team leaders straight away."""
     rows = await _rows_by_key(db, org_id, plan_date, keys, require_all=True)
     zones = await settings_service.break_zones(db, org_id, list(rows))
     saved, skipped = [], []
-    changes: list[tuple[DaySchedulePlan, str]] = []
+    live: list[DaySchedulePlan] = []
     for i, key in enumerate(dict.fromkeys(keys)):  # de-duplicate, keep order
         row = rows[key]
         before = _row_to_day(row)
@@ -306,13 +332,16 @@ async def _apply_each(
         if key in zones and (errs := dp.break_zone_errors(result, zones[key], before)):
             skipped.append({"agent_key": key, "reason": "; ".join(errs)})
             continue
-        if row.published_at is not None and before != result.sorted():
-            changes.append((row, schedule_notify.describe_change(before, result.sorted())))
+        _keep_published(row)  # a published day's change waits for the next publish
         _write_day(row, result, actor)
         saved.append(row)
+        if publish_now and row.published_at is not None:
+            live.append(row)
     await db.flush()
     await _refresh(db, saved)
-    await schedule_notify.notify_changes(db, org_id, plan_date, changes, actor=actor)
+    if live:
+        _, changes = mark_published(live, actor)
+        await schedule_notify.notify_changes(db, org_id, plan_date, changes, actor=actor)
     await events.schedule_updated(db, org_id, saved, action=action)
     await record_audit(
         db,
@@ -512,6 +541,7 @@ def summary(row: DaySchedulePlan) -> dict:
         "ot_minutes": sum(o["end"] - o["start"] for o in row.overtime),
         "activities": sorted({a["type"] for a in row.activities}),
         "version": row.version, "published": row.published_at is not None,
+        "unpublished_changes": row.unpublished_changes,
     }
 
 
@@ -562,34 +592,61 @@ async def fill_missing(
 async def publish(
     db: AsyncSession, org_id: uuid.UUID, body: DayPublishIn, *, actor: User
 ) -> dict:
-    """Publish every saved schedule in the range: agents and their team leaders
-    can now see them and are notified. Already-published days are left as they are."""
+    """Publish the range: days never published, and published days changed since.
+    Agents and their team leaders then see them, and each gets one notification
+    (what's new, what changed). Days with no changes are left as they are."""
     _check_range(body.start, body.end)
     rows = await list_range(db, org_id, body.start, body.end, body.agent_keys)
     links = await _employee_ids_by_code(
         db, org_id, sorted({r.agent_key for r in rows if r.employee_id is None})
     )
-    now = datetime.now(UTC)
-    fresh = [r for r in rows if r.published_at is None]
     for r in rows:
         r.employee_id = r.employee_id or links.get(r.agent_key)
-    for r in fresh:
-        r.published_at, r.published_by = now, actor.id
+    fresh, changed = mark_published(rows, actor)
     await db.flush()
-    notified = await schedule_notify.notify_published(db, org_id, fresh, actor=actor)
-    await events.schedule_published(db, org_id, body.start, body.end, fresh)
+    notified = await schedule_notify.notify_publish(db, org_id, fresh, changed, actor=actor)
+    published_rows = [*fresh, *(row for row, _ in changed)]
+    await events.schedule_published(db, org_id, body.start, body.end, published_rows)
+    unchanged = len(rows) - len(published_rows)
     await record_audit(
         db, actor=actor, action="dayplan.publish", entity_type="day_schedule_plan",
         entity_id=f"{body.start.isoformat()}..{body.end.isoformat()}",
-        after={"published": len(fresh), "unchanged": len(rows) - len(fresh),
+        after={"published": len(fresh), "updated": len(changed), "unchanged": unchanged,
                "notified": notified},
         note=body.note or None,
     )
     return {
         "start": body.start, "end": body.end,
         "days": len({r.plan_date for r in rows}), "agents": len({r.agent_key for r in rows}),
-        "published": len(fresh), "unchanged": len(rows) - len(fresh), "notified": notified,
+        "published": len(fresh), "updated": len(changed), "unchanged": unchanged,
+        "notified": notified,
     }
+
+
+def mark_published(
+    rows: list[DaySchedulePlan], actor: User
+) -> tuple[list[DaySchedulePlan], list[tuple[DaySchedulePlan, str]]]:
+    """Publish these rows: never-published ones, and published ones changed since
+    (with a summary of the change). Unchanged published rows are left alone."""
+    now = datetime.now(UTC)
+    fresh = [r for r in rows if r.published_at is None]
+    changed = [
+        (r, schedule_notify.describe_change(_snapshot_day(r.published_snapshot or {}),
+                                            _row_to_day(r)))
+        for r in rows
+        if r.unpublished_changes
+    ]
+    for r in [*fresh, *(row for row, _ in changed)]:
+        r.published_at, r.published_by = now, actor.id
+        r.published_snapshot = json.loads(json.dumps(r.plan()))
+    return fresh, changed
+
+
+def _snapshot_day(snap: dict) -> dp.AgentDay:
+    """A published snapshot as a day (for describing what changed)."""
+    tmp = DaySchedulePlan(**{f: snap.get(f, [] if f not in ("shift_start", "shift_end") else 0)
+                             for f in DaySchedulePlan.PLAN_FIELDS})
+    return _row_to_day(tmp)
 
 
 async def user_agent_keys(db: AsyncSession, user: User) -> set[str]:
@@ -626,7 +683,7 @@ async def my_schedule(
             DaySchedulePlan.published_at.is_not(None),
         ).order_by(DaySchedulePlan.plan_date)
     )
-    return sorted(keys), list(rows.scalars())
+    return sorted(keys), [as_published(r) for r in rows.scalars()]
 
 
 async def agent_schedule(
@@ -636,7 +693,7 @@ async def agent_schedule(
     if not sees_everyone(user):
         raise PermissionDeniedError("Only staff can view another agent's schedule")
     rows = await list_range(db, org_id, start, end, [agent_key])
-    return [r for r in rows if r.published_at is not None]
+    return [as_published(r) for r in rows if r.published_at is not None]
 
 
 def default_horizon(today: date | None = None) -> tuple[date, date]:

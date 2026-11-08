@@ -166,6 +166,8 @@ class DayPlanOut(BaseModel):
     version: int
     updated_at: datetime
     published_at: datetime | None = None
+    #: Published, and edited since: the edits reach agents at the next publish.
+    unpublished_changes: bool = False
 
 
 class DayPlanBulkIn(BaseModel):
@@ -187,6 +189,7 @@ class DayPlanSummaryOut(BaseModel):
     activities: list[str]  # activity types on the day, e.g. ["meeting", "loa"]
     version: int
     published: bool
+    unpublished_changes: bool = False
 
 
 class DayPlanDatedIn(DayPlanIn):
@@ -218,7 +221,8 @@ class DayPublishOut(BaseModel):
     end: date
     days: int
     agents: int
-    published: int  # agent-days newly published or re-published with changes
+    published: int  # agent-days published for the first time
+    updated: int = 0  # already-published agent-days whose changes were published
     unchanged: int  # already published and unchanged
     notified: int  # users notified (agents + team leaders)
 

@@ -4,7 +4,7 @@ import { findNav, NAV } from "./nav"
 
 describe("sidebar sections", () => {
   it("has only main sections at the top level", () => {
-    expect(NAV.map((g) => g.group)).toEqual(["Dashboard", "Planning", "Operations", "Workforce", "Reports & Insights", "Administration"])
+    expect(NAV.map((g) => g.group)).toEqual(["Dashboard", "Planning", "Operations", "Workforce", "Reports & Insights", "Legends", "Administration"])
   })
 
   it("keeps Reports & KPIs, Scheduled Reports, AI Copilot and Methodology under Reports & Insights", () => {
@@ -15,7 +15,7 @@ describe("sidebar sections", () => {
   it("every page appears exactly once", () => {
     const paths = NAV.flatMap((g) => g.items.map((i) => i.to))
     expect(new Set(paths).size).toBe(paths.length)
-    expect(paths).toHaveLength(24)
+    expect(paths).toHaveLength(25)
   })
 
   it("finds the section and page for a path", () => {

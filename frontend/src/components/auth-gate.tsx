@@ -1,10 +1,12 @@
 import { Loader2 } from "lucide-react"
 import { useEffect } from "react"
+import { useLocation } from "react-router-dom"
 
 import { startScheduleSync, stopScheduleSync } from "@/lib/scheduleSync"
 import { startSettingsSync, stopSettingsSync } from "@/lib/settingsSync"
 import { startWorkspaceSync, stopWorkspaceSync } from "@/lib/workspaceSync"
 import { Login } from "@/pages/Login"
+import { ResetPassword } from "@/pages/ResetPassword"
 import { useAuth } from "@/store/auth"
 
 /** Blocks the app behind a real backend session. */
@@ -12,6 +14,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const status = useAuth((s) => s.status)
   const user = useAuth((s) => s.user)
   const bootstrap = useAuth((s) => s.bootstrap)
+  const { pathname } = useLocation()
 
   useEffect(() => {
     void bootstrap()
@@ -40,6 +43,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     }
   }, [status, canWrite])
 
+  // A password-reset link works whether or not someone is signed in here.
+  if (pathname === "/reset-password") return <ResetPassword />
   if (status === "booting") {
     return (
       <div className="grid min-h-screen place-items-center bg-background">

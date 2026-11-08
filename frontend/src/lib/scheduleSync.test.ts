@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { api } from "@/lib/api"
 import { agentDay, toMins } from "@/lib/domain/channels"
+import { addDays, localISODate } from "@/lib/domain/horizon"
 import { AGENTS } from "@/lib/domain/seed"
 import {
   flush,
@@ -18,7 +19,8 @@ import { useWfm } from "@/store/wfm"
 
 vi.mock("@/lib/api", () => ({ api: { get: vi.fn(), put: vi.fn() } }))
 
-const DATE = "2026-10-26"
+// a future day: past days are view only (nothing is saved for them)
+const DATE = addDays(localISODate(), 14)
 const get = vi.mocked(api.get)
 const put = vi.mocked(api.put)
 
@@ -211,6 +213,23 @@ describe("schedule sync", () => {
     policy = { country_code: "BR", overrides: {}, version: 5 }
     await pull()
     expect(useWfm.getState().labourLaw.country).toBe("BR")
+  })
+
+  it("a past day is the record: it loads what was saved and never uploads anything", async () => {
+    const past = addDays(localISODate(), -20)
+    server.set(a01, serverRowFor(a01, { shift_start: toMins("09:00"), shift_end: toMins("17:30") }))
+    await startScheduleSync({ canWrite: true, date: past })
+    expect(get).toHaveBeenCalledWith(`/scheduling/day-plans/${past}`)
+    expect(shiftOf(a01)).toBe("09:00–17:30") // the saved day is shown
+    expect(useScheduleSync.getState().serverAgents).toEqual({ [a01]: { published: false, changed: false } })
+    expect(put.mock.calls.filter(([url]) => String(url).includes("/day-plans/"))).toHaveLength(0) // no made-up defaults
+
+    // a change in the browser (e.g. settings arriving) doesn't overwrite history either
+    useWfm.setState({ breakOverrides: { [a01]: [] } })
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS + 50)
+    await flush()
+    expect(put.mock.calls.filter(([url]) => String(url).includes("/day-plans/"))).toHaveLength(0)
+    expect(server.size).toBe(1)
   })
 
   it("never writes for view-only users", async () => {

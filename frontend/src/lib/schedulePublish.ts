@@ -37,6 +37,8 @@ export interface PublishResult {
   days: number
   agents: number
   published: number
+  /** Already-published agent-days whose changes were published. */
+  updated?: number
   unchanged: number
   notified: number
   /** Days created from shift-pattern defaults before publishing. */

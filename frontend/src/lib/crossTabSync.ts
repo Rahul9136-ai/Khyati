@@ -14,7 +14,7 @@ const STORAGE_KEY = "flowforce-wfm"
 /** Store fields every tab shares as they are. */
 export const SHARED_KEYS = [
   "rta", "nowIdx", "employeeProfiles", "formerEmployees", "employeeChanges", "dataSources",
-  "queues", "shiftPatterns", "workRules", "workCompliance", "shrinkage", "thresholds", "ruleState",
+  "queues", "lobs", "shiftPatterns", "workRules", "workCompliance", "shrinkage", "thresholds", "ruleState",
   "exceptions", "ptoRequests", "swaps", "messages", "auditLog", "skillChangeRecommendations", "forecasts",
 ] as const
 

@@ -13,8 +13,9 @@ vi.mock("@/lib/api", () => ({ api: { get: vi.fn(), put: vi.fn(), post: vi.fn() }
 const get = vi.mocked(api.get)
 const put = vi.mocked(api.put)
 const post = vi.mocked(api.post)
-const D1 = "2026-10-26"
-const D2 = "2026-10-27"
+// future days: past days are view only (nothing is saved for them)
+const D1 = addDays(localISODate(), 14)
+const D2 = addDays(D1, 1)
 const a01 = AGENTS[0].id // Early pattern 07:00–15:30
 const shiftOf = (id: string) => useWfm.getState().agents.find((a) => a.id === id)!.shift
 
@@ -129,7 +130,7 @@ describe("syncing across dates", () => {
     expect(useWfm.getState().scheduleDate).toBe(D2)
     expect(shiftOf(a01)).toBe("09:00–17:30")
     expect(useScheduleSync.getState()).toMatchObject({ planDate: D2, canWrite: true })
-    expect(useScheduleSync.getState().serverAgents![a01]).toEqual({ published: true })
+    expect(useScheduleSync.getState().serverAgents![a01]).toEqual({ published: true, changed: false })
     expect(rowsOn(D2).get(a01)!.channels[0].channel).toBe("email") // server copy untouched
   })
 
@@ -178,7 +179,7 @@ describe("publishing", () => {
     expect(post).toHaveBeenLastCalledWith("/scheduling/day-plans/publish", { start: D1, end: D2, note: "Week 44" })
     expect(res).toMatchObject({ published: AGENTS.length * 2, created: AGENTS.length, notified: 4 })
     expect(steps.at(-1)).toBe("Publishing…")
-    expect(useScheduleSync.getState().serverAgents![a01]).toEqual({ published: true })
+    expect(useScheduleSync.getState().serverAgents![a01]).toEqual({ published: true, changed: false })
   })
 
   it("uses a parked day's edits for days that were opened but never saved", () => {

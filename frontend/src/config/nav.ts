@@ -1,6 +1,7 @@
 import {
   Activity,
   BarChart3,
+  BookMarked,
   BookOpenText,
   Bot,
   CalendarCheck,
@@ -105,6 +106,12 @@ export const NAV: NavGroup[] = [
       { to: "/copilot", label: "AI Copilot", icon: Sparkles, module: "copilot" },
       { to: "/help", label: "Methodology", icon: BookOpenText, module: "help" },
     ],
+  },
+  {
+    group: "Legends",
+    icon: BookMarked,
+    direct: true,
+    items: [{ to: "/legends", label: "Legends", icon: BookMarked, module: "help" }],
   },
   {
     group: "Administration",

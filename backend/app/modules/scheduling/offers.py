@@ -400,6 +400,7 @@ async def claim(
         action="offer.claim",
         detail=f"{KIND_LABEL[offer.kind]} slot {when} taken by {name}",
         fn=lambda *_: after,
+        publish_now=True,
     )
     if skipped:
         raise ValidationError(skipped[0]["reason"])
@@ -464,6 +465,7 @@ async def cancel_claim(
             action="offer.cancel",
             detail=f"{KIND_LABEL[offer.kind]} slot {_when(offer)} given back by {c.agent_name}",
             fn=lambda *_: day,
+            publish_now=True,
         )
     c.status, c.cancelled_by, c.cancelled_at = "cancelled", user.id, datetime.now(UTC)
     await db.flush()

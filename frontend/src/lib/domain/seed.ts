@@ -3,9 +3,9 @@ import type { Agent, AuxCode, Interval, Queue, RtaEntry } from "./types"
 
 // Queue colours stay in the corporate family: blue / teal / amber.
 export const QUEUES: Queue[] = [
-  { id: "sales", name: "Sales", color: "#2563eb", slTarget: 0.8, targetTime: 20, aht: 280 },
-  { id: "support", name: "Tech Support", color: "#0d9488", slTarget: 0.8, targetTime: 30, aht: 410 },
-  { id: "billing", name: "Billing & Care", color: "#d97706", slTarget: 0.85, targetTime: 20, aht: 240 },
+  { id: "sales", name: "Sales", color: "#3b82f6", slTarget: 0.8, targetTime: 20, aht: 280 },
+  { id: "support", name: "Tech Support", color: "#14b8a6", slTarget: 0.8, targetTime: 30, aht: 410 },
+  { id: "billing", name: "Billing & Care", color: "#f43f5e", slTarget: 0.85, targetTime: 20, aht: 240 },
 ]
 
 export const INTERVALS: Interval[] = Array.from({ length: 24 }, (_, i) => {
@@ -54,9 +54,9 @@ export const AUX: AuxCode[] = [
   { code: "ACW", label: "After-Call Work", color: "#0369a1", cat: "productive" },
   { code: "AUX1", label: "Break", color: "#d97706", cat: "break", deferrable: true },
   { code: "AUX2", label: "Lunch", color: "#b45309", cat: "break", deferrable: false },
-  { code: "AUX3", label: "Team Meeting", color: "#64748b", cat: "shrink", deferrable: true },
-  { code: "AUX4", label: "Training", color: "#475569", cat: "shrink", deferrable: false },
-  { code: "AUX5", label: "Coaching", color: "#7c3aed", cat: "shrink", deferrable: true },
+  { code: "AUX3", label: "Team Meeting", color: "#0891b2", cat: "shrink", deferrable: true },
+  { code: "AUX4", label: "Training", color: "#db2777", cat: "shrink", deferrable: false },
+  { code: "AUX5", label: "Coaching", color: "#65a30d", cat: "shrink", deferrable: true },
   { code: "OFFLINE", label: "Logged Out", color: "#dc2626", cat: "offline" },
 ]
 export const AUX_BY_CODE: Record<string, AuxCode> = Object.fromEntries(AUX.map((a) => [a.code, a]))

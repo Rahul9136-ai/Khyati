@@ -1,10 +1,12 @@
-import { KeyRound, Loader2, LogIn } from "lucide-react"
+import { ArrowLeft, KeyRound, Loader2, LogIn, Mail, MailCheck } from "lucide-react"
 import { useState } from "react"
 
 import { PurviLogo } from "@/components/purvi-logo"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import type { ApiError } from "@/lib/api"
+import { forgotPassword } from "@/lib/passwords"
 import { useAuth } from "@/store/auth"
 
 const DEMO_ACCOUNTS = [
@@ -20,6 +22,24 @@ export function Login() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [busy, setBusy] = useState(false)
+  const [mode, setMode] = useState<"signin" | "forgot">("signin")
+  const [sent, setSent] = useState<string | null>(null)
+  const [forgotError, setForgotError] = useState<string | null>(null)
+
+  async function sendReset(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setForgotError(null)
+    try {
+      const r = await forgotPassword(email.trim())
+      setSent(`${r.detail} The link works once and expires in ${r.valid_minutes} minutes. Check your spam folder if it doesn't arrive.`)
+    } catch (err) {
+      const e2 = err as ApiError
+      setForgotError(e2.status ? e2.message : "Can't reach the server. Try again in a minute.")
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function submit(userEmail: string, userPassword: string) {
     setBusy(true)
@@ -42,6 +62,37 @@ export function Login() {
           </p>
         </div>
 
+        {mode === "forgot" ? (
+          <Card className="glass">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Mail className="h-4 w-4 text-primary" /> Forgot your password?
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {sent ? (
+                <p role="status" className="flex gap-2 rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
+                  <MailCheck className="mt-0.5 h-4 w-4 shrink-0" /> {sent}
+                </p>
+              ) : (
+                <form className="space-y-3" onSubmit={(e) => void sendReset(e)}>
+                  <p className="text-sm text-muted-foreground">Enter the email you sign in with and we'll send you a link to set a new password.</p>
+                  <Input type="email" placeholder="you@company.com" autoComplete="username" aria-label="Email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
+                  {forgotError && <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{forgotError}</p>}
+                  <Button type="submit" className="w-full" disabled={busy || !email.trim()}>
+                    {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
+                    Email me a reset link
+                  </Button>
+                </form>
+              )}
+              <p className="text-xs text-muted-foreground">No email? Ask your administrator: they can make you a reset link in Settings → Sign-in accounts.</p>
+              <button type="button" onClick={() => { setMode("signin"); setSent(null); setForgotError(null) }}
+                className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                <ArrowLeft className="h-3.5 w-3.5" /> Back to sign in
+              </button>
+            </CardContent>
+          </Card>
+        ) : (
         <Card className="glass">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -72,6 +123,11 @@ export function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
               />
+              <div className="flex justify-end">
+                <button type="button" onClick={() => setMode("forgot")} className="text-xs font-medium text-primary hover:underline">
+                  Forgot password?
+                </button>
+              </div>
               {error && (
                 <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
                   {error}
@@ -104,7 +160,7 @@ export function Login() {
             </div>
           </CardContent>
         </Card>
-
+        )}
       </div>
     </div>
   )

@@ -98,6 +98,25 @@ class RefreshToken(UUIDMixin, Base):
     )
 
 
+class PasswordResetToken(UUIDMixin, Base):
+    """A one-time link to set a new password: from "Forgot password?" (emailed,
+    short-lived) or made by an admin. Only a SHA-256 hash is stored."""
+
+    __tablename__ = "password_reset_tokens"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: The admin who made the link (None = the user asked for it themselves).
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class AuditLog(UUIDMixin, Base):
     """Append-only trail of every mutating action; queried by /audit endpoints."""
 

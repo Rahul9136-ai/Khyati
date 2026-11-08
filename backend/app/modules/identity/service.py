@@ -256,10 +256,22 @@ async def update_user(
 
 
 async def list_users(
-    db: AsyncSession, *, offset: int = 0, limit: int = 50
+    db: AsyncSession,
+    *,
+    offset: int = 0,
+    limit: int = 50,
+    organization_id: uuid.UUID | None = None,
+    search: str | None = None,
 ) -> tuple[list[User], int]:
-    total = (await db.execute(select(func.count()).select_from(User))).scalar_one()
-    rows = await db.execute(select(User).order_by(User.email).offset(offset).limit(limit))
+    """Accounts, by email. `organization_id` limits them to one organisation."""
+    q = select(User)
+    if organization_id is not None:
+        q = q.where(User.organization_id == organization_id)
+    if search:
+        like = f"%{search.strip().lower()}%"
+        q = q.where(func.lower(User.email).like(like) | func.lower(User.full_name).like(like))
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
+    rows = await db.execute(q.order_by(User.email).offset(offset).limit(limit))
     return list(rows.scalars()), total
 
 

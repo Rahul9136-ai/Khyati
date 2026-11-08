@@ -117,6 +117,24 @@ class DaySchedulePlan(UUIDMixin, TenantMixin, TimestampMixin, Base):
     updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    #: The day as it was last published ({shift_start, shift_end, breaks, channels,
+    #: overtime, activities}). Agents and team leaders see this; edits made since
+    #: wait for the next publish, which notifies them once.
+    published_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    PLAN_FIELDS = ("shift_start", "shift_end", "breaks", "channels", "overtime", "activities")
+
+    def plan(self) -> dict:
+        return {f: getattr(self, f) for f in self.PLAN_FIELDS}
+
+    @property
+    def unpublished_changes(self) -> bool:
+        """Published, and edited since (waiting to be published)."""
+        return (
+            self.published_at is not None
+            and self.published_snapshot is not None
+            and self.published_snapshot != self.plan()
+        )
 
 
 class ScheduleOffer(UUIDMixin, TenantMixin, TimestampMixin, Base):

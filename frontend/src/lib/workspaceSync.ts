@@ -25,7 +25,7 @@ import { useWfm } from "@/store/wfm"
 
 export const WORKSPACE_KEYS = [
   "agents", "employeeProfiles", "formerEmployees", "employeeChanges", "dataSources", "users", "permissions",
-  "queues", "forecasts", "forecastMethod", "importedActuals", "externalFactors", "shrinkage", "scenarios",
+  "queues", "lobs", "forecasts", "forecastMethod", "importedActuals", "externalFactors", "shrinkage", "scenarios",
   "ptoRequests", "swaps", "exceptions", "skillChangeRecommendations", "messages", "auditLog",
   "thresholds", "ruleState", "pipelineAutoRun",
 ] as const
@@ -36,7 +36,7 @@ const MERGE: ReadonlySet<WorkspaceKey> = new Set(["auditLog", "employeeChanges",
 
 const LABEL: Partial<Record<WorkspaceKey, string>> = {
   agents: "the roster", employeeProfiles: "employee profiles", formerEmployees: "former employees", users: "users",
-  permissions: "role permissions", queues: "skills / queues", forecasts: "forecasts", importedActuals: "imported actuals",
+  permissions: "role permissions", queues: "skills / queues", lobs: "lines of business", forecasts: "forecasts", importedActuals: "imported actuals",
   externalFactors: "forecast events", scenarios: "scenarios", ptoRequests: "PTO requests", swaps: "shift swaps",
   exceptions: "adherence exceptions", thresholds: "automation thresholds", ruleState: "automation rules",
 }
@@ -135,8 +135,9 @@ async function saveOne(r: Running, key: WorkspaceKey): Promise<"ok" | "conflict"
       return "ok"
     } catch (e) {
       const err = e as ApiError
-      if (err.status === 403) {
-        r.writable.delete(key) // not allowed: keep it in this browser, stop trying
+      if (err.status === 403 || err.status === 404) {
+        // not allowed, or a server that doesn't know this area yet: keep it in this browser, stop trying
+        r.writable.delete(key)
         return "ok"
       }
       if (err.status !== 409) throw e

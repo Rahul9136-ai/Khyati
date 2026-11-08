@@ -78,7 +78,7 @@ export function WorkRuleAlign({ selectedIds = [], canPublish = false }: { select
             : `Every schedule from ${fmtDay(start)} to ${fmtDay(end)} already follows the work rules.`) +
           (res.created ? ` ${res.created} new day${res.created === 1 ? "" : "s"} created from the rules.` : "") +
           (res.conflicts ? ` ${res.conflicts} day${res.conflicts === 1 ? "" : "s"} skipped — someone saved them meanwhile; align again.` : "") +
-          (res.published ? ` Published ${res.published} schedule${res.published === 1 ? "" : "s"} — agents and team leaders can see them.` : online && res.changed ? " Days already published changed live (agents got a pop-up)." : "") +
+          (res.published ? ` Published ${res.published} schedule${res.published === 1 ? "" : "s"} — agents and team leaders can see them.` : online && res.changed ? " Days already published were changed: publish them to send the change to agents and their team leaders." : "") +
           (online ? "" : " Saved in this browser — it goes to the server when you're back online."),
       })
     })

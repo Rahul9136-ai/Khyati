@@ -143,8 +143,8 @@ async def test_drafts_hidden_until_published(client: AsyncClient, admin: dict) -
                             json={"start": D1, "end": D1})
     assert pub.status_code == 200, pub.text
     assert pub.json()["data"] | {"notified": 0} == {
-        "start": D1, "end": D1, "days": 1, "agents": 2, "published": 2, "unchanged": 0,
-        "notified": 0,
+        "start": D1, "end": D1, "days": 1, "agents": 2, "published": 2, "updated": 0,
+        "unchanged": 0, "notified": 0,
     }
 
     tl_rows = (await client.get(f"{API}/day-plans/{D1}", headers=who["team_lead"])).json()
@@ -169,21 +169,26 @@ async def test_publish_notifies_agent_and_team_leaders(client: AsyncClient, admi
     [agent_note] = await inbox(client, who["agent"])
     assert agent_note["kind"] == "schedule_published"
     assert agent_note["title"] == "Your schedule is published"
-    assert agent_note["body"].startswith("Mon 26 Oct – Tue 27 Oct · 2 days")
+    assert agent_note["body"] == "New: Mon 26 Oct – Tue 27 Oct · 2 days"
     assert agent_note["link"] == f"/scheduling?date={D1}"
     for tl in ("team_lead", "marcus"):  # via the team's leader, and via the roster TL name
         [digest] = await inbox(client, who[tl])
-        assert digest["title"] == "Team schedules published"
-        assert "2 agents: Agent a01, Agent a02" in digest["body"]
+        assert digest["title"] == "Team schedules published · 2 agents"
+        assert digest["body"].splitlines() == [
+            "Agent a01: new Mon 26 Oct – Tue 27 Oct · 2 days",
+            "Agent a02: new Mon 26 Oct · 1 day",
+        ]
     assert await inbox(client, who["other_tl"]) == []
     assert await inbox(client, h) == []  # the publisher isn't notified
 
     again = (await client.post(f"{API}/day-plans/publish", headers=h,
                                json={"start": D1, "end": D3})).json()["data"]
-    assert (again["published"], again["unchanged"], again["notified"]) == (0, 3, 0)
+    assert (again["published"], again["updated"], again["unchanged"], again["notified"]) == (
+        0, 0, 3, 0
+    )
 
 
-async def test_changes_to_published_days_notify_and_coalesce(
+async def test_changes_wait_for_publish_then_notify_each_person_once(
     client: AsyncClient, admin: dict
 ) -> None:
     h = admin["headers"]
@@ -194,38 +199,84 @@ async def test_changes_to_published_days_notify_and_coalesce(
     for k in who.values():
         await read_all(client, k)
 
-    # Drafts (D2 isn't published) change silently.
+    async def unread(k: str) -> list[dict]:
+        return [n for n in await inbox(client, who[k]) if not n["read_at"]]
+
+    async def lunch(headers: dict, key: str) -> int:
+        rows = (await client.get(f"{API}/day-plans/{D1}", headers=headers)).json()["data"]
+        row = next(r for r in rows if r["agent_key"] == key)
+        return next(b["start"] for b in row["breaks"] if b["type"] == "lunch")
+
+    # Editing (a draft, or a published day, several times): nobody is told yet,
+    # and agents / team leaders keep seeing what was published.
     await save(client, h, D2, lunch_at("a01", "12:00"))
-    assert [n for n in await inbox(client, who["agent"]) if not n["read_at"]] == []
-
     await save(client, h, D1, lunch_at("a01", "11:30"))
-    [note] = [n for n in await inbox(client, who["agent"]) if not n["read_at"]]
-    assert note["kind"] == "schedule_changed"
-    assert note["title"] == "Your schedule changed · Mon 26 Oct"
-    assert note["body"] == "Lunch 11:00 → 11:30" and note["link"] == f"/scheduling?date={D1}"
-
-    # A second edit while unread updates the same notification instead of adding one.
     await save(client, h, D1, lunch_at("a01", "12:00"), lunch_at("a02", "11:15"))
-    unread = [n for n in await inbox(client, who["agent"]) if not n["read_at"]]
-    assert len(unread) == 1 and unread[0]["body"] == "Lunch 11:00 → 11:30; Lunch 11:30 → 12:00"
-    [digest] = [n for n in await inbox(client, who["marcus"]) if not n["read_at"]]
-    assert digest["title"] == "Team schedule changed · Mon 26 Oct"
-    assert digest["body"].splitlines() == [
-        "Agent a01: Lunch 11:00 → 11:30; Lunch 11:30 → 12:00",
-        "Agent a02: Lunch 11:00 → 11:15",
+    for k in ("agent", "team_lead", "marcus"):
+        assert await unread(k) == []
+    assert await lunch(who["agent"], "a01") == m("11:00")
+    assert await lunch(who["marcus"], "a02") == m("11:00")
+    mine = (await client.get(f"{API}/my-schedule", headers=who["agent"],
+                             params={"start": D1, "end": D1})).json()["data"]["days"]
+    assert next(b["start"] for b in mine[0]["breaks"] if b["type"] == "lunch") == m("11:00")
+    # the scheduler sees the edit, marked as waiting to be published
+    sched = (await client.get(f"{API}/day-plans/{D1}", headers=h)).json()["data"]
+    assert [(r["agent_key"], r["unpublished_changes"]) for r in sched] == [
+        ("a01", True), ("a02", True)
+    ]
+    assert await lunch(h, "a01") == m("12:00")
+    summary = (await client.get(f"{API}/day-plans", headers=h,
+                                params={"start": D1, "end": D2})).json()["data"]
+    assert [(r["plan_date"], r["published"], r["unpublished_changes"]) for r in summary] == [
+        (D1, True, True), (D1, True, True), (D2, False, False)
     ]
 
-    # Server-side operations notify too, and so does removing a published day.
-    await read_all(client, who["agent"])
+    # Publish: one notification per agent and per team leader, saying what changed.
+    pub = (await client.post(f"{API}/day-plans/publish", headers=h,
+                             json={"start": D1, "end": D3})).json()["data"]
+    assert (pub["published"], pub["updated"], pub["unchanged"], pub["notified"]) == (1, 2, 0, 3)
+    [note] = await unread("agent")
+    assert note["kind"] == "schedule_changed"
+    assert note["title"] == "Your schedule is published, with changes"
+    assert note["body"].splitlines() == [
+        "New: Tue 27 Oct · 1 day", "Mon 26 Oct: Lunch 11:00 → 12:00"
+    ]
+    assert note["link"] == f"/scheduling?date={D1}"
+    for tl in ("team_lead", "marcus"):
+        [digest] = await unread(tl)
+        assert digest["title"] == "Team schedules published · 2 agents"
+        assert digest["body"].splitlines() == [
+            "Agent a01: new Tue 27 Oct · 1 day; Mon 26 Oct Lunch 11:00 → 12:00",
+            "Agent a02: Mon 26 Oct Lunch 11:00 → 11:15",
+        ]
+    assert await unread("other_tl") == []
+    assert await lunch(who["agent"], "a01") == m("12:00")  # now they see it
+    sched = (await client.get(f"{API}/day-plans/{D1}", headers=h)).json()["data"]
+    assert not any(r["unpublished_changes"] for r in sched)
+
+    # Publishing again with nothing new tells nobody anything.
+    again = (await client.post(f"{API}/day-plans/publish", headers=h,
+                               json={"start": D1, "end": D3})).json()["data"]
+    assert (again["published"], again["updated"], again["notified"]) == (0, 0, 0)
+
+    # Server-side operations wait for publish too.
+    for k in who.values():
+        await read_all(client, k)
     r = await client.post(f"{API}/day-plans/{D1}/mark-aux", headers=h, json={
         "agent_keys": ["a01"], "kind": "meeting", "start": m("13:30"), "length": 60,
     })
     assert r.status_code == 200, r.text
-    [note] = [n for n in await inbox(client, who["agent"]) if not n["read_at"]]
-    assert note["body"] == "+ Meeting 13:30–14:30"
+    assert await unread("agent") == []
+    await client.post(f"{API}/day-plans/publish", headers=h, json={"start": D1, "end": D1})
+    [note] = await unread("agent")
+    assert (note["title"], note["body"]) == (
+        "Your schedule changed", "Mon 26 Oct: + Meeting 13:30–14:30"
+    )
+
+    # Removing a published day takes effect at once, so they're told at once.
     await read_all(client, who["agent"])
     await client.delete(f"{API}/day-plans/{D1}/a01", headers=h)
-    [note] = [n for n in await inbox(client, who["agent"]) if not n["read_at"]]
+    [note] = await unread("agent")
     assert note["body"] == "Schedule removed"
 
 

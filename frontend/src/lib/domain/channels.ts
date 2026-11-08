@@ -42,7 +42,7 @@ export const ACTIVITIES: { id: ActivityType; label: string; short: string; color
   { id: "training", label: "Training", short: "TRN", color: "#db2777" },
   { id: "coaching", label: "Coaching", short: "COA", color: "#65a30d" },
   { id: "loa", label: "LOA", short: "LOA", color: "#475569", fullShift: true },
-  { id: "absence", label: "Absence", short: "ABS", color: "#dc2626", fullShift: true },
+  { id: "absence", label: "Absence", short: "ABS", color: "#9f1239", fullShift: true },
   { id: "other", label: "Other", short: "OTH", color: "#78716c" },
   // Time off taken from an opened slot (lib/domain/slots.ts) — the agent isn't working.
   { id: "vto", label: "VTO", short: "VTO", color: "#0f766e" },

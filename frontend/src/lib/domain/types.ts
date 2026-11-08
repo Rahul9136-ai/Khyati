@@ -2,6 +2,10 @@
 
 export interface Queue {
   id: string
+  /** The line of business (lib/domain/lob.ts) it belongs to; absent = the first LOB. */
+  lobId?: string
+  /** One of its LOB's channels (e.g. "Phone"); absent = the LOB's first channel. */
+  channel?: string
   name: string
   color: string
   slTarget: number

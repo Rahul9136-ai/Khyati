@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
-  AlertTriangle, ArrowRight, BarChart3, Bot, CalendarCheck, CalendarClock, CalendarRange, CheckCircle2, Clock, FileDown, Hand,
+  AlertTriangle, ArrowRight, BarChart3, Bot, CalendarCheck, CalendarClock, CalendarRange, CheckCircle2, Clock, FileDown, Hand, History,
   Inbox, Lightbulb, RotateCcw, Scale, Send, Sparkles, Upload, Users, Wand2, type LucideIcon,
 } from "lucide-react"
 import { Link, useSearchParams } from "react-router-dom"
@@ -88,7 +88,10 @@ const fmtSecs = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${String(Math.
 
 export function Scheduling() {
   const { queueId, forecasts, shrinkage, agents: roster, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule, currentRole, currentAgentId, overtimePlan, activityPlan, scheduleDate, rta, nowIdx, employeeProfiles } = useWfm()
-  const canEditSchedule = useWfm((s) => s.can("scheduling", "edit"))
+  const canEditRole = useWfm((s) => s.can("scheduling", "edit"))
+  // Past days are the record of what happened: view only.
+  const isPast = scheduleDate < localISODate()
+  const canEditSchedule = canEditRole && !isPast
   const user = useAuth((s) => s.user)
   const canPublish = !!user && (user.is_superuser || user.permission_codes.includes("schedule:publish"))
   const queue = queues.find((q) => q.id === queueId)!
@@ -114,6 +117,8 @@ export function Scheduling() {
   // once the server has answered, unpublished agents drop off their roster.
   const { canWrite: syncCanWrite, serverAgents } = useScheduleSync()
   const publishedOnly = !syncCanWrite && serverAgents !== null
+  // A past day shows only the schedules that were saved then (nothing made up).
+  const savedOnly = isPast && serverAgents !== null
   // Only people on the books that day: a future day after someone's last
   // working day (or before they join) leaves them out of the plan and coverage.
   const agents = useMemo(
@@ -121,13 +126,14 @@ export function Scheduling() {
       roster.filter((a) => {
         const p = employeeProfiles[a.id]
         if (p && !employedOn(p, scheduleDate)) return false
+        if (savedOnly && !serverAgents![a.id]) return false
         return !publishedOnly || serverAgents![a.id]?.published
       }),
-    [roster, publishedOnly, serverAgents, employeeProfiles, scheduleDate],
+    [roster, publishedOnly, savedOnly, serverAgents, employeeProfiles, scheduleDate],
   )
   // Agents only ever see their own row — everyone else sees the full roster.
   const isAgent = currentRole === "Agent"
-  const tabs = isAgent ? AGENT_TABS : STAFF_TABS.filter((t) => t.id !== "automation" || canEditSchedule)
+  const tabs = isAgent ? AGENT_TABS : STAFF_TABS.filter((t) => t.id !== "automation" || canEditRole)
   const tabParam = params.get("tab")
   const tab = tabs.find((t) => t.id === tabParam)?.id ?? tabs[0].id
   const setTab = (t: TabId) =>
@@ -429,7 +435,7 @@ export function Scheduling() {
                   Break/lunch layout comes from each agent's <Link to="/shift-patterns" className="text-primary hover:underline">shift pattern</Link>.
                 </p>
               </div>
-              {!isAgent && (
+              {!isAgent && !isPast && (
                 <PermissionGate module="scheduling">
                   <div className="flex flex-wrap items-center gap-2">
                     <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={onFile} />
@@ -456,9 +462,17 @@ export function Scheduling() {
               )}
             </CardHeader>
             <CardContent>
-              {publishedOnly && visibleAgents.length === 0 ? (
+              {isPast && (
+                <p role="note" className="mb-3 flex flex-wrap items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-xs text-sky-700 dark:text-sky-300">
+                  <History className="h-3.5 w-3.5" /> Past day, view only: showing the schedule{visibleAgents.length === 1 ? "" : "s"} saved for {fmtDayLong(scheduleDate)}
+                  {serverAgents !== null && ` (${visibleAgents.length} agent${visibleAgents.length === 1 ? "" : "s"})`}. Agents without a saved schedule that day aren't shown.
+                </p>
+              )}
+              {(publishedOnly || savedOnly) && visibleAgents.length === 0 ? (
                 <p className="rounded-lg border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-                  {isAgent ? "Your schedule" : "The schedules"} for {fmtDayLong(scheduleDate)} {isAgent ? "hasn't" : "haven't"} been published yet.
+                  {isPast
+                    ? `No ${isAgent ? "schedule of yours" : publishedOnly ? "published schedule" : "schedule"} was saved for ${fmtDayLong(scheduleDate)}.`
+                    : `${isAgent ? "Your schedule" : "The schedules"} for ${fmtDayLong(scheduleDate)} ${isAgent ? "hasn't" : "haven't"} been published yet.`}
                 </p>
               ) : (
                 <ContinuousSchedule

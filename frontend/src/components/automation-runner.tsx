@@ -69,5 +69,14 @@ export function AutomationRunner() {
   // Other open tabs of the app stay in step with this one.
   useEffect(() => startCrossTabSync(), [])
 
+  // Every LOB and queue keeps a colour of its own (saved data from before, or
+  // loaded from the server, may share one): fixed now and whenever they change.
+  useEffect(() => {
+    useWfm.getState().fixColours()
+    return useWfm.subscribe((s, p) => {
+      if (s.queues !== p.queues || s.lobs !== p.lobs) s.fixColours()
+    })
+  }, [])
+
   return null
 }

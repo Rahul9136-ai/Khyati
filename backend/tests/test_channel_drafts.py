@@ -114,7 +114,7 @@ async def test_drafts_hidden_until_published(client: AsyncClient, admin: dict) -
     ]
     [note] = [n for n in await inbox(client, who["agent"]) if not n["read_at"]]
     assert note["title"].startswith("Your schedule changed")
-    assert note["body"] == "Channels now Phone 07:00–11:00 · Email 11:00–15:30"
+    assert note["body"].endswith(": Channels now Phone 07:00–11:00 · Email 11:00–15:30")
     # DAY2 was a draft day: now published, so the TL sees it.
     assert await channels_of(client, who["team_lead"], DAY2, "a02") == [
         ("chat", m("07:00"), m("15:30"))
