@@ -47,6 +47,7 @@ Auth: `Authorization: Bearer <access_token>`; permissions listed per endpoint
 | POST | `/forecasting/forecasts/{id}/{submit,approve,reject}` | submit: `forecast:write` · decide: `forecast:approve` |
 | GET | `/forecasting/forecasts/{id}/export` (CSV) | `forecast:read` |
 | GET | `/forecasting/forecasts/{id}/intervals?day&interval_minutes` | `forecast:read` |
+| GET | `/forecasting/published?queue&start&end&format=json\|csv` — the forecast published from the Forecasting page, one row per queue per day (`volume`, `aht_sec`, `required_hours`, `required_fte`, `scheduled_hours`, `over_under_hours`, `service_level`, `occupancy`, `model`, `mape`, `published_at`, `published_by`). Made for BI tools: send an API key. Webhook `forecast.published` fires on every publish. | `forecast:read` |
 
 ## Planning & Erlang
 | Method | Path | Permission |

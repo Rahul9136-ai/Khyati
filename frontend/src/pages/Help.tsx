@@ -116,6 +116,26 @@ apply the lowest-MAPE model; retrain automatically when actuals import`}</Formul
           </p>
         </Section>
 
+        <Section title="Forecast period, targets & drivers">
+          <p>
+            The Forecasting page predicts one period: a start date and an end date. Rows are per day up to 31 days,
+            per week up to about four months, then per month. Pick the targets to predict (volume, AHT, required
+            hours, required FTE, scheduled hours, over/under, service level, occupancy).
+          </p>
+          <Formula>{`driver multiplier (one day) = (value ÷ reference) ^ elasticity
+volume(day) = model forecast × events × Π volume-driver multipliers
+AHT(day)    = queue AHT × Π AHT-driver multipliers
+Required FTE = required agent-hours ÷ 8 h ÷ days`}</Formula>
+          <p>
+            A driver is any number per date the forecast moves with (marketing spend, active customers, orders,
+            traffic). At its reference level it changes nothing. Elasticity is the % change in the target per 1%
+            change in the driver; “Learn” measures it from history by regressing each day's deviation from its
+            usual weekday volume on the driver's deviation from its reference (needs 14+ past days with a value).
+            With auto-publish on, the period is published again whenever the dates, model, drivers or events change;
+            the Dashboard shows it and outside dashboards read it from the published-forecast feed.
+          </p>
+        </Section>
+
         <Section title="Coverage, net staffing & intraday reforecast">
           <Formula>{`Coverage(i)     = agents whose shift spans interval i (minus breaks)
 Net staffing(i) = scheduled(i) − gross required(i)

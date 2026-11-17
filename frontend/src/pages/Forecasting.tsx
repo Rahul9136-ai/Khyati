@@ -298,7 +298,7 @@ export function Forecasting() {
                 <span className="mb-1 block text-xs font-medium text-muted-foreground">Start date</span>
                 <input
                   type="date"
-                  aria-label="Start date"
+                  aria-label="Forecast start date"
                   value={start}
                   min={ymd(TODAY)}
                   onChange={(e) => e.target.value && setForecastPeriod(e.target.value, e.target.value > end ? e.target.value : end)}
@@ -309,7 +309,7 @@ export function Forecasting() {
                 <span className="mb-1 block text-xs font-medium text-muted-foreground">End date</span>
                 <input
                   type="date"
-                  aria-label="End date"
+                  aria-label="Forecast end date"
                   value={end}
                   min={start}
                   max={ymd(addDays(parseYMD(start), MAX_RANGE_DAYS - 1))}

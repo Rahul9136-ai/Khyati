@@ -24,8 +24,23 @@ The repo is a monorepo with two independently runnable halves:
 - 7 forecasting models (Seasonal Naïve, Moving Average, Holt-Winters, SARIMA, Prophet-style,
   Linear Regression, k-NN) with rolling back-test + auto-selected best model by MAPE.
 - Actuals import (Excel/CSV) that appends to history and retrains automatically.
-- Daily/Weekly/Monthly granularity, custom date ranges, ramp-up/ramp-down planning, and a
-  90-day horizon.
+- **One forecast period** — a start date and an end date (up to a year). Rows follow the
+  period's length: per day up to 31 days, per week up to ~4 months, then per month.
+- **Targets** — choose what to predict for the period: volume, AHT, required hours, required
+  FTE, scheduled hours, over/under, service level and occupancy.
+- **Forecast drivers (dependent features)** — marketing spend, active customers, orders,
+  website traffic, price changes or anything custom. Add by hand or import a sheet (a Date
+  column plus one column per driver; past rows are history, future rows are the plan), plan
+  future values flat or as a ramp, and point each driver at volume or AHT. The forecast is
+  multiplied by `(value ÷ reference) ^ elasticity` per day; elasticity is typed in or learned
+  from history (log–log regression), and the back-test shows its error with and without the
+  drivers. Drivers also apply in Reports, Scenario Studio and the performance reports.
+- **Automation & sync** — auto-select the most accurate model and auto-publish the period
+  whenever the dates, model, drivers or events change. The published forecast shows on the
+  Dashboard, is saved on the server, and is served flat for BI tools (Power BI, Tableau,
+  Looker, Grafana, Excel) at `GET /api/v1/forecasting/published` (JSON or `?format=csv`, API
+  key with `forecast:read`), with a `forecast.published` webhook on every publish.
+- Ramp-up/ramp-down planning.
 - **Events log (external factors)** — log one-off events (marketing campaigns, holidays,
   weather, outages, client wins/losses, product launches, seasonal peaks) with a date range
   (past or future), queue, and expected volume impact %; overlapping events compound
