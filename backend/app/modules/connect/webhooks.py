@@ -64,6 +64,10 @@ EVENTS: dict[str, str] = {
         "Something people keep in the app (employees, forecasts, PTO, scenarios, messages ...) "
         "was saved; GET /workspace/data/{key} for the new value."
     ),
+    "forecast.published": (
+        "A forecast was published (by hand or automatically) for a period — totals per queue "
+        "included; GET /forecasting/published for every target day by day."
+    ),
     "ping": "Test event sent from the Integrations screen.",
 }
 

@@ -26,7 +26,8 @@ import { useWfm } from "@/store/wfm"
 
 export const WORKSPACE_KEYS = [
   "agents", "employeeProfiles", "formerEmployees", "employeeChanges", "dataSources", "users", "permissions",
-  "queues", "lobs", "forecasts", "forecastMethod", "importedActuals", "externalFactors", "shrinkage", "scenarios",
+  "queues", "lobs", "forecasts", "forecastMethod", "importedActuals", "externalFactors",
+  "forecastDrivers", "forecastAutomation", "publishedForecasts", "shrinkage", "scenarios",
   "ptoRequests", "swaps", "exceptions", "skillChangeRecommendations", "messages", "auditLog",
   "thresholds", "ruleState", "pipelineAutoRun",
 ] as const
@@ -38,7 +39,8 @@ const MERGE: ReadonlySet<WorkspaceKey> = new Set(["auditLog", "employeeChanges",
 const LABEL: Partial<Record<WorkspaceKey, string>> = {
   agents: "the roster", employeeProfiles: "employee profiles", formerEmployees: "former employees", users: "users",
   permissions: "role permissions", queues: "skills / queues", lobs: "lines of business", forecasts: "forecasts", importedActuals: "imported actuals",
-  externalFactors: "forecast events", scenarios: "scenarios", ptoRequests: "PTO requests", swaps: "shift swaps",
+  externalFactors: "forecast events", forecastDrivers: "forecast drivers", forecastAutomation: "forecast automation",
+  publishedForecasts: "published forecasts", scenarios: "scenarios", ptoRequests: "PTO requests", swaps: "shift swaps",
   exceptions: "adherence exceptions", thresholds: "automation thresholds", ruleState: "automation rules",
 }
 const label = (k: WorkspaceKey) => LABEL[k] ?? k

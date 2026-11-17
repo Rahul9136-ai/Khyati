@@ -45,6 +45,9 @@ KEYS: dict[str, tuple[str, ...] | None] = {
     "forecastMethod": ("forecast:write",),
     "importedActuals": ("forecast:write",),
     "externalFactors": ("forecast:write",),
+    "forecastDrivers": ("forecast:write",),
+    "forecastAutomation": ("forecast:write",),
+    "publishedForecasts": ("forecast:write",),
     "shrinkage": ("plan:write", "planning:write", "attendance:write", "schedule:write"),
     "scenarios": ("plan:write", "planning:write"),
     # requests and day-to-day
@@ -159,4 +162,24 @@ async def put(
         "workspace.updated",
         {"key": key, "version": row.version, "updatedBy": row.updated_by},
     )
+    if key == "publishedForecasts" and isinstance(value, dict):
+        await webhooks.emit(
+            db,
+            org,
+            "forecast.published",
+            {
+                "version": row.version,
+                "updatedBy": row.updated_by,
+                "queues": [
+                    {
+                        "queueId": p.get("queueId"),
+                        "start": p.get("start"),
+                        "end": p.get("end"),
+                        "totals": p.get("totals"),
+                    }
+                    for p in value.values()
+                    if isinstance(p, dict)
+                ],
+            },
+        )
     return row

@@ -52,12 +52,12 @@ export function Scenarios() {
 
 function ScenariosContent() {
   const {
-    queues, forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents,
+    queues, forecasts, forecastMethod, importedActuals, externalFactors, forecastDrivers, shrinkage, agents,
     scenarios, addScenario, removeScenario,
   } = useWfm()
   const inputs = useMemo(
-    () => ({ forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents, queues }),
-    [forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents, queues],
+    () => ({ forecasts, forecastMethod, importedActuals, externalFactors, forecastDrivers, shrinkage, agents, queues }),
+    [forecasts, forecastMethod, importedActuals, externalFactors, forecastDrivers, shrinkage, agents, queues],
   )
 
   // ---- events → volume & requirement impact timeline ----

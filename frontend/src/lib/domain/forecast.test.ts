@@ -82,11 +82,11 @@ describe("ML and deep-learning forecasting methods", () => {
   })
 
   it("keeps back-tests fast enough for the UI", () => {
-    for (const g of ["daily", "weekly", "monthly"] as const) {
+    for (const w of [7, 14]) {
       const t0 = performance.now()
-      backtestG(qid, g)
+      backtestG(qid, w)
       const ms = performance.now() - t0
-      console.log(`backtestG ${g}: ${ms.toFixed(0)} ms`)
+      console.log(`backtestG ${w}-day window: ${ms.toFixed(0)} ms`)
       expect(ms).toBeLessThan(8000)
     }
   })

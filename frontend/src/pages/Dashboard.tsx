@@ -8,6 +8,7 @@ import { ExportButton } from "@/components/export-button"
 import { KpiCard } from "@/components/kpi-card"
 import { LiveKpis } from "@/components/live-kpis"
 import { PageHeader } from "@/components/page-header"
+import { PublishedForecastCard } from "@/components/published-forecast-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { trafficIntensity } from "@/lib/domain/erlang"
 import { actualsFor, INTERVALS } from "@/lib/domain/seed"
@@ -98,6 +99,8 @@ export function Dashboard() {
         <KpiCard label="Occupancy" value={fmtPct(liveOcc)} hint="live · agents on queue" tone={liveOcc <= 0.9 ? "good" : "warn"} icon={Percent} />
         <KpiCard label="Adherence" value={fmtPct(adherence)} hint={`${adhCount}/${live.boardSize} on plan · vs today's schedule`} tone={adherence >= 0.9 ? "good" : adherence >= 0.8 ? "warn" : "bad"} icon={Users} />
       </div>
+
+      <PublishedForecastCard queueId={queue.id} />
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card className="glass lg:col-span-2">

@@ -51,7 +51,7 @@ export function PersonStats({ p }: { p: PersonSummary }) {
 
 /** Reports → Performance: pick a period and an LOB or a person, see it, export it. */
 export function PerformanceReports() {
-  const { agents, queues, workCompliance, forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, dayStore, scheduleDate } = useWfm()
+  const { agents, queues, workCompliance, forecasts, forecastMethod, importedActuals, externalFactors, forecastDrivers, shrinkage, dayStore, scheduleDate } = useWfm()
   const syncStatus = useScheduleSync((s) => s.status)
   const canWrite = useScheduleSync((s) => s.canWrite)
   const online = syncStatus !== "idle" && syncStatus !== "offline"
@@ -92,9 +92,9 @@ export function PerformanceReports() {
 
   const lob = useMemo(() => {
     if (!input || scope !== "lob") return null
-    const planned = planRange({ forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents, queues }, parseYMD(start), parseYMD(end))
+    const planned = planRange({ forecasts, forecastMethod, importedActuals, externalFactors, forecastDrivers, shrinkage, agents, queues }, parseYMD(start), parseYMD(end))
     return lobReport(input, planned, lobId || null)
-  }, [input, scope, lobId, forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents, queues, start, end])
+  }, [input, scope, lobId, forecasts, forecastMethod, importedActuals, externalFactors, forecastDrivers, shrinkage, agents, queues, start, end])
 
   const person = useMemo(() => {
     const a = agents.find((x) => x.id === personId)

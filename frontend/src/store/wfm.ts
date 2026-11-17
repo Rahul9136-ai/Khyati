@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
+import { addDays as addDaysDate, TODAY, ymd } from "@/lib/domain/dates"
 import { backtest, generate } from "@/lib/domain/forecast"
 import type { ActualRow } from "@/lib/domain/history"
 import {
@@ -26,6 +27,9 @@ import {
   type EmployeeProfile,
 } from "@/lib/domain/employeeProfile"
 import type { ExternalFactor, NewFactor } from "@/lib/domain/externalFactors"
+import type { DriverValue, ForecastDriver, NewDriver, ParsedDriverSeries } from "@/lib/domain/drivers"
+import type { PublishedForecast, TargetId } from "@/lib/domain/publishedForecast"
+import { DEFAULT_TARGETS } from "@/lib/domain/publishedForecast"
 import type { ScheduleAddition } from "@/lib/domain/autoschedule"
 import { evaluatePtoRequest } from "@/lib/domain/ptoRules"
 import {
@@ -522,6 +526,30 @@ interface WfmState {
   importExternalFactors: (rows: NewFactor[], sourceLabel: string) => void
   removeExternalFactor: (id: string) => void
 
+  // Forecast drivers — dependent features (spend, customers, orders, traffic …)
+  // with recorded/planned values and an elasticity on volume or AHT.
+  forecastDrivers: ForecastDriver[]
+  addForecastDriver: (d: NewDriver) => void
+  updateForecastDriver: (id: string, patch: Partial<NewDriver>, auditAction?: string) => void
+  addDriverValues: (id: string, values: DriverValue[]) => void
+  removeForecastDriver: (id: string) => void
+  /** Adds the imported series as drivers (or adds their values to a driver of the same name + queue). */
+  importForecastDrivers: (series: ParsedDriverSeries[], sourceLabel: string, reference: (s: ParsedDriverSeries) => number) => { added: number; updated: number }
+
+  /** The period the Forecasting page predicts (start → end). */
+  forecastPeriod: { start: string; end: string }
+  setForecastPeriod: (start: string, end: string) => void
+  /** Which targets the forecast shows, publishes and syncs. */
+  forecastTargets: TargetId[]
+  setForecastTargets: (t: TargetId[]) => void
+  /** Auto-select the most accurate model; auto-publish the period whenever it changes. */
+  forecastAutomation: { autoSelectBest: boolean; autoPublish: boolean }
+  setForecastAutomation: (patch: Partial<{ autoSelectBest: boolean; autoPublish: boolean }>) => void
+  /** Each queue's published forecast for its period — what dashboards and the API read. */
+  publishedForecasts: Record<string, PublishedForecast>
+  publishForecast: (p: PublishedForecast) => void
+  unpublishForecast: (queueId: string) => void
+
   auditLog: AuditEntry[]
   logAudit: (category: AuditCategory, action: string, detail: string) => void
   clearAudit: () => void
@@ -769,6 +797,7 @@ export const useWfm = create<WfmState>()(
           forecasts: rest(s.forecasts),
           forecastMethod: rest(s.forecastMethod),
           importedActuals: rest(s.importedActuals),
+          publishedForecasts: rest(s.publishedForecasts),
           lobs: effectiveLobs(s.lobs),
           auditLog: [entry(s.currentUser, "Config", "Removed queue", q.name), ...s.auditLog],
         })
@@ -1244,6 +1273,96 @@ export const useWfm = create<WfmState>()(
             externalFactors: s.externalFactors.filter((x) => x.id !== id),
             auditLog: f ? [entry(s.currentUser, "Forecast", "Removed external factor", f.name), ...s.auditLog] : s.auditLog,
           }
+        }),
+
+      forecastDrivers: [],
+      addForecastDriver: (d) =>
+        set((s) => ({
+          forecastDrivers: [...s.forecastDrivers, { ...d, id: "drv" + uid(), createdAt: Date.now() }],
+          auditLog: [entry(s.currentUser, "Forecast", "Added forecast driver", `${d.name} · ${d.target} · elasticity ${d.elasticity}`), ...s.auditLog],
+        })),
+      updateForecastDriver: (id, patch, auditAction) =>
+        set((s) => {
+          const d = s.forecastDrivers.find((x) => x.id === id)
+          if (!d) return {}
+          return {
+            forecastDrivers: s.forecastDrivers.map((x) => (x.id === id ? { ...x, ...patch } : x)),
+            ...(auditAction ? { auditLog: [entry(s.currentUser, "Forecast", auditAction, d.name), ...s.auditLog] } : {}),
+          }
+        }),
+      addDriverValues: (id, values) =>
+        set((s) => {
+          const d = s.forecastDrivers.find((x) => x.id === id)
+          if (!d || !values.length) return {}
+          const first = values[0]
+          const last = values[values.length - 1]
+          return {
+            forecastDrivers: s.forecastDrivers.map((x) => (x.id === id ? { ...x, values: [...x.values, ...values] } : x)),
+            auditLog: [entry(s.currentUser, "Forecast", "Planned driver values", `${d.name} · ${first.from} → ${last.to}`), ...s.auditLog],
+          }
+        }),
+      removeForecastDriver: (id) =>
+        set((s) => {
+          const d = s.forecastDrivers.find((x) => x.id === id)
+          return {
+            forecastDrivers: s.forecastDrivers.filter((x) => x.id !== id),
+            auditLog: d ? [entry(s.currentUser, "Forecast", "Removed forecast driver", d.name), ...s.auditLog] : s.auditLog,
+          }
+        }),
+      importForecastDrivers: (series, sourceLabel, reference) => {
+        let added = 0
+        let updated = 0
+        set((s) => {
+          const list = [...s.forecastDrivers]
+          for (const sr of series) {
+            const i = list.findIndex((d) => d.name.toLowerCase() === sr.name.toLowerCase() && d.queueId === sr.queueId)
+            if (i >= 0) {
+              list[i] = { ...list[i], values: [...list[i].values, ...sr.values] }
+              updated++
+            } else {
+              list.push({
+                id: "drv" + uid(), createdAt: Date.now(), name: sr.name, kind: "Custom", unit: "", queueId: sr.queueId,
+                target: "volume", reference: reference(sr), elasticity: 0, elasticitySource: "manual", values: sr.values, enabled: true,
+              })
+              added++
+            }
+          }
+          return {
+            forecastDrivers: list,
+            auditLog: [entry(s.currentUser, "Forecast", "Imported forecast drivers", `${added} new, ${updated} updated from ${sourceLabel}`), ...s.auditLog],
+          }
+        })
+        return { added, updated }
+      },
+
+      forecastPeriod: { start: ymd(TODAY), end: ymd(addDaysDate(TODAY, 29)) },
+      setForecastPeriod: (start, end) => set({ forecastPeriod: { start, end: end < start ? start : end } }),
+      forecastTargets: DEFAULT_TARGETS,
+      setForecastTargets: (t) => set({ forecastTargets: t.length ? t : DEFAULT_TARGETS }),
+      forecastAutomation: { autoSelectBest: true, autoPublish: true },
+      setForecastAutomation: (patch) =>
+        set((s) => {
+          const changes = Object.entries(patch).map(([k, v]) => `${k === "autoSelectBest" ? "Auto-select best model" : "Auto-publish"} ${v ? "on" : "off"}`)
+          return {
+            forecastAutomation: { ...s.forecastAutomation, ...patch },
+            auditLog: [entry(s.currentUser, "Forecast", "Forecast automation", changes.join(", ")), ...s.auditLog],
+          }
+        }),
+      publishedForecasts: {},
+      publishForecast: (p) =>
+        set((s) => ({
+          publishedForecasts: { ...s.publishedForecasts, [p.queueId]: p },
+          auditLog: [
+            entry(s.currentUser, "Forecast", p.auto ? "Auto-published forecast" : "Published forecast", `${p.queueName} · ${p.start} → ${p.end} · ${p.methodName} · ${p.totals.volume.toLocaleString()} contacts`),
+            ...s.auditLog,
+          ].slice(0, 500),
+        })),
+      unpublishForecast: (queueId) =>
+        set((s) => {
+          const next = { ...s.publishedForecasts }
+          const p = next[queueId]
+          delete next[queueId]
+          return { publishedForecasts: next, auditLog: p ? [entry(s.currentUser, "Forecast", "Unpublished forecast", p.queueName), ...s.auditLog] : s.auditLog }
         }),
 
       auditLog: seedAudit(DEFAULT_USER),
@@ -1953,6 +2072,11 @@ export const useWfm = create<WfmState>()(
         forecastMethod: s.forecastMethod,
         importedActuals: s.importedActuals,
         externalFactors: s.externalFactors,
+        forecastDrivers: s.forecastDrivers,
+        forecastPeriod: s.forecastPeriod,
+        forecastTargets: s.forecastTargets,
+        forecastAutomation: s.forecastAutomation,
+        publishedForecasts: s.publishedForecasts,
         auditLog: s.auditLog,
         ptoRequests: s.ptoRequests,
         users: s.users,

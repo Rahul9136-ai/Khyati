@@ -7,6 +7,7 @@
 import {
   dowOf, enumerateDays, fmtDay, monthKey, monthLabel, TODAY, weekKey, weekLabel, ymd,
 } from "@/lib/domain/dates"
+import { driverMultipliers, type ForecastDriver } from "@/lib/domain/drivers"
 import { factorMultiplier, type ExternalFactor } from "@/lib/domain/externalFactors"
 import { backtest, methodById } from "@/lib/domain/forecast"
 import { dayProfile } from "@/lib/domain/granularity"
@@ -37,6 +38,8 @@ export interface ReportInputs {
   forecastMethod: Record<string, string>
   importedActuals: Record<string, ActualRow[]>
   externalFactors: ExternalFactor[]
+  /** Forecast drivers (dependent features) — the same ones the Forecasting page applies. */
+  forecastDrivers?: ForecastDriver[]
   shrinkage: number
   agents: Agent[]
   queues: Queue[]
@@ -75,9 +78,10 @@ export function planRange(inp: ReportInputs, start: Date, end: Date): QueueDay[]
       const base = key === todayKey && inp.forecasts[q.id]
         ? inp.forecasts[q.id]
         : dayProfile(q.id, date, methodOf[q.id], inp.importedActuals[q.id])
-      const mult = inp.externalFactors.length ? factorMultiplier(inp.externalFactors, q.id, key) : 1
+      const dm = driverMultipliers(inp.forecastDrivers, q.id, key)
+      const mult = (inp.externalFactors.length ? factorMultiplier(inp.externalFactors, q.id, key) : 1) * dm.volume
       const volume = mult === 1 ? base : base.map((v) => Math.round(v * mult))
-      const plan = buildPlan(volume, q.aht, q, inp.shrinkage, inp.agents)
+      const plan = buildPlan(volume, q.aht * dm.aht, q, inp.shrinkage, inp.agents)
       out.push({ date, key, queue: q, plan, sum: summarisePlan(plan) })
     }
   }

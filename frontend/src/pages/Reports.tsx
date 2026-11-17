@@ -42,7 +42,7 @@ export function Reports() {
 }
 
 function ReportsContent() {
-  const { forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents, rta, queues } = useWfm()
+  const { forecasts, forecastMethod, importedActuals, externalFactors, forecastDrivers, shrinkage, agents, rta, queues } = useWfm()
 
   const [gran, setGran] = useState<ReportGran>("day")
   const [start, setStart] = useState(ymd(TODAY))
@@ -50,8 +50,8 @@ function ReportsContent() {
   const rangeEnd = end < start ? start : end
 
   const inputs = useMemo(
-    () => ({ forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents, queues }),
-    [forecasts, forecastMethod, importedActuals, externalFactors, shrinkage, agents, queues],
+    () => ({ forecasts, forecastMethod, importedActuals, externalFactors, forecastDrivers, shrinkage, agents, queues }),
+    [forecasts, forecastMethod, importedActuals, externalFactors, forecastDrivers, shrinkage, agents, queues],
   )
 
   // every queue × day in the range, planned once; all the views below roll this up
