@@ -9,6 +9,7 @@
 //   rewritten locally (other dates already follow the rules).
 import { api, type ApiError } from "@/lib/api"
 import { agentDay, dayToPatch, noBreakFor, type AgentDay } from "@/lib/domain/channels"
+import { otBreakRuleOf } from "@/lib/domain/otBreaks"
 import { datesBetween } from "@/lib/domain/horizon"
 import { workedMinutes } from "@/lib/domain/labourLaw"
 import type { Agent } from "@/lib/domain/types"
@@ -217,12 +218,16 @@ export function rangeDays(start: string, end: string, saved: RangeRow[] = [], sa
   const s = useWfm.getState()
   const savedBy = new Map(saved.map((r) => [`${r.plan_date}|${r.agent_key}`, r]))
   const perAgent = new Map<string, RangeDay[]>(s.agents.map((a) => [a.id, []]))
+  // the overtime-break rule, so reports split OT into scheduled / breaks / worked / paid
+  const otRule = otBreakRuleOf(s.workCompliance)
   for (const date of datesBetween(start, end)) {
     const d = scheduleForDate(s, date)
     for (const a of d.agents) {
       const row = savedBy.get(`${date}|${a.id}`)
       const guard = noBreakFor(a, s.shiftPatterns)
-      const day = row ? { ...dayFromServer(row), ...(guard ? { noBreak: guard } : {}) } : agentDay(a, s.shiftPatterns, d.breakOverrides, d.channelPlan, d.overtimePlan, d.activityPlan)
+      const day = row
+        ? { ...dayFromServer(row), ...(guard ? { noBreak: guard } : {}), ...(otRule ? { otBreakRule: otRule } : {}) }
+        : agentDay(a, s.shiftPatterns, d.breakOverrides, d.channelPlan, d.overtimePlan, d.activityPlan, otRule)
       if (!row && savedOnly) continue
       perAgent.get(a.id)!.push({ date, day, source: row ? (row.published_at ? "published" : "draft") : "planned" })
     }

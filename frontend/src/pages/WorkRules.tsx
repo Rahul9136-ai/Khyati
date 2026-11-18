@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { fmtHM, toMins } from "@/lib/domain/channels"
 import { addDays, fmtDay, localISODate, weekStart } from "@/lib/domain/horizon"
 import { fmtDuration } from "@/lib/domain/labourLaw"
+import { DEFAULT_OT_BREAK, describeOtBreakRule, otBreakRuleOf, otBreaksFor } from "@/lib/domain/otBreaks"
 import {
   checkWorkRule,
   DEFAULT_WORK_COMPLIANCE,
@@ -510,6 +511,61 @@ const LIMITS: { key: keyof WorkCompliance; label: string; unit: string; step: nu
   { key: "minRestBetweenShiftsHours", label: "Min rest between shifts", unit: "h", step: 0.5, min: 1 },
 ]
 
+/** The overtime-break rule: a break inside overtime for every so many minutes of it. */
+function OtBreakRuleCard({ canEdit }: { canEdit: boolean }) {
+  const { workCompliance, setWorkCompliance } = useWfm()
+  const on = workCompliance.otBreakEveryMinutes != null
+  const every = workCompliance.otBreakEveryMinutes ?? DEFAULT_OT_BREAK.everyMinutes
+  const len = workCompliance.otBreakMinutes ?? DEFAULT_OT_BREAK.breakMinutes
+  const paid = workCompliance.otBreakPaid ?? DEFAULT_OT_BREAK.paid
+  const update = (patch: Partial<WorkCompliance>) => setWorkCompliance({ ...workCompliance, ...patch })
+  const rule = otBreakRuleOf(workCompliance)
+  // A worked example: 3h of overtime after a shift ending at 17:00.
+  const example = otBreaksFor([{ start: 17 * 60, end: 20 * 60 }], rule ?? { everyMinutes: every, breakMinutes: len, paid })
+  const invalid = on && !rule
+  return (
+    <Card className="glass">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Overtime breaks</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Gives overtime its own breaks, placed evenly through each stretch of OT (touching OT blocks count as one). An OT break takes the agent off the
+          channel, so it doesn't count towards coverage, worked time or the "max work in a row" rule. Reports show OT scheduled, OT breaks, OT worked and OT paid apart.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs">
+            <input type="checkbox" className="accent-primary" disabled={!canEdit} checked={on} aria-label="Use: Overtime breaks"
+              onChange={(e) => update({ otBreakEveryMinutes: e.target.checked ? every : null, otBreakMinutes: len, otBreakPaid: paid })} />
+            <span className="flex-1">Break length</span>
+            <Input type="number" className="h-7 w-20 text-xs" aria-label="OT break length" disabled={!canEdit || !on} min={5} max={60} step={5} value={len}
+              onChange={(e) => update({ otBreakMinutes: Math.min(60, Math.max(5, Number(e.target.value) || 15)) })} />
+            <span className="w-8 text-muted-foreground">min</span>
+          </label>
+          <label className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs">
+            <span className="flex-1">One break for every</span>
+            <Input type="number" className="h-7 w-20 text-xs" aria-label="OT minutes per break" disabled={!canEdit || !on} min={30} max={600} step={15} value={every}
+              onChange={(e) => update({ otBreakEveryMinutes: Math.min(600, Math.max(30, Number(e.target.value) || 120)) })} />
+            <span className="w-14 text-muted-foreground">min of OT</span>
+          </label>
+          <label className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs sm:col-span-2">
+            <input type="checkbox" className="accent-primary" disabled={!canEdit || !on} checked={paid} aria-label="OT breaks are paid"
+              onChange={(e) => update({ otBreakPaid: e.target.checked })} />
+            <span className="flex-1">OT breaks are paid (counted in OT paid hours; they're never counted as worked time)</span>
+          </label>
+        </div>
+        <p className={cn("text-xs", invalid ? "text-destructive" : "text-muted-foreground")}>
+          {invalid
+            ? "The break must be shorter than the OT it's earned for."
+            : on
+              ? `${describeOtBreakRule(rule)}. Example: 3h of OT from 17:00 gets ${example.length ? example.map((b) => `${fmtHM(b.start)}–${fmtHM(b.end)}`).join(" and ") : "no break"}.`
+              : "Off: overtime has no breaks of its own."}
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
 function ComplianceTab({ canEdit }: { canEdit: boolean }) {
   const { workCompliance, setWorkCompliance, agents, shiftPatterns, dayStore, activityPlan } = useWfm()
   const status = useScheduleSync((s) => s.status)
@@ -573,6 +629,8 @@ function ComplianceTab({ canEdit }: { canEdit: boolean }) {
           </label>
         </CardContent>
       </Card>
+
+      <OtBreakRuleCard canEdit={canEdit} />
 
       <Card className="glass">
         <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0 pb-2">

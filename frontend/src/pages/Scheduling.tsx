@@ -26,6 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { computeAbsenceRisk } from "@/lib/domain/absenceRisk"
 import { breakAwareCoverage, optimiseBreaks } from "@/lib/domain/breaks"
 import { activityCoverageLoss, overtimeAgents, toMins } from "@/lib/domain/channels"
+import { otBreakRuleOf } from "@/lib/domain/otBreaks"
 import { intervalOutcomes, liveAgentStates, PATIENCE_SECS, soFar, type IntervalPhase } from "@/lib/domain/liveCoverage"
 import { employedOn } from "@/lib/domain/employeeProfile"
 import { actualsFor, AUX, INTERVALS } from "@/lib/domain/seed"
@@ -87,7 +88,7 @@ function occupancyOf(heads: number, intensity: number): number {
 const fmtSecs = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, "0")}s` : `${Math.round(s)}s`)
 
 export function Scheduling() {
-  const { queueId, forecasts, shrinkage, agents: roster, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule, currentRole, currentAgentId, overtimePlan, activityPlan, scheduleDate, rta, nowIdx, employeeProfiles } = useWfm()
+  const { queueId, forecasts, shrinkage, agents: roster, setAgents, shiftPatterns, queues, breakOverrides, applyBreakOverrides, resetBreakOverrides, applyAutoSchedule, currentRole, currentAgentId, overtimePlan, activityPlan, scheduleDate, rta, nowIdx, employeeProfiles, workCompliance } = useWfm()
   const canEditRole = useWfm((s) => s.can("scheduling", "edit"))
   // Past days are the record of what happened: view only.
   const isPast = scheduleDate < localISODate()
@@ -149,7 +150,8 @@ export function Scheduling() {
   }
   const visibleAgents = isAgent ? agents.filter((a) => a.id === currentAgentId) : agents
   // Roster plus every OT block as an extra head, so overtime counts toward coverage & SL.
-  const staffed = useMemo(() => [...agents, ...overtimeAgents(agents, overtimePlan)], [agents, overtimePlan])
+  const otRule = useMemo(() => otBreakRuleOf(workCompliance), [workCompliance])
+  const staffed = useMemo(() => [...agents, ...overtimeAgents(agents, overtimePlan, otRule)], [agents, overtimePlan, otRule])
   const plan = useMemo(() => buildPlan(forecasts[queue.id], queue.aht, queue, shrinkage, staffed), [forecasts, queue, shrinkage, staffed])
   const sum = useMemo(() => summarisePlan(plan), [plan])
 

@@ -342,7 +342,8 @@ async def add_overtime(plan_date: date, body: DayAddOvertimeIn, db: DbSession, a
 async def day_plan_coverage(plan_date: date, db: DbSession, user: Reader):
     rows = await dayplan_service.list_day_plans(db, org_scope(user), plan_date)
     rows = dayplan_service.visible(rows, user)
-    return ApiResponse(data=[DayCoverageSlot(**s) for s in dayplan_service.coverage(rows)])
+    rule = await dayplan_service.org_ot_break_rule(db, org_scope(user))
+    return ApiResponse(data=[DayCoverageSlot(**s) for s in dayplan_service.coverage(rows, rule)])
 
 
 @router.get("/day-plans/{plan_date}/export")
@@ -359,13 +360,15 @@ async def export_day_plans(
     )
     # Labour-law compliance sheets are included when the organisation has a country set.
     law = await dayplan_service.org_law(db, org)
+    # Overtime breaks show in the OT when the organisation's compliance rule is on.
+    rule = await dayplan_service.org_ot_break_rule(db, org)
     if format == "csv":
         filename = f"schedules-{plan_date.isoformat()}.csv"
         return Response(
-            dayplan_service.export_csv(rows, law), media_type="text/csv; charset=utf-8",
+            dayplan_service.export_csv(rows, law, rule), media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
-    return ApiResponse(data=dayplan_service.export_sheets(rows, law))
+    return ApiResponse(data=dayplan_service.export_sheets(rows, law, rule))
 
 
 @router.get(

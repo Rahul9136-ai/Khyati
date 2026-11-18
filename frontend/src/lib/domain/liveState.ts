@@ -3,6 +3,7 @@
 // meetings, training, week off …) and how long they've been in their current
 // state (one timestamp per agent, so every page shows the same ticking timer).
 import { DAY_START } from "@/lib/domain/adherence"
+import { dayOtBreaks } from "./otBreaks"
 import type { AgentDay } from "@/lib/domain/channels"
 import type { RtaEntry } from "@/lib/domain/types"
 
@@ -28,6 +29,8 @@ export function scheduledAux(day: AgentDay, minute: number): string {
   if (!onShift && !onOt) return "OFFLINE"
   const brk = day.breaks.find(covers)
   if (brk) return brk.type === "lunch" ? "AUX2" : "AUX1"
+  // a break inside overtime (overtime-break rule) is a break too
+  if (dayOtBreaks(day).some(covers)) return "AUX1"
   return "AVAIL"
 }
 

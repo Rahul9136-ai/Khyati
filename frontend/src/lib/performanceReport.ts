@@ -8,6 +8,7 @@
 import { api } from "@/lib/api"
 import { ACTIVITY_BY_ID, type AgentDay } from "@/lib/domain/channels"
 import { workedMinutes } from "@/lib/domain/labourLaw"
+import { describeOtBreakRule, otBreakRuleOf, otMinutes } from "@/lib/domain/otBreaks"
 import type { Agent, Queue } from "@/lib/domain/types"
 import { checkWorkDay, checkWorkWeeks, WORK_CHECK_LABEL, type WorkCompliance } from "@/lib/domain/workRules"
 import type { Row, Sheet } from "@/lib/export"
@@ -65,16 +66,23 @@ export function dayStatus(day: AgentDay): DayStatus {
 const span = (items: { start: number; end: number }[]) => items.reduce((t, x) => t + x.end - x.start, 0)
 const lobOf = (a: Agent, queues: Queue[]) => queues.find((q) => q.id === a.skills[0])?.name ?? "No LOB"
 
-function dayMetrics(day: AgentDay) {
+/** One day's figures. Overtime is split by the overtime-break rule: scheduled OT,
+ *  its OT breaks, OT actually worked, and OT paid (worked + paid breaks). */
+function dayMetrics(day: AgentDay, c?: WorkCompliance) {
   const status = dayStatus(day)
   const working = status === "Working"
   const activity = (types: string[]) => (working ? span(day.activities.filter((a) => types.includes(a.type))) : 0)
+  const rule = day.otBreakRule ?? otBreakRuleOf(c)
+  const ot = otMinutes(day, rule)
   return {
     status,
     scheduled: working ? day.shift[1] - day.shift[0] : 0,
-    worked: workedMinutes(day),
+    worked: workedMinutes(rule ? { ...day, otBreakRule: rule } : day),
     breaks: working ? span(day.breaks) : 0,
-    ot: span(day.ot),
+    ot: ot.scheduled,
+    otBreaks: ot.breaks,
+    otWorked: ot.worked,
+    otPaid: ot.paid,
     offPhone: activity(["meeting", "training", "coaching", "other"]),
     partOff: activity(["vto", "pto", "absence", "loa", "leave"]),
   }
@@ -93,7 +101,12 @@ export interface PersonSummary {
   scheduledMins: number
   workedMins: number
   breakMins: number
+  /** Overtime scheduled (breaks included). */
   otMins: number
+  /** Of which OT breaks (overtime-break rule). */
+  otBreakMins: number
+  otWorkedMins: number
+  otPaidMins: number
   offPhoneMins: number
   partOffMins: number
   issues: number
@@ -104,7 +117,7 @@ export interface PersonSummary {
 const attendanceOf = (agent: Agent, rows: AttendanceRow[]) => rows.filter((r) => r.employee_code.toLowerCase() === agent.id.toLowerCase())
 
 export function summarisePerson(agent: Agent, days: RangeDay[], queues: Queue[], attendance: AttendanceRow[], c: WorkCompliance): PersonSummary {
-  const m = days.map((d) => dayMetrics(d.day))
+  const m = days.map((d) => dayMetrics(d.day, c))
   const sum = (f: (x: (typeof m)[number]) => number) => m.reduce((t, x) => t + f(x), 0)
   const count = (s: DayStatus) => m.filter((x) => x.status === s).length
   const mine = attendanceOf(agent, attendance)
@@ -121,6 +134,9 @@ export function summarisePerson(agent: Agent, days: RangeDay[], queues: Queue[],
     workedMins: sum((x) => x.worked),
     breakMins: sum((x) => x.breaks),
     otMins: sum((x) => x.ot),
+    otBreakMins: sum((x) => x.otBreaks),
+    otWorkedMins: sum((x) => x.otWorked),
+    otPaidMins: sum((x) => x.otPaid),
     offPhoneMins: sum((x) => x.offPhone),
     partOffMins: sum((x) => x.partOff),
     issues: days.reduce((t, d) => t + checkWorkDay(d.day, c).length, 0) + checkWorkWeeks(days, c).length,
@@ -152,6 +168,9 @@ const personRow = (p: PersonSummary): Row => ({
   "Planned work hours": hrs(p.workedMins),
   "Break hours": hrs(p.breakMins),
   "Overtime hours": hrs(p.otMins),
+  "OT break hours": hrs(p.otBreakMins),
+  "OT worked hours": hrs(p.otWorkedMins),
+  "OT paid hours": hrs(p.otPaidMins),
   "Meetings & training hours": hrs(p.offPhoneMins),
   "Part-day time off hours": hrs(p.partOffMins),
   "Compliance issues": p.issues,
@@ -192,6 +211,12 @@ export interface ReportInput {
 
 function statusNote(input: ReportInput): string[] {
   const out: string[] = []
+  const rule = otBreakRuleOf(input.compliance)
+  out.push(
+    rule
+      ? `Overtime breaks: ${describeOtBreakRule(rule)}. "Overtime hours" is all OT scheduled; "OT break hours" is the part spent on OT breaks; "OT worked hours" excludes them; "OT paid hours" adds them back when OT breaks are paid.`
+      : "Overtime breaks are off (Work rules → Compliance), so overtime has no breaks: OT worked and paid hours equal the overtime hours.",
+  )
   if (!input.actuals) out.push("Attendance and queue actuals couldn't be loaded, so they're left out.")
   const planned = input.agents.some((a) => (input.days.get(a.id) ?? []).some((d) => d.source === "planned"))
   if (planned) out.push("Rows with source 'Planned' aren't saved schedules yet: they come from each agent's work rule or shift pattern.")
@@ -204,7 +229,7 @@ export function personReport(input: ReportInput, agent: Agent): { summary: Perso
   const attendance = input.actuals?.attendance ?? []
   const summary = summarisePerson(agent, days, input.queues, attendance, input.compliance)
   const daily: Row[] = days.map(({ date, day, source }) => {
-    const m = dayMetrics(day)
+    const m = dayMetrics(day, input.compliance)
     const whole = m.status !== "Working"
     return {
       Date: date,
@@ -215,6 +240,9 @@ export function personReport(input: ReportInput, agent: Agent): { summary: Perso
       "Planned work hours": hrs(m.worked),
       "Break hours": hrs(m.breaks),
       "Overtime hours": hrs(m.ot),
+      "OT break hours": hrs(m.otBreaks),
+      "OT worked hours": hrs(m.otWorked),
+      "OT paid hours": hrs(m.otPaid),
       Activities: day.activities.map((a) => ACTIVITY_BY_ID[a.type]?.label ?? a.type).join(", "),
       Issues: checkWorkDay(day, input.compliance).map((i) => i.message).join("; "),
       Source: source[0].toUpperCase() + source.slice(1),
@@ -245,6 +273,9 @@ export interface LobSummary {
   scheduledMins: number
   workedMins: number
   otMins: number
+  otBreakMins: number
+  otWorkedMins: number
+  otPaidMins: number
   leave: number
   absence: number
   weekOff: number
@@ -275,6 +306,9 @@ export function lobReport(input: ReportInput, planned: QueueDay[], lobId: string
       scheduledMins: add((p) => p.scheduledMins),
       workedMins: add((p) => p.workedMins),
       otMins: add((p) => p.otMins),
+      otBreakMins: add((p) => p.otBreakMins),
+      otWorkedMins: add((p) => p.otWorkedMins),
+      otPaidMins: add((p) => p.otPaidMins),
       leave: add((p) => p.leave),
       absence: add((p) => p.absence),
       weekOff: add((p) => p.weekOff),
@@ -293,6 +327,9 @@ export function lobReport(input: ReportInput, planned: QueueDay[], lobId: string
     "Scheduled hours": hrs(r.scheduledMins),
     "Planned work hours": hrs(r.workedMins),
     "Overtime hours": hrs(r.otMins),
+    "OT break hours": hrs(r.otBreakMins),
+    "OT worked hours": hrs(r.otWorkedMins),
+    "OT paid hours": hrs(r.otPaidMins),
     "Week off days": r.weekOff,
     "Leave days": r.leave,
     "Absence days": r.absence,
@@ -309,7 +346,7 @@ export function lobReport(input: ReportInput, planned: QueueDay[], lobId: string
     const people = peopleIn(q)
     for (const p of planned.filter((x) => x.queue.id === q.id)) {
       const today = people.flatMap((a) => (input.days.get(a.id) ?? []).filter((d) => d.date === p.key))
-      const m = today.map((d) => dayMetrics(d.day))
+      const m = today.map((d) => dayMetrics(d.day, input.compliance))
       dailyRows.push({
         Date: p.key,
         LOB: q.name,
@@ -319,6 +356,9 @@ export function lobReport(input: ReportInput, planned: QueueDay[], lobId: string
         Absent: m.filter((x) => x.status === "Absence").length,
         "Planned work hours": hrs(m.reduce((t, x) => t + x.worked, 0)),
         "Overtime hours": hrs(m.reduce((t, x) => t + x.ot, 0)),
+        "OT break hours": hrs(m.reduce((t, x) => t + x.otBreaks, 0)),
+        "OT worked hours": hrs(m.reduce((t, x) => t + x.otWorked, 0)),
+        "OT paid hours": hrs(m.reduce((t, x) => t + x.otPaid, 0)),
         "Forecast volume": Math.round(p.sum.totalVol),
         "Required hours (forecast)": Math.round(p.sum.reqHours * 10) / 10,
         "Projected SL %": pct1(p.sum.wSL),

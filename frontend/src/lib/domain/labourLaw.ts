@@ -6,6 +6,7 @@
 // Only rules decidable from a single day are checked; weekly limits and rest
 // between days are shown for reference.
 import data from "./labourLaws.json"
+import { dayOtBreaks } from "./otBreaks"
 import type { AgentDay } from "./channels"
 
 export interface BreakRule {
@@ -87,9 +88,9 @@ function subtract(pieces: Span[], cuts: Span[]): Span[] {
 
 const NOT_WORKING = new Set(["loa", "absence", "vto", "pto", "leave", "off"])
 
-/** Worked time: shift + OT, minus breaks/lunch and LOA/absence (meetings etc. are work). */
+/** Worked time: shift + OT, minus breaks/lunch, OT breaks and LOA/absence (meetings etc. are work). */
 function workPieces(day: AgentDay): Span[] {
-  const off: Span[] = [...day.breaks, ...day.activities.filter((a) => NOT_WORKING.has(a.type))]
+  const off: Span[] = [...day.breaks, ...dayOtBreaks(day), ...day.activities.filter((a) => NOT_WORKING.has(a.type))]
   return subtract([{ start: day.shift[0], end: day.shift[1] }, ...day.ot], off)
 }
 export const workedMinutes = (day: AgentDay) => workPieces(day).reduce((t, w) => t + w.end - w.start, 0)

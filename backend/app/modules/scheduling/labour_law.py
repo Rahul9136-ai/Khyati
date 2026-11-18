@@ -15,7 +15,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from app.modules.scheduling.dayplan import AgentDay
+from app.modules.scheduling.dayplan import AgentDay, ot_breaks
 
 PRESETS_PATH = Path(__file__).with_name("labour_laws.json")
 
@@ -91,7 +91,11 @@ def _subtract(pieces: list[_Span], cuts: list) -> list[_Span]:
 
 
 def _work_pieces(day: AgentDay) -> list[_Span]:
-    off = [*day.breaks, *(a for a in day.activities if a.type in NOT_WORKING)]
+    off = [
+        *day.breaks,
+        *ot_breaks(day.ot, day.ot_break_rule),
+        *(a for a in day.activities if a.type in NOT_WORKING),
+    ]
     return _subtract(
         [_Span(day.shift_start, day.shift_end), *(_Span(o.start, o.end) for o in day.ot)], off
     )

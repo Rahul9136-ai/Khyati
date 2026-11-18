@@ -40,6 +40,9 @@ export function PersonStats({ p }: { p: PersonSummary }) {
       <Stat label="Planned work" value={h(p.workedMins)} />
       <Stat label="Breaks" value={h(p.breakMins)} />
       <Stat label="Overtime" value={h(p.otMins)} />
+      <Stat label="OT breaks" value={h(p.otBreakMins)} />
+      <Stat label="OT worked" value={h(p.otWorkedMins)} />
+      <Stat label="OT paid" value={h(p.otPaidMins)} />
       <Stat label="Compliance issues" value={p.issues} />
       <Stat label="Absences recorded" value={p.attendance ? p.attendance.absent : "No records"} />
       <Stat label="Late days" value={p.attendance ? p.attendance.late : "No records"} />
@@ -167,7 +170,7 @@ export function PerformanceReports() {
             <table className="w-full whitespace-nowrap text-xs" aria-label="LOB performance">
               <thead className="bg-muted/40 text-left text-muted-foreground">
                 <tr>
-                  {["LOB", "Agents", "Scheduled", "Planned work", "Overtime", "Week offs", "Leave", "Absence", "Compliance issues", "Forecast volume", "Required (forecast)", "Projected SL"].map((c) => <th key={c} className="px-3 py-1.5">{c}</th>)}
+                  {["LOB", "Agents", "Scheduled", "Planned work", "Overtime", "OT breaks", "OT paid", "Week offs", "Leave", "Absence", "Compliance issues", "Forecast volume", "Required (forecast)", "Projected SL"].map((c) => <th key={c} className="px-3 py-1.5">{c}</th>)}
                 </tr>
               </thead>
               <tbody className="tabular-nums">
@@ -178,6 +181,8 @@ export function PerformanceReports() {
                     <td className="px-3 py-1.5">{h(r.scheduledMins)}</td>
                     <td className="px-3 py-1.5">{h(r.workedMins)}</td>
                     <td className="px-3 py-1.5">{h(r.otMins)}</td>
+                    <td className="px-3 py-1.5">{h(r.otBreakMins)}</td>
+                    <td className="px-3 py-1.5">{h(r.otPaidMins)}</td>
                     <td className="px-3 py-1.5">{r.weekOff}</td>
                     <td className="px-3 py-1.5">{r.leave}</td>
                     <td className="px-3 py-1.5">{r.absence}</td>

@@ -92,6 +92,82 @@ class ActivitySeg:
     note: str | None = None
 
 
+@dataclass(frozen=True)
+class OtBreakRule:
+    """Overtime breaks (work compliance): one `break_minutes` break for every full
+    `every_minutes` of continuous overtime, spaced evenly. Mirrors
+    frontend/src/lib/domain/otBreaks.ts."""
+
+    every_minutes: int
+    break_minutes: int
+    paid: bool = False
+
+
+def ot_break_rule_of(compliance: dict | None) -> OtBreakRule | None:
+    """The rule from the work_compliance setting, or None when it's off."""
+    if not compliance:
+        return None
+    every = compliance.get("otBreakEveryMinutes")
+    length = compliance.get("otBreakMinutes") or 15
+    if not every or every < 30 or length < 5 or length >= every:
+        return None
+    return OtBreakRule(int(every), int(length), bool(compliance.get("otBreakPaid")))
+
+
+@dataclass
+class OtBreak:
+    id: str
+    start: int
+    end: int
+    paid: bool
+
+
+def _snap5(m: float) -> int:
+    # JS Math.round (halves round up), so both sides place breaks identically
+    return int(math.floor(m / 5 + 0.5)) * 5
+
+
+def ot_stretches(ot: list) -> list[tuple[int, int]]:
+    """OT blocks joined where they touch."""
+    out: list[list[int]] = []
+    for o in sorted((x for x in ot if x.end > x.start), key=lambda x: x.start):
+        if out and o.start <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], o.end)
+        else:
+            out.append([o.start, o.end])
+    return [(a, b) for a, b in out]
+
+
+def ot_breaks(ot: list, rule: OtBreakRule | None) -> list[OtBreak]:
+    if rule is None or not ot:
+        return []
+    out: list[OtBreak] = []
+    for st, en in ot_stretches(ot):
+        length = en - st
+        n = length // rule.every_minutes
+        if n < 1 or n * rule.break_minutes >= length:
+            continue
+        for i in range(1, n + 1):
+            centre = st + (i * length) / (n + 1)
+            start = min(en - rule.break_minutes, max(st, _snap5(centre - rule.break_minutes / 2)))
+            out.append(OtBreak(f"otb-{st}-{i}", start, start + rule.break_minutes, rule.paid))
+    return out
+
+
+def ot_minutes(day: AgentDay) -> dict[str, int]:
+    """OT scheduled / of which breaks / worked / paid."""
+    scheduled = sum(max(0, o.end - o.start) for o in day.ot)
+    brks = ot_breaks(day.ot, day.ot_break_rule)
+    breaks = sum(b.end - b.start for b in brks)
+    paid_breaks = sum(b.end - b.start for b in brks if b.paid)
+    return {
+        "scheduled": scheduled,
+        "breaks": breaks,
+        "worked": scheduled - breaks,
+        "paid": scheduled - breaks + paid_breaks,
+    }
+
+
 @dataclass
 class AgentDay:
     """One agent's day in absolute minutes — the unit every edit operates on."""
@@ -102,6 +178,8 @@ class AgentDay:
     channels: list[ChannelSeg] = field(default_factory=list)
     ot: list[ChannelSeg] = field(default_factory=list)
     activities: list[ActivitySeg] = field(default_factory=list)
+    #: The overtime-break rule in force; OT breaks are worked out from `ot` with it.
+    ot_break_rule: OtBreakRule | None = None
 
     def copy(self) -> AgentDay:
         return AgentDay(
@@ -111,6 +189,7 @@ class AgentDay:
             [replace(c) for c in self.channels],
             [replace(o) for o in self.ot],
             [replace(a) for a in self.activities],
+            self.ot_break_rule,
         )
 
     def sorted(self) -> AgentDay:
@@ -122,13 +201,14 @@ class AgentDay:
 
 @dataclass
 class TimelineSeg:
-    kind: Literal["channel", "break", "lunch", "unassigned", "ot", "activity"]
+    kind: Literal["channel", "break", "lunch", "unassigned", "ot", "ot-break", "activity"]
     start: int
     end: int
     label: str
     channel: Channel | None = None
     activity: ActivityType | None = None
     seg_id: str | None = None
+    paid: bool | None = None
 
 
 def _clamp(v: int, lo: int, hi: int) -> int:
@@ -244,17 +324,18 @@ def day_timeline(day: AgentDay) -> list[TimelineSeg]:
         out.append(TimelineSeg("unassigned", a, b, "Unassigned"))
     for br in brks:
         out.append(TimelineSeg(br.type, br.start, br.end, br.label, seg_id=br.id))
+    # OT blocks, cut by their OT breaks
+    otb = ot_breaks(day.ot, day.ot_break_rule)
     for o in day.ot:
-        out.append(
-            TimelineSeg(
-                "ot",
-                o.start,
-                o.end,
-                f"OT · {CHANNELS[o.channel]['label']}",
-                channel=o.channel,
-                seg_id=o.id,
+        for a, b in _subtract(o.start, o.end, otb):
+            out.append(
+                TimelineSeg(
+                    "ot", a, b, f"OT · {CHANNELS[o.channel]['label']}", channel=o.channel, seg_id=o.id
+                )
             )
-        )
+    for ob in otb:
+        label = f"OT break ({'paid' if ob.paid else 'unpaid'})"
+        out.append(TimelineSeg("ot-break", ob.start, ob.end, label, seg_id=ob.id, paid=ob.paid))
     for x in day.activities:
         label = ACTIVITIES[x.type]["label"] + (f" · {x.note}" if x.note else "")
         out.append(TimelineSeg("activity", x.start, x.end, label, activity=x.type, seg_id=x.id))
@@ -648,7 +729,17 @@ def _code(t: TimelineSeg) -> str:
         return f"OT-{CHANNELS[t.channel]['short']}"  # type: ignore[index]
     if t.kind == "activity":
         return ACTIVITIES[t.activity]["short"]  # type: ignore[index]
-    return {"break": "BRK", "lunch": "LUN", "unassigned": "—"}[t.kind]
+    return {"break": "BRK", "lunch": "LUN", "ot-break": "OT-BRK", "unassigned": "—"}[t.kind]
+
+
+def _ot_summary(day: AgentDay) -> dict[str, float | int]:
+    m = ot_minutes(day)
+    return {
+        "OT hrs": round(m["scheduled"] / 60, 2),
+        "OT break min": m["breaks"],
+        "OT worked hrs": round(m["worked"] / 60, 2),
+        "OT paid hrs": round(m["paid"] / 60, 2),
+    }
 
 
 @dataclass
@@ -669,6 +760,8 @@ def export_sheets(agents: list[ExportAgent]) -> dict[str, list[dict]]:
         return f"{fmt_hm(a.day.shift_start)}–{fmt_hm(a.day.shift_end)}"
 
     def type_of(t: TimelineSeg) -> str:
+        if t.kind == "ot-break":
+            return "OT break (paid)" if t.paid else "OT break (unpaid)"
         return {
             "ot": "Overtime",
             "channel": "Channel work",
@@ -723,7 +816,7 @@ def export_sheets(agents: list[ExportAgent]) -> dict[str, list[dict]]:
             ),
             "Break/lunch min": mins(lambda t: t.kind in ("break", "lunch")),
             "Unassigned min": mins(lambda t: t.kind == "unassigned"),
-            "OT hrs": round(mins(lambda t: t.kind == "ot") / 60, 2),
+            **_ot_summary(a.day),
         }
         for key, meta in ACTIVITIES.items():
             row[f"{meta['label']} min"] = sum(
@@ -738,7 +831,7 @@ def export_sheets(agents: list[ExportAgent]) -> dict[str, list[dict]]:
             hit = [t for t in tl if t.start <= t_ < t.end]
             seg = (
                 next((t for t in hit if t.kind == "activity"), None)
-                or next((t for t in hit if t.kind in ("break", "lunch")), None)
+                or next((t for t in hit if t.kind in ("break", "lunch", "ot-break")), None)
                 or (hit[0] if hit else None)
             )
             row[fmt_hm(t_)] = _code(seg) if seg else ""
@@ -764,6 +857,7 @@ def export_sheets(agents: list[ExportAgent]) -> dict[str, list[dict]]:
             for m in CHANNELS.values()
         ]
         + [{"Code": "BRK", "Meaning": "Break"}, {"Code": "LUN", "Meaning": "Lunch"}]
+        + [{"Code": "OT-BRK", "Meaning": "Overtime break: off the channel, not worked time"}]
         + [
             {
                 "Code": m["short"],

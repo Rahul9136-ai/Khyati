@@ -33,6 +33,7 @@ export const FIXED: NamedColour[] = [
   { hex: "#7c3aed", name: "Violet" },
   { hex: "#059669", name: "Emerald" },
   { hex: "#ea580c", name: "Orange" },
+  { hex: "#c2410c", name: "Rust" }, // OT break
 ]
 
 export const USER_PALETTE: NamedColour[] = [

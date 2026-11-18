@@ -54,13 +54,24 @@ import {
   type ScheduleSort,
   type TimelineSegment,
 } from "@/lib/domain/channels"
+import { describeOtBreakRule, OT_BREAK_COLOR, otBreakRuleOf } from "@/lib/domain/otBreaks"
 import { AUX_BY_CODE, INTERVALS } from "@/lib/domain/seed"
 import type { Agent, PlanRow, Queue } from "@/lib/domain/types"
 import { cn } from "@/lib/utils"
 import { useWfm } from "@/store/wfm"
 
-/** Fill for one timeline segment. OT is drawn as grid lines in its channel's colour. */
+/** Fill for one timeline segment. OT is drawn as grid lines in its channel's colour;
+ *  an OT break as rust-coloured stripes (solid edge = paid, dashed = unpaid). */
 function segmentStyle(seg: TimelineSegment): React.CSSProperties {
+  if (seg.kind === "ot-break") {
+    const c = OT_BREAK_COLOR
+    return {
+      background: `repeating-linear-gradient(135deg, ${c} 0 3px, ${c}55 3px 6px)`,
+      outline: `1.5px ${seg.paid ? "solid" : "dashed"} ${c}`,
+      outlineOffset: "-1.5px",
+      color: "#fff",
+    }
+  }
   if (seg.kind === "ot") {
     const c = CHANNEL_BY_ID[seg.channel!].color
     return {
@@ -177,6 +188,8 @@ export function ContinuousSchedule({
   const { shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, queues, updateAgentDay, updateAgentDays, labourLaw, setLabourLawCountry, workCompliance } = useWfm()
   // Country labour law the schedules are checked against (preset + local overrides).
   const law = useMemo(() => effectiveLaw(labourLaw.country, labourLaw.overrides), [labourLaw])
+  // Overtime breaks (Work rules → Compliance): worked out from the OT blocks, shown in the OT.
+  const otRule = useMemo(() => otBreakRuleOf(workCompliance), [workCompliance])
   const [lawOpen, setLawOpen] = useState(false)
   const [onlyIssues, setOnlyIssues] = useState(false)
   const [onlyWorkIssues, setOnlyWorkIssues] = useState(false)
@@ -192,8 +205,8 @@ export function ContinuousSchedule({
 
   // Each agent's day in absolute minutes — what every move/resize edits.
   const days = useMemo(
-    () => new Map(agents.map((a) => [a.id, agentDay(a, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan)])),
-    [agents, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan],
+    () => new Map(agents.map((a) => [a.id, agentDay(a, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, otRule)])),
+    [agents, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, otRule],
   )
 
   // ---- Multi-select schedules (Ctrl/⌘ + click, Shift + click, checkboxes) ----
@@ -588,7 +601,7 @@ export function ContinuousSchedule({
           <ExportButton
             label="Export schedules"
             filename="schedules-all"
-            sheets={() => scheduleExportSheets(agents, queues, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, law)}
+            sheets={() => scheduleExportSheets(agents, queues, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, law, otRule)}
           />
         </div>
       </div>
@@ -604,6 +617,11 @@ export function ContinuousSchedule({
         ))}
         <span className="flex items-center gap-1.5"><i className="h-3 w-5 rounded-sm" style={{ background: AUX_BY_CODE.AUX1.color }} /> Break</span>
         <span className="flex items-center gap-1.5"><i className="h-3 w-5 rounded-sm" style={{ background: AUX_BY_CODE.AUX2.color }} /> Lunch</span>
+        {otRule && (
+          <span className="flex items-center gap-1.5" title={describeOtBreakRule(otRule)}>
+            <i className="h-3 w-5 rounded-sm" style={segmentStyle({ kind: "ot-break", start: 0, end: 0, label: "", paid: otRule.paid })} /> OT break ({otRule.paid ? "paid" : "unpaid"})
+          </span>
+        )}
         <span className="flex items-center gap-1.5"><i className="h-3 w-5 rounded-sm" style={segmentStyle({ kind: "unassigned", start: 0, end: 0, label: "" })} /> Unassigned</span>
         <span className="basis-full sm:basis-auto sm:border-l sm:pl-4">Activities (upper band):</span>
         {ACTIVITIES.map((t) => (
@@ -649,7 +667,7 @@ export function ContinuousSchedule({
             label="Export selected"
             variant="ghost"
             filename="schedules-selected"
-            sheets={() => scheduleExportSheets(selectedAgents, queues, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, law)}
+            sheets={() => scheduleExportSheets(selectedAgents, queues, shiftPatterns, breakOverrides, channelPlan, overtimePlan, activityPlan, law, otRule)}
           />
           {selected.size < rowOrder.length && (
             <Button size="sm" variant="ghost" className="ml-auto h-7 text-xs" onClick={() => setSelected(new Set(rowOrder))}>
@@ -835,10 +853,13 @@ export function ContinuousSchedule({
                         // gets a handle on its block's real edges (not where a break cuts
                         // it), and not on the shift's edges — those belong to the shift handles.
                         const block = s.kind === "channel" ? day.channels.find((c) => c.id === s.segId) : undefined
+                        const otBlock = s.kind === "ot" ? day.ot.find((o) => o.id === s.segId) : undefined
                         const edgeOp = (edge: Edge): EditOp | null => {
                           if (!canEdit || !s.segId) return null
                           if (isAux) return { kind: "aux-resize", segId: s.segId, edge }
-                          if (s.kind === "ot") return { kind: "ot-resize", segId: s.segId, edge }
+                          // only the OT block's real edges — not where an OT break cuts it
+                          if (s.kind === "ot") return otBlock && s[edge] === otBlock[edge] ? { kind: "ot-resize", segId: s.segId, edge } : null
+                          if (s.kind === "ot-break") return null
                           if (block && s[edge] === block[edge] && s[edge] !== day.shift[edge === "start" ? 0 : 1]) {
                             return { kind: "channel-resize", segId: s.segId, edge }
                           }
@@ -851,7 +872,7 @@ export function ContinuousSchedule({
                         return (
                           <div
                             // Stable key per block so an element isn't remounted mid-drag.
-                            key={`${s.kind}-${s.segId ?? ""}-${s.kind === "channel" || s.kind === "unassigned" ? s.start : ""}`}
+                            key={`${s.kind}-${s.segId ?? ""}-${s.kind === "channel" || s.kind === "unassigned" || s.kind === "ot" ? s.start : ""}`}
                             className={cn(
                               "group/seg absolute top-3 flex h-6 items-end overflow-hidden rounded-[3px] px-1 pb-0.5 text-[10px] font-medium",
                               faded && "opacity-25",
@@ -878,6 +899,7 @@ export function ContinuousSchedule({
                             {w > 4 && s.kind === "ot" && (
                               <span className="truncate rounded-sm bg-card/90 px-1 font-semibold">{`OT ${fmtHM(s.start)}–${fmtHM(s.end)}`}</span>
                             )}
+                            {w > 3 && s.kind === "ot-break" && <span className="truncate font-semibold">OT brk</span>}
                             {(["start", "end"] as const).map((edge) => {
                               const op = edgeOp(edge)
                               return op ? (

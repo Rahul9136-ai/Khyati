@@ -719,24 +719,40 @@ def _export_agents(rows: list[DaySchedulePlan]) -> list[dp.ExportAgent]:
     ]
 
 
-def coverage(rows: list[DaySchedulePlan]) -> list[dict]:
-    days = [_row_to_day(r) for r in rows]
+def _with_rule(day: dp.AgentDay, rule: dp.OtBreakRule | None) -> dp.AgentDay:
+    day.ot_break_rule = rule
+    return day
+
+
+async def org_ot_break_rule(db: AsyncSession, org: uuid.UUID) -> dp.OtBreakRule | None:
+    """The organisation's overtime-break rule (work_compliance setting), if switched on."""
+    return dp.ot_break_rule_of(await settings_service.get_value(db, org, "work_compliance"))
+
+
+def coverage(rows: list[DaySchedulePlan], ot_rule: dp.OtBreakRule | None = None) -> list[dict]:
+    days = [_with_rule(_row_to_day(r), ot_rule) for r in rows]
     return dp.coverage([dp.day_timeline(d) for d in days], dp.timeline_window(days))
 
 
-def export_sheets(rows: list[DaySchedulePlan], law: dict | None = None) -> dict[str, list[dict]]:
+def export_sheets(
+    rows: list[DaySchedulePlan], law: dict | None = None, ot_rule: dp.OtBreakRule | None = None
+) -> dict[str, list[dict]]:
     """The five schedule sheets, plus compliance + rules sheets when a labour law applies."""
     agents = _export_agents(rows)
+    for a in agents:
+        _with_rule(a.day, ot_rule)
     sheets = dp.export_sheets(agents)
     if law:
         sheets.update(labour_law.compliance_sheets(agents, law))
     return sheets
 
 
-def export_csv(rows: list[DaySchedulePlan], law: dict | None = None) -> str:
+def export_csv(
+    rows: list[DaySchedulePlan], law: dict | None = None, ot_rule: dp.OtBreakRule | None = None
+) -> str:
     """All sheets in one CSV, sectioned like the frontend's CSV export."""
     out = io.StringIO()
-    for name, sheet in export_sheets(rows, law).items():
+    for name, sheet in export_sheets(rows, law, ot_rule).items():
         if not sheet:
             continue
         out.write(f"=== {name} ===\n")

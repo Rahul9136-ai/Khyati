@@ -3,6 +3,7 @@
 // same definitions the screens draw with (so it can't drift from them), plus
 // the organisation's own LOBs and queues.
 import type { Row, Sheet } from "@/lib/export"
+import { OT_BREAK_COLOR } from "./otBreaks"
 
 import { ACTIVITIES, CHANNELS } from "./channels"
 import { colourName } from "./colours"
@@ -153,6 +154,7 @@ function rawLegends(opts: { queues: Queue[]; lobs: Lob[]; capacityLow?: number; 
       items: [
         { concept: "break", code: "BRK", label: "Break", color: "#d97706", meaning: "Short paid break inside the shift." },
         { concept: "lunch", code: "LUN", label: "Lunch", color: "#b45309", meaning: "Meal break inside the shift." },
+        { code: "OT-BRK", label: "OT break", color: OT_BREAK_COLOR, meaning: "Break inside overtime, from the overtime-break rule (Work rules → Compliance). Rust-coloured stripes; a solid edge means paid, a dashed edge unpaid. Not worked time." },
         ...ACTIVITIES.map((a) => ({
           concept: a.id as string,
           code: a.short,

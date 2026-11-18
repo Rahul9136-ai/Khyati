@@ -2,6 +2,7 @@ import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
 import { addDays as addDaysDate, TODAY, ymd } from "@/lib/domain/dates"
+import { otBreakRuleOf } from "@/lib/domain/otBreaks"
 import { backtest, generate } from "@/lib/domain/forecast"
 import type { ActualRow } from "@/lib/domain/history"
 import {
@@ -1154,7 +1155,7 @@ export const useWfm = create<WfmState>()(
           const byId = new Map(s.rta.map((r) => [r.id, r]))
           let changed = s.rta.length !== day.agents.length
           const rta = day.agents.map((a): RtaEntry => {
-            const sched = scheduledAux(agentDay(a, s.shiftPatterns, day.breakOverrides, day.channelPlan, day.overtimePlan, day.activityPlan), minute)
+            const sched = scheduledAux(agentDay(a, s.shiftPatterns, day.breakOverrides, day.channelPlan, day.overtimePlan, day.activityPlan, otBreakRuleOf(s.workCompliance)), minute)
             const prev = byId.get(a.id)
             if (!prev) {
               changed = true

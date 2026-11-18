@@ -546,6 +546,10 @@ class WorkComplianceIn(_Loose):
     minDaysOffPerWeek: int | None = None
     maxWeeklyHours: float | None = None
     minRestBetweenShiftsHours: float | None = None
+    #: Overtime breaks: one break of otBreakMinutes for every otBreakEveryMinutes of OT (None = off).
+    otBreakEveryMinutes: int | None = Field(None, ge=30, le=600)
+    otBreakMinutes: int = Field(15, ge=5, le=60)
+    otBreakPaid: bool = False
 
 
 class SettingIn(BaseModel):

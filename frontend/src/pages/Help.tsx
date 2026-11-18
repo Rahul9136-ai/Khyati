@@ -136,6 +136,18 @@ Required FTE = required agent-hours ÷ 8 h ÷ days`}</Formula>
           </p>
         </Section>
 
+        <Section title="Overtime breaks">
+          <Formula>{`breaks in a stretch of OT = floor(OT minutes ÷ "every" minutes)
+break i (of n) centred at  start + i × length ÷ (n + 1)   (5-min grid)
+OT worked = OT scheduled − OT breaks
+OT paid   = OT worked + OT breaks (only when OT breaks are paid)`}</Formula>
+          <p>
+            Switched on in Work rules → Compliance. Touching OT blocks count as one stretch; OT before and after the shift
+            are separate. An OT break takes the agent off the channel (no coverage), isn't worked time, and resets "max work
+            in a row". Reports, the schedule export and My schedule show OT breaks apart from overtime worked.
+          </p>
+        </Section>
+
         <Section title="Coverage, net staffing & intraday reforecast">
           <Formula>{`Coverage(i)     = agents whose shift spans interval i (minus breaks)
 Net staffing(i) = scheduled(i) − gross required(i)

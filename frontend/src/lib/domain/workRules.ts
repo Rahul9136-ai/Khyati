@@ -9,6 +9,7 @@
 // it up; week offs become a full-shift "Week off" activity on those dates.
 import { fmtDuration, workedMinutes } from "./labourLaw"
 import { fmtHM, toMins, type AgentDay, type ChannelSegment } from "./channels"
+import { dayOtBreaks, otBreakRuleOf, type OtBreakRule, type OtBreakSettings } from "./otBreaks"
 import type { BreakSegment, BreakType, ShiftPattern } from "./shiftPatterns"
 
 export const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const
@@ -71,7 +72,7 @@ export interface WorkRule {
 }
 
 /** Organisation-wide compliance rules. null switches a rule off. */
-export interface WorkCompliance {
+export interface WorkCompliance extends OtBreakSettings {
   /** Shifts at least this long must have a break or lunch. */
   breakRequiredAfterHours: number | null
   /** Longest stretch of work allowed without a break, lunch or time off. */
@@ -94,6 +95,10 @@ export const DEFAULT_WORK_COMPLIANCE: WorkCompliance = {
   minDaysOffPerWeek: 1,
   maxWeeklyHours: 48,
   minRestBetweenShiftsHours: 11,
+  // Overtime breaks are off until switched on (Work rules → Compliance).
+  otBreakEveryMinutes: null,
+  otBreakMinutes: 15,
+  otBreakPaid: false,
 }
 
 const WEEKEND = [5, 6]
@@ -222,10 +227,10 @@ type Span = { start: number; end: number }
 const NOT_WORKING = new Set(["loa", "absence", "vto", "pto", "leave", "off"])
 export const isWeekOff = (day: AgentDay) => day.activities.some((a) => a.type === "off")
 
-/** Stretches of continuous work — shift and OT minus breaks and time off,
+/** Stretches of continuous work — shift and OT minus breaks, OT breaks and time off,
  *  touching pieces joined (a shift running straight into OT is one stretch). */
-export function workStretches(day: AgentDay): Span[] {
-  const off: Span[] = [...day.breaks, ...day.activities.filter((a) => NOT_WORKING.has(a.type))]
+export function workStretches(day: AgentDay, otRule?: OtBreakRule): Span[] {
+  const off: Span[] = [...day.breaks, ...dayOtBreaks(day, otRule), ...day.activities.filter((a) => NOT_WORKING.has(a.type))]
   let pieces: Span[] = [{ start: day.shift[0], end: day.shift[1] }, ...day.ot.map((o) => ({ start: o.start, end: o.end }))]
   for (const c of off) {
     pieces = pieces.flatMap((p) => {
@@ -252,7 +257,7 @@ export function checkWorkDay(day: AgentDay, c: WorkCompliance): WorkIssue[] {
     for (const o of day.ot) issues.push({ rule: "otOnWeekOff", message: `Overtime ${fmtHM(o.start)}–${fmtHM(o.end)} on a week off`, span: { start: o.start, end: o.end } })
     return issues
   }
-  const stretches = workStretches(day)
+  const stretches = workStretches(day, otBreakRuleOf(c))
   if (!stretches.length) return issues
   const [s, e] = day.shift
   const inShift = day.breaks.filter((b) => b.start < e && b.end > s)
@@ -406,5 +411,6 @@ export function applyWorkRuleToDay(day: AgentDay, pattern: ShiftPattern | null, 
     channels: day.shift[0] === s && day.shift[1] === e ? day.channels : fitChannels(day.channels, [s, e]),
     ot: day.ot.filter((o) => o.end <= s || o.start >= e),
     activities: activities.sort((a, b) => a.start - b.start),
+    ...(day.otBreakRule ? { otBreakRule: day.otBreakRule } : {}),
   }
 }

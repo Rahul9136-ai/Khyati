@@ -143,6 +143,27 @@ describe("Work Rules page", () => {
     expect(within(table).getAllByText(/without a break — max 1h30 in a row/).length).toBeGreaterThan(0)
   })
 
+  it("switches on breaks in overtime: length, how often, paid or not", () => {
+    renderPage()
+    fireEvent.click(screen.getByRole("tab", { name: "Compliance" }))
+    expect(screen.getByText("Off: overtime has no breaks of its own.")).toBeInTheDocument()
+    expect(screen.getByLabelText("OT break length")).toBeDisabled()
+
+    fireEvent.click(screen.getByLabelText("Use: Overtime breaks"))
+    expect(useWfm.getState().workCompliance).toMatchObject({ otBreakEveryMinutes: 120, otBreakMinutes: 15, otBreakPaid: false })
+    expect(screen.getByText(/15 min break for every 2h of OT \(unpaid\)\. Example: 3h of OT from 17:00 gets 18:25–18:40\./)).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText("OT minutes per break"), { target: { value: "90" } })
+    fireEvent.change(screen.getByLabelText("OT break length"), { target: { value: "10" } })
+    fireEvent.click(screen.getByLabelText("OT breaks are paid"))
+    expect(useWfm.getState().workCompliance).toMatchObject({ otBreakEveryMinutes: 90, otBreakMinutes: 10, otBreakPaid: true })
+    // 3h of OT with a break every 90 min → two breaks
+    expect(screen.getByText(/10 min break for every 90 min of OT \(paid\)\. Example: 3h of OT from 17:00 gets 17:55–18:05 and 18:55–19:05\./)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByLabelText("Use: Overtime breaks"))
+    expect(useWfm.getState().workCompliance.otBreakEveryMinutes).toBeNull()
+  })
+
   it("sets no-break time on a rule, flags breaks that can't fit, and passes it to agents", () => {
     renderPage()
     fireEvent.click(screen.getByRole("tab", { name: "Shift & break patterns" }))

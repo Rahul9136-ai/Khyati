@@ -7,6 +7,7 @@ import type { Sheet } from "@/lib/export"
 
 import { effectiveSegments, type BreakOverrides } from "./breaks"
 import { checkCompliance, fmtDuration, LABOUR_LAW_DISCLAIMER, workedMinutes, type LabourLaw } from "./labourLaw"
+import { dayOtBreaks, describeOtBreakRule, otBreaksFor, otMinutes, type OtBreakRule } from "./otBreaks"
 import { INTERVALS } from "./seed"
 import type { BreakSegment, ShiftPattern } from "./shiftPatterns"
 import type { Agent, Queue } from "./types"
@@ -63,7 +64,7 @@ export interface ActivitySegment {
 /** Per-agent activities (meetings, LOA, absence, …). */
 export type ActivityPlan = Record<string, ActivitySegment[]>
 
-export type TimelineKind = "channel" | "break" | "lunch" | "unassigned" | "ot" | "activity"
+export type TimelineKind = "channel" | "break" | "lunch" | "unassigned" | "ot" | "ot-break" | "activity"
 
 export interface TimelineSegment {
   kind: TimelineKind
@@ -74,6 +75,8 @@ export interface TimelineSegment {
   label: string
   /** Id of the break, channel block, OT block or activity this piece belongs to — lets the UI move/resize it. */
   segId?: string
+  /** OT breaks: whether the break is paid (the overtime-break rule). */
+  paid?: boolean
 }
 
 const DASH = "–"
@@ -153,6 +156,8 @@ export interface AgentDay {
   activities: ActivitySegment[]
   /** Minutes at the start / end of the shift where no break may be placed (work rule). */
   noBreak?: [number, number]
+  /** The overtime-break rule in force (lib/domain/otBreaks.ts); OT breaks are worked out from `ot` with it. */
+  otBreakRule?: OtBreakRule
 }
 
 /** The no-break zones of the pattern an agent is on, if any. */
@@ -168,8 +173,10 @@ export function agentDay(
   channelPlan: ChannelPlan,
   otPlan: OvertimePlan,
   activityPlan: ActivityPlan = {},
+  otBreakRule?: OtBreakRule,
 ): AgentDay {
   return {
+    ...(otBreakRule ? { otBreakRule } : {}),
     shift: shiftBounds(agent),
     breaks: absoluteBreaks(agent, patterns, overrides).sort((a, b) => a.start - b.start),
     channels: effectiveChannelSegments(agent, channelPlan).map((c) => ({ ...c })).sort((a, b) => a.start - b.start),
@@ -338,6 +345,7 @@ export function moveDay(day: AgentDay, delta: number): AgentDay {
     ot: day.ot.map(mv),
     activities: day.activities.map(mv),
     ...(day.noBreak ? { noBreak: day.noBreak } : {}),
+    ...(day.otBreakRule ? { otBreakRule: day.otBreakRule } : {}),
   }
 }
 
@@ -462,8 +470,9 @@ export function agentTimeline(
   channelPlan: ChannelPlan,
   otPlan: OvertimePlan,
   activityPlan: ActivityPlan = {},
+  otBreakRule?: OtBreakRule,
 ): TimelineSegment[] {
-  return dayTimeline(agentDay(agent, patterns, overrides, channelPlan, otPlan, activityPlan))
+  return dayTimeline(agentDay(agent, patterns, overrides, channelPlan, otPlan, activityPlan, otBreakRule))
 }
 
 /** Render a day as contiguous segments. Channel pieces carry their block's id
@@ -484,8 +493,15 @@ export function dayTimeline(day: AgentDay): TimelineSegment[] {
     out.push({ kind: "unassigned", start: a, end: b, label: "Unassigned" })
   }
   for (const b of breaks) out.push({ kind: b.type, start: b.start, end: b.end, label: b.label, segId: b.id })
+  // OT blocks, cut by their OT breaks (a block cut by one yields several pieces with the same segId).
+  const otBreaks = dayOtBreaks(day)
   for (const ot of day.ot) {
-    out.push({ kind: "ot", channel: ot.channel, start: ot.start, end: ot.end, label: `OT · ${CHANNEL_BY_ID[ot.channel].label}`, segId: ot.id })
+    for (const [a, b] of subtract(ot.start, ot.end, otBreaks)) {
+      out.push({ kind: "ot", channel: ot.channel, start: a, end: b, label: `OT · ${CHANNEL_BY_ID[ot.channel].label}`, segId: ot.id })
+    }
+  }
+  for (const b of otBreaks) {
+    out.push({ kind: "ot-break", start: b.start, end: b.end, label: `OT break (${b.paid ? "paid" : "unpaid"})`, segId: b.id, paid: b.paid })
   }
   for (const act of day.activities) {
     const label = `${ACTIVITY_BY_ID[act.type].label}${act.note ? ` · ${act.note}` : ""}`
@@ -578,16 +594,21 @@ export function withOvertimeAdded(existing: ChannelSegment[], seg: ChannelSegmen
 
 /** OT blocks as pseudo-agents so the existing coverage/Erlang math counts them
  *  as extra heads (skilled the same as the agent working the OT). */
-export function overtimeAgents(agents: Agent[], otPlan: OvertimePlan): Agent[] {
-  return agents.flatMap((a) =>
-    (otPlan[a.id] ?? []).map((o) => ({
-      ...a,
-      id: `${a.id}~ot~${o.id}`,
-      shift: `${fmtHM(o.start)}${DASH}${fmtHM(o.end)}`,
-      // OT blocks carry no break pattern of their own.
-      shiftPatternId: undefined,
-    })),
-  )
+export function overtimeAgents(agents: Agent[], otPlan: OvertimePlan, otBreakRule?: OtBreakRule): Agent[] {
+  return agents.flatMap((a) => {
+    const ot = otPlan[a.id] ?? []
+    // OT breaks take the agent off the phones: each OT block becomes one head per piece between them.
+    const breaks = otBreaksFor(ot, otBreakRule)
+    return ot.flatMap((o) =>
+      subtract(o.start, o.end, breaks).map(([from, to], i) => ({
+        ...a,
+        id: `${a.id}~ot~${o.id}${i ? `~${i}` : ""}`,
+        shift: `${fmtHM(from)}${DASH}${fmtHM(to)}`,
+        // OT blocks carry no break pattern of their own.
+        shiftPatternId: undefined,
+      })),
+    )
+  })
 }
 
 /** Overall visible window: the operating day, widened to fit any OT. */
@@ -615,8 +636,9 @@ export function channelCoverage(
   otPlan: OvertimePlan,
   window: [number, number],
   activityPlan: ActivityPlan = {},
+  otBreakRule?: OtBreakRule,
 ) {
-  return coverageFromTimelines(agents.map((a) => agentTimeline(a, patterns, overrides, channelPlan, otPlan, activityPlan)), window)
+  return coverageFromTimelines(agents.map((a) => agentTimeline(a, patterns, overrides, channelPlan, otPlan, activityPlan, otBreakRule)), window)
 }
 
 /** channelCoverage over already-built timelines (e.g. a live drag preview).
@@ -717,7 +739,7 @@ export function staggeredWindow(i: number, start: number, length: number, groupS
   return [s, s + length]
 }
 
-const KIND_CODE: Partial<Record<TimelineKind, string>> = { break: "BRK", lunch: "LUN", unassigned: "—" }
+const KIND_CODE: Partial<Record<TimelineKind, string>> = { break: "BRK", lunch: "LUN", "ot-break": "OT-BRK", unassigned: "—" }
 const codeFor = (seg: TimelineSegment) =>
   seg.kind === "channel" ? CHANNEL_BY_ID[seg.channel!].short
   : seg.kind === "ot" ? `OT-${CHANNEL_BY_ID[seg.channel!].short}`
@@ -735,9 +757,11 @@ export function scheduleExportSheets(
   otPlan: OvertimePlan,
   activityPlan: ActivityPlan = {},
   law: LabourLaw | null = null,
+  otBreakRule?: OtBreakRule,
 ): Sheet[] {
   const window = timelineWindow(agents, otPlan)
-  const timelines = agents.map((a) => ({ a, segs: agentTimeline(a, patterns, overrides, channelPlan, otPlan, activityPlan) }))
+  const dayOf = (a: Agent) => agentDay(a, patterns, overrides, channelPlan, otPlan, activityPlan, otBreakRule)
+  const timelines = agents.map((a) => ({ a, day: dayOf(a), segs: agentTimeline(a, patterns, overrides, channelPlan, otPlan, activityPlan, otBreakRule) }))
   const skillNames = (a: Agent) => a.skills.map((s) => queues.find((q) => q.id === s)?.name ?? s).join(", ")
 
   const segments = timelines.flatMap(({ a, segs }) =>
@@ -754,6 +778,7 @@ export function scheduleExportSheets(
         : s.label,
       Type:
         s.kind === "ot" ? "Overtime"
+        : s.kind === "ot-break" ? (s.paid ? "OT break (paid)" : "OT break (unpaid)")
         : s.kind === "channel" ? "Channel work"
         : s.kind === "activity" ? "Activity (overlay)"
         : s.kind === "unassigned" ? "Unassigned"
@@ -767,7 +792,7 @@ export function scheduleExportSheets(
     })),
   )
 
-  const summary = timelines.map(({ a, segs }) => {
+  const summary = timelines.map(({ a, day, segs }) => {
     const mins = (pred: (s: TimelineSegment) => boolean) => segs.filter(pred).reduce((t, s) => t + s.end - s.start, 0)
     const hrs = (m: number) => +(m / 60).toFixed(2)
     return {
@@ -783,8 +808,17 @@ export function scheduleExportSheets(
       "Email hrs": hrs(mins((s) => s.kind === "channel" && s.channel === "email")),
       "Break/lunch min": mins((s) => s.kind === "break" || s.kind === "lunch"),
       "Unassigned min": mins((s) => s.kind === "unassigned"),
-      "OT hrs": hrs(mins((s) => s.kind === "ot")),
-      "OT blocks": segs.filter((s) => s.kind === "ot").map((s) => `${CHANNEL_BY_ID[s.channel!].label} ${fmtHM(s.start)}–${fmtHM(s.end)}`).join("; "),
+      ...(() => {
+        const ot = otMinutes(day)
+        return {
+          "OT hrs": hrs(ot.scheduled),
+          "OT break min": ot.breaks,
+          "OT worked hrs": hrs(ot.worked),
+          "OT paid hrs": hrs(ot.paid),
+        }
+      })(),
+      "OT blocks": day.ot.map((o) => `${CHANNEL_BY_ID[o.channel].label} ${fmtHM(o.start)}–${fmtHM(o.end)}`).join("; "),
+      "OT breaks": segs.filter((s) => s.kind === "ot-break").map((s) => `${fmtHM(s.start)}–${fmtHM(s.end)}${s.paid ? " paid" : " unpaid"}`).join("; "),
       ...Object.fromEntries(ACTIVITIES.map((t) => [`${t.label} min`, mins((s) => s.kind === "activity" && s.activity === t.id)])),
       Activities: segs.filter((s) => s.kind === "activity").map((s) => `${s.label} ${fmtHM(s.start)}–${fmtHM(s.end)}`).join("; "),
     }
@@ -793,15 +827,15 @@ export function scheduleExportSheets(
   const grid = timelines.map(({ a, segs }) => {
     const row: Record<string, string> = { Agent: a.name, Shift: a.shift }
     for (let t = window[0]; t < window[1]; t += 15) {
-      // Activities (overlay) win, then breaks/lunch, then the channel block underneath.
+      // Activities (overlay) win, then breaks/lunch/OT breaks, then the channel block underneath.
       const hit = segs.filter((s) => s.start <= t && s.end > t)
-      const seg = hit.find((s) => s.kind === "activity") ?? hit.find((s) => s.kind === "break" || s.kind === "lunch") ?? hit[0]
+      const seg = hit.find((s) => s.kind === "activity") ?? hit.find((s) => s.kind === "break" || s.kind === "lunch" || s.kind === "ot-break") ?? hit[0]
       row[fmtHM(t)] = seg ? codeFor(seg) : ""
     }
     return row
   })
 
-  const coverage = channelCoverage(agents, patterns, overrides, channelPlan, otPlan, window, activityPlan).map((s) => ({
+  const coverage = channelCoverage(agents, patterns, overrides, channelPlan, otPlan, window, activityPlan, otBreakRule).map((s) => ({
     Interval: `${fmtHM(s.start)}–${fmtHM(s.start + 30)}`,
     "Phone HC": s.phone,
     "Chat HC": s.chat,
@@ -823,11 +857,12 @@ export function scheduleExportSheets(
         ...CHANNELS.map((c) => ({ Code: `OT-${c.short}`, Meaning: `Overtime on ${c.label}` })),
         { Code: "BRK", Meaning: "Break" },
         { Code: "LUN", Meaning: "Lunch" },
+        { Code: "OT-BRK", Meaning: `Overtime break: off the channel, not worked time. Rule: ${describeOtBreakRule(otBreakRule)}` },
         ...ACTIVITIES.map((t) => ({ Code: t.short, Meaning: `${t.label} — overlay activity, agent off the channel` })),
         { Code: "—", Meaning: "On shift, no channel assigned" },
       ],
     },
-    ...(law ? labourLawSheets(agents, law, (a) => agentDay(a, patterns, overrides, channelPlan, otPlan, activityPlan)) : []),
+    ...(law ? labourLawSheets(agents, law, dayOf) : []),
   ]
 }
 

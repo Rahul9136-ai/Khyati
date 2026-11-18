@@ -6,6 +6,7 @@ import { useMemo } from "react"
 
 import { breakAwareCoverage } from "@/lib/domain/breaks"
 import { activityCoverageLoss, overtimeAgents } from "@/lib/domain/channels"
+import { otBreakRuleOf } from "@/lib/domain/otBreaks"
 import { employedOn } from "@/lib/domain/employeeProfile"
 import { localISODate } from "@/lib/domain/horizon"
 import { intervalOutcomes, liveAgentStates, soFar } from "@/lib/domain/liveCoverage"
@@ -17,7 +18,8 @@ import { scheduleForDate, useWfm } from "@/store/wfm"
 export function useLiveInterval(queue: Queue) {
   const s = useWfm()
   const today = localISODate()
-  const { rta, nowIdx, forecasts, shrinkage, shiftPatterns, employeeProfiles } = s
+  const { rta, nowIdx, forecasts, shrinkage, shiftPatterns, employeeProfiles, workCompliance } = s
+  const otRule = useMemo(() => otBreakRuleOf(workCompliance), [workCompliance])
   const day = scheduleForDate(s, today)
 
   const agents = useMemo(
@@ -25,7 +27,7 @@ export function useLiveInterval(queue: Queue) {
     [day.agents, employeeProfiles, today],
   )
   return useMemo(() => {
-    const staffed = [...agents, ...overtimeAgents(agents, day.overtimePlan)]
+    const staffed = [...agents, ...overtimeAgents(agents, day.overtimePlan, otRule)]
     const lost = activityCoverageLoss(queue.id, agents, shiftPatterns, day.breakOverrides, day.activityPlan)
     const onDuty = breakAwareCoverage(queue.id, staffed, shiftPatterns, day.breakOverrides).map((c, i) => Math.max(0, c - lost[i]))
     const liveStates = liveAgentStates(rta, agents, queue.id)
@@ -48,5 +50,5 @@ export function useLiveInterval(queue: Queue) {
       onPlan,
       boardSize: board.length,
     }
-  }, [agents, day.overtimePlan, day.breakOverrides, day.activityPlan, queue, shiftPatterns, rta, forecasts, nowIdx, shrinkage])
+  }, [agents, day.overtimePlan, day.breakOverrides, day.activityPlan, queue, shiftPatterns, rta, forecasts, nowIdx, shrinkage, otRule])
 }

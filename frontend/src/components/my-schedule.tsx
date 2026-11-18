@@ -9,6 +9,7 @@ import { api } from "@/lib/api"
 import { lanes } from "@/lib/domain/channelPlanner"
 import { ACTIVITY_BY_ID, CHANNEL_BY_ID, fmtHM } from "@/lib/domain/channels"
 import { addDays, datesBetween, fmtDay, localISODate, scheduleHorizon, weekStart } from "@/lib/domain/horizon"
+import { OT_BREAK_COLOR, otBreakRuleOf, otBreaksFor, type OtBreakRule } from "@/lib/domain/otBreaks"
 import type { Row } from "@/lib/export"
 import { dayStatus } from "@/lib/performanceReport"
 import { useScheduleHorizon } from "@/lib/schedulePublish"
@@ -16,11 +17,12 @@ import type { ServerDayPlan } from "@/lib/scheduleSync"
 import { dayFromServer, useScheduleSync } from "@/lib/scheduleSync"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/store/auth"
+import { useWfm } from "@/store/wfm"
 
 export type PublishedDay = ServerDayPlan & { plan_date: string }
 
 /** One row per published day, for the agent's own export. */
-export function scheduleExportRows(days: PublishedDay[]): Row[] {
+export function scheduleExportRows(days: PublishedDay[], otRule?: OtBreakRule): Row[] {
   return days.map((d) => {
     const day = dayFromServer(d)
     const status = dayStatus(day)
@@ -36,6 +38,7 @@ export function scheduleExportRows(days: PublishedDay[]): Row[] {
       Breaks: off ? "" : blocks(d.breaks, (b: { label: string; type: string }) => b.label || b.type),
       Activities: blocks(d.activities, (a: { type: keyof typeof ACTIVITY_BY_ID }) => ACTIVITY_BY_ID[a.type]?.label ?? a.type),
       Overtime: blocks(d.overtime, (o: { channel: keyof typeof CHANNEL_BY_ID }) => CHANNEL_BY_ID[o.channel].label),
+      "OT breaks": blocks(otBreaksFor(d.overtime, otRule), (b: { paid: boolean }) => (b.paid ? "OT break (paid)" : "OT break (unpaid)")),
     }
   })
 }
@@ -71,6 +74,8 @@ const MAX_DAYS = 380
  *  at what they worked (see usePublishedDays). */
 export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDate: (date: string) => void }) {
   const today = localISODate()
+  const workCompliance = useWfm((s) => s.workCompliance)
+  const otRule = otBreakRuleOf(workCompliance)
   const [period, setPeriod] = useState<Period>("upcoming")
   const [custom, setCustom] = useState({ start: addDays(today, -30), end: addDays(today, -1) })
   const range =
@@ -100,7 +105,7 @@ export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDat
               {customProblem ?? `${fmtDay(start)} – ${fmtDay(end)} · ${past ? "what was published for you then" : "published shifts only. You get a pop-up whenever one of them changes."}`}
             </p>
           </div>
-          {!!data?.length && <ExportButton label="Export my schedule" filename={`my-schedule-${start}-to-${end}`} sheets={() => [{ name: "My schedule", rows: scheduleExportRows(data) }]} />}
+          {!!data?.length && <ExportButton label="Export my schedule" filename={`my-schedule-${start}-to-${end}`} sheets={() => [{ name: "My schedule", rows: scheduleExportRows(data, otRule) }]} />}
         </div>
         <div role="group" aria-label="Schedule period" className="mt-2 flex flex-wrap items-center gap-1.5">
           {([["upcoming", "Upcoming"], ["past4", "Last 4 weeks"], ["past13", "Last 3 months"], ["custom", "Custom dates"]] as const).map(([id, label]) => (
@@ -169,6 +174,11 @@ export function MySchedule({ agentId, onOpenDate }: { agentId: string; onOpenDat
                           {d.overtime.map((o) => (
                             <span key={o.id} className="rounded border px-1.5 py-0.5 tabular-nums" style={{ borderColor: CHANNEL_BY_ID[o.channel].color, color: CHANNEL_BY_ID[o.channel].color }}>
                               OT {CHANNEL_BY_ID[o.channel].label} {fmtHM(o.start)}–{fmtHM(o.end)}
+                            </span>
+                          ))}
+                          {otBreaksFor(d.overtime, otRule).map((b) => (
+                            <span key={b.id} className={cn("rounded border px-1.5 py-0.5 tabular-nums", !b.paid && "border-dashed")} style={{ borderColor: OT_BREAK_COLOR, color: OT_BREAK_COLOR }}>
+                              OT break {fmtHM(b.start)}–{fmtHM(b.end)}{b.paid ? " · paid" : ""}
                             </span>
                           ))}
                         </span>

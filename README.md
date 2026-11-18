@@ -62,6 +62,12 @@ The repo is a monorepo with two independently runnable halves:
 - **Overtime per channel** (drawn as grid lines in the channel colour) and an **activity
   overlay** (Meeting, Training, Coaching, LOA, Absence, Other) in the upper band that takes the
   agent off the channel for On duty / SL. Add in bulk by filters, staggered waves or Excel/CSV.
+- **Overtime breaks** (Work rules → Compliance) — one break of N minutes for every M minutes
+  of overtime, paid or unpaid, placed evenly through each stretch of OT (touching OT blocks
+  count as one). They're worked out from the OT blocks, cut them on the timeline (rust-coloured
+  stripes; solid edge = paid, dashed = unpaid), take the agent off coverage, aren't worked
+  time, and count as a break for "max work in a row" and real-time adherence. Reports and the
+  schedule export show overtime apart: OT scheduled, OT breaks, OT worked and OT paid.
 - **Bulk editing** — Ctrl/⌘+click, Shift+click or select-all; Ctrl+←/→ moves selected
   schedules; dragging in one selected row applies to all; right-click marks any AUX on all
   selected. Interval detail shows Forecast, AHT, Occupancy, SL %, Required/Actual HC and O/U.
